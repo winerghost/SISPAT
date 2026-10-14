@@ -1,0 +1,116 @@
+# =============================================================================
+# SISPAT-AGU — docker-compose.dev.yml (overrides de desenvolvimento)
+# =============================================================================
+# Uso: sempre combinado com o docker-compose.yml base.
+#     docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+#
+# Objetivo: hot-reload, bind mounts do código-fonte, portas de debug expostas
+# apenas em 127.0.0.1 e um PostgreSQL local OPCIONAL (profile "dev-db").
+#
+# SEGURANÇA (dev):
+# - O servidor Flask roda com --debug (debugger Werkzeug = execução de código
+#   para quem alcançar a porta). Por isso TODAS as portas ficam em 127.0.0.1
+#   e este arquivo NUNCA deve ser usado na VPS de produção.
+# - read_only é desligado em dev (bind mounts/hot-reload); os demais controles
+#   (no-new-privileges, cap_drop, limites) continuam herdados do base.
+#
+# Portas: mesmas variáveis do base (BACKEND_PORT/FRONTEND_PORT); `!override`
+# substitui a lista do base. Debug/DB têm variáveis próprias.
+#
+# ATENÇÃO — "postgres-dev": APENAS dev/teste local (ex.: validar migrações
+# Alembic sem tocar o Supabase). Não é a fonte de verdade.
+# =============================================================================
+
+services:
+  backend:
+    read_only: false
+    build:
+      target: dev
+    volumes:
+      - ./backend:/app
+    environment:
+      - FLASK_ENV=development
+      - FLASK_DEBUG=1
+      - TZ=${TZ:-America/Araguaina}
+    command: ["flask", "--app", "app:create_app", "run", "--host=0.0.0.0", "--port=8000", "--debug"]
+    ports: !override
+      - "127.0.0.1:${BACKEND_PORT:-8000}:8000"
+      # debugpy (debug remoto via VS Code), se usado.
+      - "127.0.0.1:${DEBUGPY_PORT:-5678}:5678"
+
+  worker:
+    read_only: false
+    build:
+      target: dev
+    volumes:
+      - ./backend:/app
+    environment:
+      - FLASK_ENV=development
+      - TZ=${TZ:-America/Araguaina}
+    command: ["celery", "-A", "app.celery_app", "worker", "--loglevel=debug"]
+
+  frontend:
+    read_only: false
+    build:
+      target: build
+    volumes:
+      - ./frontend:/app
+      # Evita que node_modules/.next do host sobrescrevam os do container.
+      - /app/node_modules
+      - /app/.next
+    environment:
+      - NODE_ENV=development
+      - TZ=${TZ:-America/Araguaina}
+    # Em dev o container roda como root sem CAP_DAC_OVERRIDE (cap_drop ALL):
+    # o tmpfs do base (uid 10001, modo 0700) ficaria inescrevível. Aqui o
+    # cache é gravável por qualquer uid.
+    tmpfs: !override
+      - /tmp:size=64m,mode=1777
+      - /app/.next/cache:size=256m,mode=1777
+    command: ["npm", "run", "dev", "--", "--hostname", "0.0.0.0"]
+    ports: !override
+      - "127.0.0.1:${FRONTEND_PORT:-3000}:3000"
+
+  # ---------------------------------------------------------------------------
+  # PostgreSQL local — somente dev/teste, NÃO é a fonte de verdade.
+  # Ativar explicitamente com: docker compose ... --profile dev-db up -d
+  # ---------------------------------------------------------------------------
+  postgres-dev:
+    image: postgres:16-alpine@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea
+    container_name: sispat-agu-postgres-dev
+    restart: unless-stopped
+    profiles:
+      - dev-db
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      - POSTGRES_USER=${POSTGRES_DEV_USER:-sispat_dev}
+      # Sem default fraco: defina POSTGRES_DEV_PASSWORD no .env. Vazio => a
+      # imagem oficial recusa iniciar (fail-safe), sem quebrar o compose config.
+      - POSTGRES_PASSWORD=${POSTGRES_DEV_PASSWORD:-}
+      - POSTGRES_DB=${POSTGRES_DEV_DB:-sispat_dev}
+      - TZ=${TZ:-America/Araguaina}
+    volumes:
+      - postgres-dev-data:/var/lib/postgresql/data
+    ports:
+      # Somente localhost — nunca exposto na rede.
+      - "127.0.0.1:${POSTGRES_DEV_PORT:-5432}:5432"
+    networks:
+      - backend-net
+      - edge-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_DEV_USER:-sispat_dev}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          pids: 256
+          cpus: "1.0"
+          memory: 512M
+
+volumes:
+  postgres-dev-data:
+    name: sispat-agu_postgres-dev-data

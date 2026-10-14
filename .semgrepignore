@@ -1,0 +1,13 @@
+# SISPAT-AGU — .semgrepignore (arquivos não-projeto)
+node_modules/
+.next/
+.venv/
+venv/
+docs/
+reports/
+.agents/
+.claude/
+frontend/e2e/
+backend/tests/
+*.lock
+package-lock.json

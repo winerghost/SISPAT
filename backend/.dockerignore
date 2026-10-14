@@ -1,0 +1,44 @@
+# SISPAT-AGU — backend/.dockerignore (contexto de build: ./backend)
+# Evita que segredos, caches e testes entrem no contexto/camadas da imagem.
+
+# Segredos / ambiente — NUNCA na imagem
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+google_sheets_credentials*.json
+*credentials*.json
+secrets/
+
+# Python / caches
+__pycache__/
+**/__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+*.egg-info/
+
+# Testes e documentação (não fazem parte do runtime)
+tests/
+*.md
+
+# VCS / editor / SO
+.git/
+.gitignore
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Docker
+Dockerfile
+.dockerignore

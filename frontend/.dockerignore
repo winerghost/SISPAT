@@ -1,0 +1,41 @@
+# SISPAT-AGU — frontend/.dockerignore (contexto de build: ./frontend)
+# Importante: o "next build" copia arquivos .env* carregados para
+# .next/standalone — portanto NENHUM .env pode entrar no contexto de build.
+# Variáveis NEXT_PUBLIC_* (públicas) entram via build args (Dockerfile).
+
+# Segredos / ambiente
+.env
+.env.*
+*.pem
+*.key
+
+# Dependências e artefatos gerados (reinstalados/gerados dentro da imagem)
+node_modules/
+.next/
+out/
+build/
+coverage/
+*.tsbuildinfo
+
+# Testes E2E e relatórios (não fazem parte do runtime)
+e2e/
+playwright-report/
+test-results/
+blob-report/
+playwright/.cache/
+
+# Logs / VCS / editor / SO
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.git/
+.gitignore
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.md
+
+# Docker
+Dockerfile
+.dockerignore

@@ -1,0 +1,232 @@
+# =============================================================================
+# SISPAT-AGU — docker-compose.yml (base / produção)
+# =============================================================================
+# Sistema de Gestão Patrimonial da AGU — unidade Palmas/TO.
+#
+# IMPORTANTE:
+# - O banco operacional é o Supabase/PostgreSQL REMOTO (DATABASE_URL no .env).
+#   Não há serviço de banco de produção aqui.
+# - Não há reverse-proxy público neste compose: na VPS (Hostinger) o Nginx do
+#   CloudPanel ocupa 80/443 e faz TLS (ver infra/cloudpanel/vhost.conf.example).
+#   NENHUM serviço publica 80/443.
+# - Portas publicadas SEMPRE em 127.0.0.1 e configuráveis por variável
+#   (BACKEND_PORT/FRONTEND_PORT); o endereço 127.0.0.1 é fixo. Nunca 0.0.0.0.
+# - Não existe (e não deve existir) serviço n8n: o n8n é EXTERNO.
+# - Endurecimento por serviço: read_only, no-new-privileges, cap_drop ALL,
+#   limites de CPU/memória/PIDs e rotação de logs (ver
+#   docs/security/evidence/devsecops.md).
+#
+# Uso:
+#   docker compose up -d --build                    # base/produção
+#   docker compose --profile worker up -d           # + worker (quando existir app.celery_app)
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+# =============================================================================
+
+name: sispat-agu
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+x-hardening: &hardening
+  read_only: true
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  init: true
+
+networks:
+  # Rede de borda: serviços alcançáveis via porta publicada em 127.0.0.1.
+  edge-net:
+    driver: bridge
+  # Rede interna segregada (backend, worker, redis). Sem rota para fora.
+  backend-net:
+    driver: bridge
+    internal: true
+  # Saída para Internet SOMENTE para quem precisa (backend/worker → Supabase,
+  # Google Sheets, n8n externo via HTTPS). Redis não participa desta rede.
+  egress-net:
+    driver: bridge
+
+volumes:
+  redis-data:
+    name: sispat-agu_redis-data
+
+services:
+  # ---------------------------------------------------------------------------
+  # Backend — API Flask (regras de negócio, autenticação, autorização)
+  # ---------------------------------------------------------------------------
+  backend:
+    <<: *hardening
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: runtime
+    image: sispat-agu/backend:latest
+    container_name: sispat-agu-backend
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - TZ=${TZ:-America/Araguaina}
+    networks:
+      - edge-net
+      - backend-net
+      - egress-net
+    depends_on:
+      redis:
+        condition: service_healthy
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3).status == 200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    # Publicada SOMENTE em loopback; o Nginx do CloudPanel encaminha /api/.
+    ports:
+      - "127.0.0.1:${BACKEND_PORT:-8000}:8000"
+    deploy:
+      resources:
+        limits:
+          pids: 256
+          cpus: "${BACKEND_CPUS:-1.0}"
+          memory: ${BACKEND_MEMORY:-768M}
+    logging: *default-logging
+
+  # ---------------------------------------------------------------------------
+  # Worker — processamento assíncrono (Celery). DESATIVADO por padrão
+  # (profile "worker") porque o módulo app.celery_app ainda não existe na
+  # Fase 1; sem o profile, o container entraria em crash-loop.
+  # ---------------------------------------------------------------------------
+  worker:
+    <<: *hardening
+    profiles:
+      - worker
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: runtime
+    image: sispat-agu/backend:latest
+    container_name: sispat-agu-worker
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - TZ=${TZ:-America/Araguaina}
+    command: ["celery", "-A", "app.celery_app", "worker", "--loglevel=info"]
+    networks:
+      - backend-net
+      - egress-net
+    depends_on:
+      redis:
+        condition: service_healthy
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.celery_app inspect ping -t 5 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          pids: 256
+          cpus: "${WORKER_CPUS:-1.0}"
+          memory: ${WORKER_MEMORY:-768M}
+    logging: *default-logging
+
+  # ---------------------------------------------------------------------------
+  # Redis — broker/cache. Somente rede interna, COM senha (ACL gerada em
+  # tmpfs a partir de REDIS_PASSWORD, sem expor a senha em argv/inspect do
+  # comando), comandos administrativos bloqueados.
+  # ---------------------------------------------------------------------------
+  redis:
+    <<: *hardening
+    image: redis:7-alpine@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499
+    container_name: sispat-agu-redis
+    restart: unless-stopped
+    user: "999:1000"
+    environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD:?Defina REDIS_PASSWORD no .env}
+    command:
+      - sh
+      - -c
+      - >-
+        umask 077 &&
+        printf 'user default on >%s ~* &* +@all -@admin -flushall -flushdb\n' "$$REDIS_PASSWORD" > /tmp/users.acl &&
+        exec redis-server --aclfile /tmp/users.acl --save 60 1 --appendonly yes
+        --protected-mode yes --dir /data
+    volumes:
+      - redis-data:/data
+    tmpfs:
+      - /tmp:size=1m,mode=0700,uid=999,gid=1000
+    networks:
+      - backend-net
+    healthcheck:
+      test: ["CMD-SHELL", "REDISCLI_AUTH=\"$$REDIS_PASSWORD\" redis-cli ping | grep -q PONG"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          pids: 128
+          cpus: "${REDIS_CPUS:-0.5}"
+          memory: ${REDIS_MEMORY:-256M}
+    logging: *default-logging
+    # Nenhuma porta publicada — acesso somente pela rede interna backend-net.
+
+  # ---------------------------------------------------------------------------
+  # Frontend — Next.js (camada de apresentação, sem regra de negócio)
+  # Recebe APENAS variáveis públicas (NEXT_PUBLIC_*). Não usa env_file: o
+  # .env contém segredos de backend (service role, n8n, SECRET_KEY) que o
+  # frontend não deve ter (menor privilégio).
+  # ---------------------------------------------------------------------------
+  frontend:
+    <<: *hardening
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: runtime
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-}
+        NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL:-}
+        NEXT_PUBLIC_SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY:-}
+    image: sispat-agu/frontend:latest
+    container_name: sispat-agu-frontend
+    restart: unless-stopped
+    environment:
+      - TZ=${TZ:-America/Araguaina}
+      - NODE_ENV=production
+      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-}
+      - NEXT_PUBLIC_SUPABASE_URL=${NEXT_PUBLIC_SUPABASE_URL:-}
+      - NEXT_PUBLIC_SUPABASE_ANON_KEY=${NEXT_PUBLIC_SUPABASE_ANON_KEY:-}
+    networks:
+      - edge-net
+    depends_on:
+      - backend
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+      - /app/.next/cache:size=128m,uid=10001,gid=10001,mode=0700
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/').then(r=>process.exit(r.status<500?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    ports:
+      - "127.0.0.1:${FRONTEND_PORT:-3000}:3000"
+    deploy:
+      resources:
+        limits:
+          pids: 256
+          cpus: "${FRONTEND_CPUS:-1.0}"
+          memory: ${FRONTEND_MEMORY:-512M}
+    logging: *default-logging

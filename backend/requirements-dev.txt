@@ -1,0 +1,7 @@
+# SISPAT-AGU - Backend - Dependências de DESENVOLVIMENTO/TESTE
+# Não são instaladas na imagem de produção (backend/Dockerfile).
+#   pip install -r requirements-dev.txt
+-r requirements.txt
+
+pytest==9.0.3             # CVE-2025-71176 corrigido em 9.0.3
+pytest-cov==7.1.0

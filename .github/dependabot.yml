@@ -1,0 +1,68 @@
+# SISPAT-AGU — Dependabot (atualizações de segurança e versões).
+# PRs passam pelo CI (.github/workflows/ci.yml). Atualizações major de
+# frameworks (Next, React, Tailwind, ESLint, Flask, SQLAlchemy) exigem
+# revisão manual e teste — por isso ficam fora dos grupos automáticos.
+# Após atualizar backend/requirements.txt, regenere o lock:
+#   scripts/check-dependencies.sh --lock
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: /backend
+    schedule:
+      interval: weekly
+      day: monday
+      timezone: America/Araguaina
+    open-pull-requests-limit: 10
+    labels: [dependencies, python]
+    groups:
+      python-minor-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: npm
+    directory: /frontend
+    schedule:
+      interval: weekly
+      day: monday
+      timezone: America/Araguaina
+    open-pull-requests-limit: 10
+    labels: [dependencies, javascript]
+    groups:
+      npm-minor-patch:
+        update-types: [minor, patch]
+    ignore:
+      - dependency-name: "next"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "eslint-config-next"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "react"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "react-dom"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "tailwindcss"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "eslint"
+        update-types: ["version-update:semver-major"]
+
+  - package-ecosystem: docker
+    directory: /backend
+    schedule:
+      interval: weekly
+    labels: [dependencies, docker]
+
+  - package-ecosystem: docker
+    directory: /frontend
+    schedule:
+      interval: weekly
+    labels: [dependencies, docker]
+
+  - package-ecosystem: docker-compose
+    directory: /
+    schedule:
+      interval: weekly
+    labels: [dependencies, docker]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    labels: [dependencies, ci]

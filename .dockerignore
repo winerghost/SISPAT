@@ -1,0 +1,73 @@
+# =============================================================================
+# SISPAT-AGU — .dockerignore
+# =============================================================================
+# Reduz o contexto de build enviado ao daemon Docker e evita vazar segredos
+# para dentro das imagens.
+#
+# NOTA IMPORTANTE: os builds de "backend" e "frontend" usam context:
+# ./backend e ./frontend (ver docker-compose.yml), então o Docker procura
+# por um .dockerignore DENTRO de cada uma dessas pastas, não este arquivo
+# na raiz. Este arquivo é mantido como referência/padrão do projeto; as
+# equipes responsáveis por backend/ e frontend/ devem criar um
+# backend/.dockerignore e um frontend/.dockerignore espelhando estas
+# mesmas regras (fora do escopo deste agente de DevOps).
+
+# Variáveis de ambiente / segredos
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+google_sheets_credentials*.json
+
+# Controle de versão
+.git/
+.gitignore
+
+# Python
+__pycache__/
+*.py[cod]
+venv/
+.venv/
+env/
+ENV/
+*.egg-info/
+.eggs/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Node / Next.js
+node_modules/
+.next/
+out/
+.turbo/
+npm-debug.log*
+yarn-debug.log*
+
+# Documentação e governança (não precisam ir para dentro das imagens)
+docs/
+*.md
+DESIGN.md
+CLAUDE.md
+
+# Editor / SO
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Scripts e infraestrutura que não fazem parte do runtime das imagens
+scripts/
+infra/
+
+# Relatórios locais / segredos adicionais
+reports/
+playwright-report/
+test-results/
+*.p12
+*.pfx
+*credentials*.json
+secrets/

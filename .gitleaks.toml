@@ -1,0 +1,46 @@
+# SISPAT-AGU — configuração do gitleaks (varredura de segredos)
+# Usa as regras padrão do gitleaks e ignora apenas artefatos gerados /
+# dependências de terceiros. NÃO adicionar allowlist para arquivos do projeto
+# sem justificativa registrada em docs/security/.
+title = "SISPAT-AGU gitleaks config"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Dependências de terceiros, builds e caches (não são código do projeto)"
+paths = [
+  '''(^|/|\\)node_modules(/|\\)''',
+  '''(^|/|\\)\.next(/|\\)''',
+  '''(^|/|\\)\.venv(/|\\)''',
+  '''(^|/|\\)venv(/|\\)''',
+  '''(^|/|\\)__pycache__(/|\\)''',
+  '''(^|/|\\)\.pytest_cache(/|\\)''',
+  '''(^|/|\\)playwright-report(/|\\)''',
+  '''(^|/|\\)test-results(/|\\)''',
+  '''(^|/|\\)reports(/|\\)''',
+  '''package-lock\.json$''',
+  '''requirements\.lock$''',
+  '''tsconfig\.tsbuildinfo$''',
+  '''\.pdf$''',
+]
+
+[[allowlists]]
+description = "Falso positivo verificado: argumento credentials_path (caminho, não segredo) — google_sheets_client.py"
+regexTarget = "line"
+regexes = [
+  '''^\s*credentials_path, scopes=_SCOPES\s*$''',
+]
+
+[[allowlists]]
+description = "Segredos SINTÉTICOS de teste (conftest/mocks) — nunca valores reais; revisados na auditoria 2026-10-13"
+targetRules = ["generic-api-key"]
+paths = [
+  '''(^|/|\\)backend[/\\]tests[/\\]''',
+]
+
+[[allowlists]]
+description = "Senha fictícia usada só para 'docker compose config' em CI/scripts"
+regexes = [
+  '''ci0dummy0not0a0secret''',
+]

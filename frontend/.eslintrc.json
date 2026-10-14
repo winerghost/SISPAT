@@ -1,0 +1,45 @@
+{
+  "extends": "next/core-web-vitals",
+  "rules": {
+    "react/no-danger": "error",
+    "react/jsx-no-script-url": "error",
+    "react/jsx-no-target-blank": "error",
+    "no-eval": "error",
+    "no-implied-eval": "error",
+    "no-new-func": "error",
+    "no-script-url": "error",
+    "no-restricted-syntax": [
+      "error",
+      {
+        "selector": "AssignmentExpression > MemberExpression[property.name=/^(innerHTML|outerHTML)$/]",
+        "message": "Proibido atribuir innerHTML/outerHTML (XSS). Renderize via JSX."
+      },
+      {
+        "selector": "CallExpression[callee.property.name='insertAdjacentHTML']",
+        "message": "Proibido insertAdjacentHTML (XSS). Renderize via JSX."
+      },
+      {
+        "selector": "CallExpression[callee.object.name='document'][callee.property.name=/^write(ln)?$/]",
+        "message": "Proibido document.write (XSS)."
+      }
+    ],
+    "no-restricted-properties": [
+      "error",
+      {
+        "object": "window",
+        "property": "localStorage",
+        "message": "Não usar localStorage para dados de sessão/sensíveis (ver src/lib/supabase-client.ts)."
+      },
+      {
+        "property": "localStorage",
+        "message": "Não usar localStorage para dados de sessão/sensíveis (ver src/lib/supabase-client.ts)."
+      }
+    ]
+  },
+  "overrides": [
+    {
+      "files": ["src/lib/supabase-client.ts"],
+      "rules": { "no-restricted-properties": "off" }
+    }
+  ]
+}

@@ -1,0 +1,882 @@
+"""Serviço de importação de dados a partir do Google Sheets.
+
+Orquestra a leitura (via `GoogleSheetsClient`, somente leitura) e a
+classificação/gravação em `assets`, usando os modelos de pré-visualização
+(`app.models.imports`) e de histórico de sincronização
+(`app.models.sync`, `app.models.audit`) já existentes.
+
+Duas operações principais:
+    - `create_preview`: lê a planilha, classifica cada linha frente ao
+      estado atual de `assets` e persiste uma `ImportPreview` +
+      `ImportPreviewItem`s. NUNCA grava em `assets` (pré-visualização é
+      estritamente leitura sobre essa tabela).
+    - `confirm_preview`: aplica (cria/atualiza `assets`) os itens
+      selecionados de uma pré-visualização ainda válida, registrando um
+      `SyncJob`, um `RawImportRecord` por linha processada e um
+      `AuditLog` da operação.
+
+Injeção de dependências:
+    `ImportService` recebe `db_session` (uma `sqlalchemy.orm.Session`) e
+    `sheets_client` (um `GoogleSheetsClient`) no construtor, exatamente para
+    permitir testes com mocks (ver `backend/tests/test_import_service.py`),
+    seguindo o mesmo espírito de injeção já usado pelos próprios clientes de
+    integração (`GoogleSheetsClient`, `N8nClient`), que aceitam `settings`
+    opcional no construtor.
+
+Gestão de transação — DESVIO INTENCIONAL do padrão usual do projeto:
+    A maioria do código existente (`app.auth.supabase_auth`,
+    `app.authorization.rbac`) abre e fecha sua própria sessão via
+    `with get_db_session() as db: ...`, que faz commit/rollback automático
+    ao final do bloco. Este serviço, em vez disso, RECEBE a sessão já aberta
+    (para permitir injeção de mocks nos testes) e gerencia explicitamente
+    quando confirmar (`commit()`) as mudanças, por dois motivos específicos:
+
+    1. `confirm_preview` precisa persistir a transição de uma prévia para
+       `EXPIRADA` MESMO QUANDO a confirmação como um todo falha (o chamador
+       recebe um erro, mas o estado "expirada" tem que sobreviver para que
+       uma nova tentativa não reencontre uma prévia zumbi com
+       status='CONCLUIDA'). Se dependêssemos apenas do rollback automático
+       de um `with get_db_session()` externo, essa escrita seria desfeita
+       junto com o erro.
+    2. A confirmação é "melhor esforço" por item: um item com falha de
+       condição de corrida (ver `confirm_preview`) não pode abortar a
+       transação inteira — os demais itens válidos, o `SyncJob` e o
+       `AuditLog` da execução precisam ser persistidos do mesmo jeito.
+
+    Por isso, a camada de API (`app.api.v1.imports`) ainda abre a sessão via
+    `with get_db_session() as db: ...` (para obter/fechar a conexão
+    corretamente), mas o `commit()` efetivo das mudanças de negócio ocorre
+    dentro deste serviço. O `commit()` adicional (sem nada pendente) feito
+    pelo `with` externo ao final do bloco é inofensivo (no-op).
+
+Decisões de design assumidas (documentadas para revisão futura):
+    - Comparação de `PATRIMONIO`: feita por igualdade de string EXATA (após
+      `strip()`), sem normalização de caixa (case-sensitive) ou remoção de
+      zeros à esquerda — consistente com `Asset.patrimony_number` sendo
+      sempre `TEXT` (ver `app.models.assets`). Esta é uma decisão de design
+      que pode ser revisada (ex.: normalizar para upper() também) caso a
+      instituição confirme que o número patrimonial nunca é case-sensitive.
+    - DUPLICADO entre linhas da própria planilha: a PRIMEIRA ocorrência de
+      um `PATRIMONIO` normalizado nunca é marcada DUPLICADO (ela segue para
+      a comparação normal com `assets`); toda ocorrência SEGUINTE do mesmo
+      `PATRIMONIO` é marcada DUPLICADO, mesmo que a primeira ocorrência
+      tenha sido classificada como INVALIDO por outro motivo (ex.: ID
+      ausente). Ou seja, a contagem de ocorrências considera TODAS as
+      linhas com aquele patrimônio, independentemente da classificação da
+      primeira. Esta é uma decisão de design que pode ser revisada.
+    - `matched_asset_id`: preenchido para EXISTENTE (o único ativo
+      encontrado) e, em caráter informativo (best-effort), também para
+      DUPLICADO quando exatamente um ativo já existir com aquele
+      patrimônio — mas NUNCA para CONFLITANTE, já que por definição existe
+      mais de um ativo ambíguo (não há um "o" candidato a apontar).
+    - Controle de concorrência otimista (`version`) para itens EXISTENTE:
+      como `ImportPreviewItem` (`app/models/imports.py`) não possui uma
+      coluna dedicada para guardar a versão do asset correspondente no
+      momento da pré-visualização — e este serviço está proibido de alterar
+      modelos/migrações nesta tarefa — a versão lida é armazenada dentro do
+      próprio `normalized_values` (JSONB já existente), na chave
+      `_matched_asset_version_at_preview`. Isso é um uso pragmático de um
+      campo flexível já existente, não uma coluna de schema nova. Se uma
+      coluna dedicada for adicionada em uma fase futura (via migração), esta
+      lógica deve ser atualizada para usá-la em vez da chave dentro do
+      JSONB.
+    - Resolução de `unit_id` para itens NOVO: como `Asset.unit_id` é
+      obrigatório mas a planilha de origem não traz uma referência direta
+      ao `id` de `units`, este serviço tenta casar a coluna `UNIDADE` (nome
+      de cabeçalho, comparação case-insensitive) com `units.name`, também
+      case-insensitive. Se não houver exatamente uma unidade ativa com esse
+      nome (nenhuma, ou mais de uma — ex.: nomes duplicados), o item vira
+      uma FALHA em `confirm_preview` (não é possível importar sem uma
+      unidade determinística). Esta é uma suposição PENDENTE de confirmação
+      institucional (no mesmo espírito das suposições já documentadas em
+      `app.integrations.google_sheets_client`, ex.: colunas RESPONSAVEL) —
+      não fundir/alterar sem revisar aquele módulo e os requisitos reais da
+      planilha.
+    - Vínculos de `responsible_person_id`/`room_id`/`location_id`/
+      `assigned_user_id` NÃO são resolvidos a partir da planilha nesta fase
+      (ficam `NULL` na criação) — fora do escopo desta tarefa.
+    - Cada linha gera, no máximo, uma consulta a `assets` por classificação
+      (pré-visualização) e mais uma na confirmação (revalidação) — não há
+      consulta em lote (`IN (...)`) nesta fase. Para volumes grandes de
+      planilha, isso é um candidato a otimização futura, mas mantém a lógica
+      simples e fácil de auditar nesta primeira versão.
+"""
+from __future__ import annotations
+
+import logging
+import uuid
+from datetime import datetime, timedelta, timezone
+from typing import Any
+from uuid import uuid4
+
+from sqlalchemy import func, or_, select
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import Session
+from sqlalchemy.orm.exc import StaleDataError
+
+from app.config.settings import Settings, get_settings
+from app.integrations.google_sheets_client import GoogleSheetsClient, GoogleSheetsClientError
+from app.models.assets import Asset
+from app.models.audit import AuditLog
+from app.models.imports import ImportPreview, ImportPreviewItem
+from app.models.sync import RawImportRecord, SyncJob
+from app.models.units import Unit
+from app.security.sanitize import (
+    LIKE_ESCAPE_CHAR,
+    canonical_header,
+    escape_like,
+    has_control_chars,
+    normalize_identifier,
+)
+
+logger = logging.getLogger(__name__)
+
+# Chave usada dentro de `ImportPreviewItem.normalized_values` (JSONB) para
+# guardar a versão do asset correspondente no momento da pré-visualização,
+# usada no controle de concorrência otimista de `confirm_preview` — ver
+# docstring do módulo ("Controle de concorrência otimista").
+_VERSION_AT_PREVIEW_KEY = "_matched_asset_version_at_preview"
+# Linha de origem na planilha (1-based), preservada para rastreabilidade em
+# `RawImportRecord.source_row_number` (mesmo racional de uso do JSONB acima).
+_SOURCE_ROW_KEY = "_source_row_number"
+
+# Allowlist do filtro `status` de `list_preview_items` (CWE-89/CWE-20).
+_ALLOWED_CLASSIFICATIONS = frozenset({"NOVO", "EXISTENTE", "DUPLICADO", "INVALIDO", "CONFLITANTE"})
+# Tamanho máximo do termo de busca (ILIKE) — evita padrões gigantes (API4).
+MAX_SEARCH_LENGTH = 100
+# Página máxima aceita (evita OFFSET gigantesco, API4).
+MAX_PAGE = 10_000
+# Namespace (int4) do advisory lock transacional por número patrimonial em
+# `confirm_preview` (serializa confirmações concorrentes do mesmo patrimônio).
+_ADVISORY_LOCK_NAMESPACE_ASSET_PATRIMONY = 0x5350_4154  # "SPAT"
+
+# Nomes de cabeçalho (case-insensitive) usados para localizar valores dentro
+# de `normalized_values`/`raw_values` — ver `_extract_field`.
+_HEADER_PATRIMONIO = "PATRIMONIO"
+_HEADER_ID = "ID"
+_HEADER_DESCRICAO = "DESCRICAO"
+_HEADER_UNIDADE = "UNIDADE"
+
+_SELECTABLE_CLASSIFICATIONS = ("NOVO", "EXISTENTE")
+_ERROR_PREFIX = "erro:"
+
+
+class ImportServiceError(Exception):
+    """Erro de domínio base de `ImportService`.
+
+    A camada de API (`app.api.v1.imports`) captura esta família de
+    exceções e as converte em respostas HTTP com mensagens genéricas (sem
+    detalhe interno), via subclasses específicas abaixo.
+    """
+
+
+class UpstreamSourceError(ImportServiceError):
+    """Falha ao ler a fonte externa (Google Sheets).
+
+    A API deve converter esta exceção em HTTP 502 (ou 503), com uma
+    mensagem genérica — nunca repassando o detalhe interno de
+    `GoogleSheetsClientError` ao cliente.
+    """
+
+
+class PreviewNotFoundError(ImportServiceError):
+    """Nenhuma `ImportPreview` encontrada com o `preview_id` informado.
+
+    A API deve converter esta exceção em HTTP 404.
+    """
+
+
+class PreviewNotConfirmableError(ImportServiceError):
+    """A pré-visualização não pode ser confirmada no estado atual.
+
+    Cobre três situações, todas mapeadas pela API para HTTP 409:
+        - `status` diferente de `'CONCLUIDA'` (já confirmada — mecanismo de
+          IDEMPOTÊNCIA desta operação, ver docstring de `confirm_preview` —,
+          falhou, ou já expirada).
+        - a prévia expirou (`now() > expires_at`), transição para
+          `'EXPIRADA'` que esta chamada acabou de persistir.
+    """
+
+
+def _extract_field(values: dict[str, Any] | None, header_name: str) -> Any:
+    """Busca um valor em `values` (um dict de `raw_values`/`normalized_values`)
+    pelo nome do cabeçalho, comparando de forma case-insensitive (após
+    `strip()`).
+
+    Necessário porque `GoogleSheetsClient` guarda cada valor sob uma chave
+    igual ao cabeçalho exatamente como lido da planilha (preservando caixa),
+    desambiguado apenas quando duplicado (ex.: `RESPONSAVEL_1`) — ver
+    docstring de `app.integrations.google_sheets_client`. Retorna `None` se
+    nenhuma chave corresponder.
+    """
+    target = canonical_header(header_name)
+    for key, value in (values or {}).items():
+        if isinstance(key, str) and canonical_header(key) == target:
+            return value
+    return None
+
+
+def _normalize_patrimony(value: Any) -> str | None:
+    """Normaliza um valor de PATRIMONIO para comparação (ver decisão de
+    design documentada na docstring do módulo: NFC, remoção de caracteres
+    invisíveis e `strip()`, sem alteração de caixa nem remoção de zeros à
+    esquerda). `float` nunca é aceito (perderia zeros à esquerda) e valores
+    com caracteres de controle são descartados (defesa em profundidade; o
+    `GoogleSheetsClient` já os marca como erro bloqueante)."""
+    if value is None or isinstance(value, (bool, float)):
+        return None
+    text = normalize_identifier(value if isinstance(value, str) else str(value))
+    if not text or has_control_chars(text):
+        return None
+    return text
+
+
+def _has_blocking_error(validation_errors: list[Any] | None) -> bool:
+    """Indica se `validation_errors` (lista de strings vinda do
+    `GoogleSheetsClient`) contém alguma entrada de erro bloqueante (prefixo
+    `"erro: "`, distinta de um mero `"aviso: "`)."""
+    for message in validation_errors or []:
+        if isinstance(message, str) and message.strip().lower().startswith(_ERROR_PREFIX):
+            return True
+    return False
+
+
+def _source_row_number_of(item: ImportPreviewItem) -> int | None:
+    """Linha de origem (1-based) guardada em `normalized_values` na prévia."""
+    value = (item.normalized_values or {}).get(_SOURCE_ROW_KEY)
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    return None
+
+
+class ImportService:
+    """Serviço de importação de dados do Google Sheets para `assets`.
+
+    Ver docstring do módulo para as decisões de design, a gestão de
+    transação (desvio intencional do padrão `with get_db_session()`) e as
+    suposições pendentes de confirmação institucional.
+    """
+
+    def __init__(
+        self,
+        db_session: Session,
+        sheets_client: GoogleSheetsClient,
+        settings: Settings | None = None,
+    ) -> None:
+        self._db = db_session
+        self._sheets_client = sheets_client
+        self._settings = settings or get_settings()
+
+    # ------------------------------------------------------------------
+    # Consultas auxiliares a `assets`/`units`
+    # ------------------------------------------------------------------
+
+    def _active_assets_by_patrimony(self, patrimony_number: str | None) -> list[Asset]:
+        """Retorna todos os `assets` ATIVOS (`deleted_at IS NULL`) com este
+        `patrimony_number` exato. Nunca grava em `assets` — apenas leitura."""
+        if patrimony_number is None:
+            return []
+        return (
+            self._db.query(Asset)
+            .filter(Asset.patrimony_number == patrimony_number, Asset.deleted_at.is_(None))
+            .all()
+        )
+
+    def _resolve_unit(self, item: ImportPreviewItem) -> Unit | None:
+        """Tenta casar a coluna `UNIDADE` da linha com uma `Unit` ativa pelo
+        nome (case-insensitive). Retorna `None` se não houver exatamente uma
+        correspondência — ver decisão de design documentada na docstring do
+        módulo (pendência institucional)."""
+        unidade_name = _extract_field(item.normalized_values, _HEADER_UNIDADE)
+        if not isinstance(unidade_name, str) or not unidade_name.strip():
+            return None
+        matches = (
+            self._db.query(Unit)
+            .filter(Unit.active.is_(True))
+            .filter(func.lower(Unit.name) == unidade_name.strip().lower())
+            .all()
+        )
+        if len(matches) == 1:
+            return matches[0]
+        return None
+
+    def _lock_patrimony(self, patrimony_number: str) -> None:
+        """Advisory lock TRANSACIONAL do PostgreSQL por número patrimonial
+        (`pg_advisory_xact_lock(namespace, hashtext(patrimonio))`).
+
+        Valor passado como bind parameter (nunca concatenado). Liberado
+        automaticamente no fim da transação (commit/rollback).
+        """
+        self._db.execute(
+            select(
+                func.pg_advisory_xact_lock(
+                    _ADVISORY_LOCK_NAMESPACE_ASSET_PATRIMONY, func.hashtext(patrimony_number)
+                )
+            )
+        )
+
+    def _apply_item(
+        self, item: ImportPreviewItem, now: datetime, confirmed_by_user_id: uuid.UUID
+    ) -> tuple[str | None, int, int]:
+        """Revalida e aplica UM item NOVO/EXISTENTE em `assets`.
+
+        Retorna `(failure_reason, created_delta, updated_delta)`. Chamado
+        dentro de um savepoint (ver `confirm_preview`).
+        """
+        if item.classification == "NOVO":
+            existing = self._active_assets_by_patrimony(item.patrimony_number)
+            if existing:
+                return (
+                    "condição de corrida: já existe um bem ativo com este número de "
+                    "patrimônio (surgiu após a pré-visualização)",
+                    0,
+                    0,
+                )
+            unit = self._resolve_unit(item)
+            if unit is None:
+                return (
+                    "não foi possível determinar a unidade (coluna UNIDADE ausente "
+                    "ou sem correspondência exata em uma unidade ativa)",
+                    0,
+                    0,
+                )
+            asset = Asset(
+                id=uuid4(),
+                source_record_id=item.source_record_id,
+                source_system="google_sheets",
+                patrimony_number=item.patrimony_number,
+                description=item.description,
+                unit_id=unit.id,
+                located="DESCONHECIDO",
+                source_updated_at=now,
+                created_by=confirmed_by_user_id,
+                updated_by=confirmed_by_user_id,
+                version=1,
+            )
+            self._db.add(asset)
+            self._db.flush()
+            item.matched_asset_id = asset.id
+            return None, 1, 0
+
+        if item.classification == "EXISTENTE":
+            existing = self._active_assets_by_patrimony(item.patrimony_number)
+            if len(existing) != 1:
+                return (
+                    "condição de corrida: o estado do bem mudou desde a pré-visualização "
+                    "(zero ou múltiplos bens ativos encontrados com este patrimônio)",
+                    0,
+                    0,
+                )
+            asset = existing[0]
+            # Trava a linha do bem e recarrega `version` do banco antes da
+            # comparação otimista (fecha a janela entre ler e gravar).
+            self._db.refresh(asset, with_for_update=True)
+            baseline_version = (item.normalized_values or {}).get(_VERSION_AT_PREVIEW_KEY)
+            if baseline_version is None or asset.version != baseline_version:
+                return (
+                    "falha de concorrência: o bem foi modificado desde a "
+                    "pré-visualização (version diverge da versão lida)",
+                    0,
+                    0,
+                )
+            if asset.deleted_at is not None:
+                return ("o bem foi excluído logicamente após a pré-visualização", 0, 0)
+            if item.description:
+                asset.description = item.description
+            asset.source_system = "google_sheets"
+            asset.source_record_id = item.source_record_id
+            asset.source_updated_at = now
+            asset.updated_by = confirmed_by_user_id
+            asset.version = asset.version + 1
+            self._db.add(asset)
+            return None, 0, 1
+
+        return f"classificação não selecionável: {item.classification!r}", 0, 0
+
+    # ------------------------------------------------------------------
+    # create_preview
+    # ------------------------------------------------------------------
+
+    def create_preview(self, requested_by_user_id: uuid.UUID) -> ImportPreview:
+        """Lê a planilha de origem e produz uma `ImportPreview` classificada.
+
+        Classificação de cada linha (ordem de precedência — a primeira regra
+        que se aplicar decide a classificação da linha; ver docstring do
+        módulo para as decisões de design por trás de cada regra):
+
+            1. INVALIDO: a própria linha já trouxe um erro bloqueante do
+               `GoogleSheetsClient` (`validation_errors` com prefixo
+               `"erro: "`, ex.: PATRIMONIO ou ID ausente). NUNCA selecionável.
+            2. DUPLICADO: já existe uma ocorrência ANTERIOR, nesta mesma
+               leitura da planilha, com o mesmo PATRIMONIO normalizado.
+               NUNCA selecionável por padrão (usuário pode revisar
+               manualmente antes de confirmar, mas `confirm_preview` sempre
+               ignora itens com esta classificação).
+            3. CONFLITANTE: existem 2+ `assets` ATIVOS no banco com este
+               mesmo `patrimony_number` — situação que não deveria ocorrer,
+               tratada defensivamente. NUNCA selecionável automaticamente.
+            4. EXISTENTE: existe exatamente 1 `asset` ATIVO com este
+               `patrimony_number` — selecionada por padrão; confirmar
+               ATUALIZA esse asset.
+            5. NOVO: nenhum `asset` ATIVO com este `patrimony_number` —
+               selecionada por padrão; confirmar CRIA um novo asset.
+
+        NUNCA grava em `assets` — apenas lê, para classificar. Persiste a
+        `ImportPreview` e seus `ImportPreviewItem`s via `self._db.add(...)` +
+        `flush()`; o `commit()` final é responsabilidade do chamador (ver
+        docstring do módulo) — qualquer exceção levantada aqui propaga sem
+        que nada tenha sido efetivamente confirmado no banco.
+
+        Levanta `UpstreamSourceError` se a leitura do Google Sheets falhar
+        (`GoogleSheetsClientError`), sem expor o detalhe interno do cliente.
+        """
+        try:
+            read_result = self._sheets_client.read_patrimony_rows()
+        except GoogleSheetsClientError as exc:
+            logger.error("import_service.create_preview: falha ao ler Google Sheets (%s)", exc)
+            raise UpstreamSourceError(
+                "Não foi possível ler a planilha de origem (Google Sheets)."
+            ) from exc
+
+        now = datetime.now(timezone.utc)
+        ttl_minutes = getattr(self._settings, "import_preview_ttl_minutes", 60) or 60
+        expires_at = now + timedelta(minutes=ttl_minutes)
+        preview_id = uuid4()
+
+        # Conta quantas vezes cada PATRIMONIO normalizado já apareceu nesta
+        # mesma leitura, na ordem das linhas — usado para a regra DUPLICADO.
+        seen_patrimony: dict[str, int] = {}
+        seen_source_ids: set[str] = set()
+        counts = {"NOVO": 0, "EXISTENTE": 0, "DUPLICADO": 0, "INVALIDO": 0, "CONFLITANTE": 0}
+        items: list[ImportPreviewItem] = []
+
+        for row in read_result.rows:
+            raw_values: dict[str, Any] = dict(row.get("raw_values") or {})
+            normalized_values: dict[str, Any] = dict(row.get("normalized_values") or {})
+            validation_errors: list[Any] = list(row.get("validation_errors") or [])
+            source_row_number = row.get("source_row_number")
+            if isinstance(source_row_number, int) and not isinstance(source_row_number, bool):
+                normalized_values[_SOURCE_ROW_KEY] = source_row_number
+
+            patrimony_number = _normalize_patrimony(
+                _extract_field(normalized_values, _HEADER_PATRIMONIO)
+            )
+            description_raw = _extract_field(normalized_values, _HEADER_DESCRICAO)
+            description = description_raw.strip() if isinstance(description_raw, str) else None
+            source_record_id_raw = _extract_field(normalized_values, _HEADER_ID)
+            source_record_id = (
+                normalize_identifier(str(source_record_id_raw)) or None
+                if source_record_id_raw is not None
+                else None
+            )
+
+            # Defesa em profundidade: uma linha sem PATRIMONIO utilizável
+            # NUNCA pode ser selecionável (ex.: cabeçalho duplicado/ambíguo,
+            # valor só com caracteres invisíveis), mesmo que o cliente de
+            # leitura não tenha marcado erro — `assets.patrimony_number` é
+            # NOT NULL e a confirmação falharia no banco.
+            if patrimony_number is None and not _has_blocking_error(validation_errors):
+                validation_errors.append("erro: campo PATRIMONIO ausente, vazio ou inválido")
+
+            # ID de origem repetido na planilha: aviso (não bloqueante) para
+            # revisão do operador; IDs originais são preservados como estão.
+            if source_record_id is not None:
+                if source_record_id in seen_source_ids:
+                    validation_errors.append(
+                        "aviso: ID de origem repetido em outra linha da planilha"
+                    )
+                seen_source_ids.add(source_record_id)
+
+            already_seen = seen_patrimony.get(patrimony_number, 0) if patrimony_number else 0
+            matched_asset_id: uuid.UUID | None = None
+
+            if _has_blocking_error(validation_errors):
+                classification = "INVALIDO"
+                # Melhor esforço: ainda tenta localizar um asset correspondente,
+                # apenas de forma informativa (não afeta a classificação).
+                if patrimony_number is not None:
+                    candidates = self._active_assets_by_patrimony(patrimony_number)
+                    if len(candidates) == 1:
+                        matched_asset_id = candidates[0].id
+            elif patrimony_number is not None and already_seen > 0:
+                classification = "DUPLICADO"
+                candidates = self._active_assets_by_patrimony(patrimony_number)
+                if len(candidates) == 1:
+                    matched_asset_id = candidates[0].id
+            else:
+                candidates = self._active_assets_by_patrimony(patrimony_number)
+                if len(candidates) > 1:
+                    classification = "CONFLITANTE"
+                    # Deliberadamente SEM matched_asset_id: a ambiguidade é
+                    # exatamente o problema (ver docstring do módulo).
+                elif len(candidates) == 1:
+                    classification = "EXISTENTE"
+                    matched_asset_id = candidates[0].id
+                    normalized_values[_VERSION_AT_PREVIEW_KEY] = candidates[0].version
+                else:
+                    classification = "NOVO"
+
+            if patrimony_number is not None:
+                seen_patrimony[patrimony_number] = already_seen + 1
+
+            counts[classification] += 1
+            selected_default = classification in _SELECTABLE_CLASSIFICATIONS
+
+            items.append(
+                ImportPreviewItem(
+                    id=uuid4(),
+                    preview_id=preview_id,
+                    source_record_id=source_record_id,
+                    patrimony_number=patrimony_number,
+                    description=description,
+                    raw_values=raw_values,
+                    normalized_values=normalized_values,
+                    classification=classification,
+                    validation_errors=validation_errors or None,
+                    matched_asset_id=matched_asset_id,
+                    selected=selected_default,
+                    created_at=now,
+                )
+            )
+
+        preview = ImportPreview(
+            id=preview_id,
+            requested_by=requested_by_user_id,
+            source="google_sheets",
+            status="CONCLUIDA",
+            total_rows=len(read_result.rows),
+            count_novo=counts["NOVO"],
+            count_existente=counts["EXISTENTE"],
+            count_duplicado=counts["DUPLICADO"],
+            count_invalido=counts["INVALIDO"],
+            count_conflitante=counts["CONFLITANTE"],
+            created_at=now,
+            expires_at=expires_at,
+        )
+
+        self._db.add(preview)
+        if items:
+            self._db.add_all(items)
+        self._db.flush()
+
+        return preview
+
+    # ------------------------------------------------------------------
+    # list_preview_items (suporte à tela de revisão / paginação da API)
+    # ------------------------------------------------------------------
+
+    def list_preview_items(
+        self,
+        preview_id: uuid.UUID,
+        status: str | None = None,
+        search: str | None = None,
+        page: int = 1,
+        page_size: int = 25,
+    ) -> dict[str, Any]:
+        """Lista, de forma paginada, os itens de uma `ImportPreview`.
+
+        `status` filtra por `classification` exata, restrita à allowlist
+        `_ALLOWED_CLASSIFICATIONS` (case-insensitive; valor fora dela resulta
+        em página vazia, sem consultar os itens). `search` busca (ILIKE) em
+        `patrimony_number` OU `description` como TEXTO LITERAL: `%`, `_` e
+        `\\` são escapados (`escape_like`) e o termo é limitado a
+        `MAX_SEARCH_LENGTH` caracteres. Tudo via bind parameters do ORM —
+        nenhum valor é concatenado no SQL. Ordenação fixa (sem coluna
+        controlada pelo cliente). Levanta `PreviewNotFoundError` se
+        `preview_id` não existir.
+        """
+        preview = self._db.query(ImportPreview).filter(ImportPreview.id == preview_id).first()
+        if preview is None:
+            raise PreviewNotFoundError(f"pré-visualização {preview_id} não encontrada")
+
+        safe_page = min(max(page, 1), MAX_PAGE)
+        safe_page_size = max(1, min(page_size, 100))
+
+        normalized_status = status.strip().upper() if isinstance(status, str) else None
+        if normalized_status and normalized_status not in _ALLOWED_CLASSIFICATIONS:
+            return {
+                "preview": preview,
+                "total": 0,
+                "page": safe_page,
+                "page_size": safe_page_size,
+                "items": [],
+            }
+
+        query = self._db.query(ImportPreviewItem).filter(
+            ImportPreviewItem.preview_id == preview.id
+        )
+        if normalized_status:
+            query = query.filter(ImportPreviewItem.classification == normalized_status)
+        search_term = search.strip()[:MAX_SEARCH_LENGTH] if isinstance(search, str) else ""
+        if search_term:
+            like_pattern = f"%{escape_like(search_term)}%"
+            query = query.filter(
+                or_(
+                    ImportPreviewItem.patrimony_number.ilike(
+                        like_pattern, escape=LIKE_ESCAPE_CHAR
+                    ),
+                    ImportPreviewItem.description.ilike(like_pattern, escape=LIKE_ESCAPE_CHAR),
+                )
+            )
+
+        total = query.count()
+        results = (
+            # Desempate por `id`: todos os itens de uma prévia compartilham o
+            # mesmo `created_at`, e sem um critério total a paginação do
+            # PostgreSQL pode repetir/omitir itens entre páginas.
+            query.order_by(ImportPreviewItem.created_at.asc(), ImportPreviewItem.id.asc())
+            .offset((safe_page - 1) * safe_page_size)
+            .limit(safe_page_size)
+            .all()
+        )
+
+        return {
+            "preview": preview,
+            "total": total,
+            "page": safe_page,
+            "page_size": safe_page_size,
+            "items": results,
+        }
+
+    # ------------------------------------------------------------------
+    # confirm_preview
+    # ------------------------------------------------------------------
+
+    def confirm_preview(
+        self,
+        preview_id: uuid.UUID,
+        confirmed_by_user_id: uuid.UUID,
+        selected_item_ids: list[uuid.UUID],
+    ) -> dict[str, Any]:
+        """Confirma (aplica em `assets`) os itens selecionados de uma prévia.
+
+        Passos (ver docstring do módulo para a gestão de transação e as
+        decisões de design por trás de cada regra):
+
+            1. Busca a `ImportPreview`; `PreviewNotFoundError` se não existir
+               (API: 404).
+            2. Se `status != 'CONCLUIDA'`, levanta `PreviewNotConfirmableError`
+               (API: 409). Isto é o mecanismo de IDEMPOTÊNCIA desta operação:
+               uma segunda chamada com o mesmo `preview_id` encontra
+               `status == 'CONFIRMADA'` (já aplicado na primeira chamada) e
+               falha aqui, SEM duplicar nenhuma gravação em `assets`.
+            3. Se `now() > expires_at`, marca `status='EXPIRADA'`, CONFIRMA
+               (`commit()`) essa transição imediatamente — ela deve
+               sobreviver mesmo que esta chamada falhe — e levanta
+               `PreviewNotConfirmableError` (API: 409).
+            4. Filtra `selected_item_ids` para os itens que: (a) pertencem a
+               esta prévia, (b) têm `classification` em `('NOVO',
+               'EXISTENTE')`. Qualquer outro id (inexistente, ou de um item
+               INVALIDO/DUPLICADO/CONFLITANTE) é contado em `ignorados`, sem
+               erro — silenciosamente ignorado, exatamente como pedido.
+            5. Para cada item elegível, REVALIDA contra o estado ATUAL de
+               `assets` (pode ter mudado desde a pré-visualização):
+                   - NOVO: se já existir qualquer asset ativo com aquele
+                     `patrimony_number`, é uma condição de corrida -> FALHA
+                     para este item (não cria), reportado em `falhas`.
+                   - EXISTENTE: se não houver mais exatamente 1 asset ativo
+                     com aquele `patrimony_number`, OU se a versão atual do
+                     asset divergir da versão lida na pré-visualização
+                     (`_matched_asset_version_at_preview`, guardada dentro de
+                     `normalized_values` — ver docstring do módulo), é uma
+                     falha de concorrência -> FALHA para este item (não
+                     atualiza), reportado em `falhas`.
+               Uma falha de item NUNCA aborta os demais itens, nem o
+               `SyncJob`/`AuditLog` desta execução — é tratada item a item.
+            6. Aplica (INSERT/UPDATE) cada item válido em `assets`, cria um
+               `SyncJob` (resumo da execução) e um `RawImportRecord` por
+               linha processada (sucesso ou falha), e um `AuditLog`
+               (`entity_type='import'`, `operation='CONFIRM_IMPORT'`).
+            7. Marca `ImportPreview.status='CONFIRMADA'`,
+               `confirmed_at`/`confirmed_by`, e CONFIRMA (`commit()`) tudo
+               de uma vez.
+
+        Retorna um dict: `{"sync_job_id", "created", "updated", "ignorados",
+        "falhas"}`, onde `falhas` é uma lista de dicts
+        `{"item_id", "patrimony_number", "reason"}`.
+        """
+        preview = self._db.query(ImportPreview).filter(ImportPreview.id == preview_id).first()
+        if preview is None:
+            raise PreviewNotFoundError(f"pré-visualização {preview_id} não encontrada")
+
+        # Concorrência (dupla confirmação simultânea): trava a linha da
+        # prévia (`SELECT ... FOR UPDATE`) e RECARREGA seu estado antes de
+        # checar o status. Uma segunda requisição concorrente bloqueia aqui
+        # até a primeira concluir (commit) e então enxerga
+        # status='CONFIRMADA' -> 409, sem duplicar gravações em `assets`.
+        self._db.refresh(preview, with_for_update=True)
+
+        if preview.status != "CONCLUIDA":
+            raise PreviewNotConfirmableError(
+                f"pré-visualização não pode ser confirmada (status atual: {preview.status!r})"
+            )
+
+        now = datetime.now(timezone.utc)
+        if now > preview.expires_at:
+            preview.status = "EXPIRADA"
+            self._db.add(preview)
+            # Esta escrita precisa sobreviver mesmo que a confirmação falhe
+            # (ver docstring do módulo) — commit explícito antes de levantar.
+            self._db.commit()
+            raise PreviewNotConfirmableError(
+                "pré-visualização expirada; solicite uma nova pré-visualização"
+            )
+
+        items = (
+            self._db.query(ImportPreviewItem)
+            .filter(ImportPreviewItem.preview_id == preview.id)
+            .all()
+        )
+        items_by_id = {item.id: item for item in items}
+
+        selected_ids_set = set(selected_item_ids)
+        eligible_items = [
+            item
+            for item_id, item in items_by_id.items()
+            if item_id in selected_ids_set and item.classification in _SELECTABLE_CLASSIFICATIONS
+        ]
+        # Ordem determinística (por patrimônio) para que os advisory locks
+        # abaixo sejam sempre adquiridos na mesma ordem por execuções
+        # concorrentes — evita deadlock entre duas confirmações.
+        eligible_items.sort(key=lambda it: (it.patrimony_number or "", str(it.id)))
+        eligible_ids = {item.id for item in eligible_items}
+        ignorados = len(selected_ids_set - eligible_ids)
+
+        created = 0
+        updated = 0
+        falhas: list[dict[str, Any]] = []
+
+        sync_job = SyncJob(
+            id=uuid4(),
+            source="google_sheets",
+            status="EM_EXECUCAO",
+            started_at=now,
+            records_read=len(eligible_items),
+        )
+        self._db.add(sync_job)
+
+        for item in eligible_items:
+            failure_reason: str | None = None
+
+            if item.patrimony_number is None:
+                # Defesa em profundidade: nunca deveria ser NOVO/EXISTENTE.
+                failure_reason = "número patrimonial ausente ou inválido"
+            else:
+                # Serializa, dentro desta transação, qualquer outra
+                # confirmação concorrente que toque o MESMO patrimônio (não
+                # há índice único parcial em assets.patrimony_number — ver
+                # relatório de auditoria). Liberado no commit/rollback.
+                self._lock_patrimony(item.patrimony_number)
+                # Savepoint por item: uma falha de banco (constraint, dado
+                # inválido) desfaz SOMENTE este item, que vira `falha`; os
+                # demais itens, o SyncJob e o AuditLog seguem normalmente.
+                savepoint = self._db.begin_nested()
+                try:
+                    failure_reason, delta_created, delta_updated = self._apply_item(
+                        item, now, confirmed_by_user_id
+                    )
+                    self._db.flush()
+                except StaleDataError:
+                    # `version_id_col` em Asset: o UPDATE ... WHERE version=:v
+                    # não afetou linha (outro processo alterou o bem).
+                    savepoint.rollback()
+                    logger.warning(
+                        "import_service.confirm_preview: StaleDataError no item %s", item.id
+                    )
+                    failure_reason = (
+                        "falha de concorrência: o bem foi modificado por outro processo "
+                        "durante a confirmação (version diverge)"
+                    )
+                except SQLAlchemyError as exc:
+                    savepoint.rollback()
+                    logger.error(
+                        "import_service.confirm_preview: erro de banco ao aplicar item %s (%s)",
+                        item.id,
+                        type(exc).__name__,
+                    )
+                    failure_reason = "erro de banco ao aplicar o item; nenhuma alteração gravada"
+                else:
+                    savepoint.commit()
+                    created += delta_created
+                    updated += delta_updated
+
+            if failure_reason is not None:
+                falhas.append(
+                    {
+                        "item_id": str(item.id),
+                        "patrimony_number": item.patrimony_number,
+                        "reason": failure_reason,
+                    }
+                )
+
+            raw_status = "REJEITADO" if failure_reason is not None else "IMPORTADO"
+            self._db.add(
+                RawImportRecord(
+                    id=uuid4(),
+                    sync_job_id=sync_job.id,
+                    source_record_id=item.source_record_id or str(item.id),
+                    source_row_number=_source_row_number_of(item),
+                    raw_values=item.raw_values,
+                    normalized_values=item.normalized_values,
+                    validation_errors=(
+                        {"reason": failure_reason} if failure_reason is not None else None
+                    ),
+                    import_status=raw_status,
+                )
+            )
+
+        sync_job.records_created = created
+        sync_job.records_updated = updated
+        sync_job.records_failed = len(falhas)
+        sync_job.finished_at = datetime.now(timezone.utc)
+        if falhas and not (created or updated):
+            sync_job.status = "FALHOU"
+        elif falhas:
+            sync_job.status = "PARCIAL"
+        else:
+            sync_job.status = "CONCLUIDO"
+        if falhas:
+            sync_job.error_summary = (
+                f"{len(falhas)} item(ns) não importado(s); ver RawImportRecord REJEITADO "
+                f"associado a este SyncJob para detalhes por item."
+            )
+        self._db.add(sync_job)
+
+        preview.status = "CONFIRMADA"
+        preview.confirmed_at = datetime.now(timezone.utc)
+        preview.confirmed_by = confirmed_by_user_id
+        self._db.add(preview)
+
+        audit_result = "FALHA" if sync_job.status == "FALHOU" else "SUCESSO"
+        self._db.add(
+            AuditLog(
+                id=uuid4(),
+                actor_user_id=confirmed_by_user_id,
+                entity_type="import",
+                entity_id=str(preview.id),
+                operation="CONFIRM_IMPORT",
+                previous_values={"status": "CONCLUIDA"},
+                new_values={
+                    "status": "CONFIRMADA",
+                    "sync_job_id": str(sync_job.id),
+                    "created": created,
+                    "updated": updated,
+                    "ignorados": ignorados,
+                    "falhas": len(falhas),
+                },
+                result=audit_result,
+            )
+        )
+
+        # Commit único de toda a execução (itens aplicados, SyncJob,
+        # RawImportRecords, AuditLog e a transição da prévia para
+        # CONFIRMADA) — ver docstring do módulo.
+        self._db.commit()
+
+        return {
+            "sync_job_id": sync_job.id,
+            "created": created,
+            "updated": updated,
+            "ignorados": ignorados,
+            "falhas": falhas,
+        }
