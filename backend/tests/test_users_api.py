@@ -89,7 +89,9 @@ def _mock_unit_scope_ok():
     (`app.authorization.rbac.units_outside_scope`, auditoria 2026-10-13);
     o comportamento de negação é coberto em `test_sec_authz.py`.
     """
-    with patch("app.api.v1.users.units_outside_scope", return_value=[]):
+    with patch("app.api.v1.users.units_outside_scope", return_value=[]), patch(
+        "app.api.v1.users._target_in_actor_scope", return_value=True
+    ):
         yield
 
 

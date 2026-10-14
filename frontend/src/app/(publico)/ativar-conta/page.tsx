@@ -118,13 +118,12 @@ export default function AtivarContaPage() {
   const stepIndex = phase === "checking" ? 0 : phase === "ready" ? 1 : ACTIVATION_STEPS.length;
 
   return (
-    <div className="flex min-h-[calc(100vh-4rem)] flex-col items-center justify-center p-4 sm:p-8">
+    <div className="flex flex-1 flex-col items-center justify-center p-4 sm:p-8">
       <SlideIn
         distance="sm"
         className="flex w-full max-w-sm flex-col gap-6 rounded-cards border border-ash-stroke p-card-padding"
       >
         <div className="flex flex-col gap-1">
-          <span className="text-eyebrow text-pale-stone">SISPAT-AGU</span>
           <h1 className="text-heading text-[28px] text-bone">Ativar conta</h1>
         </div>
 

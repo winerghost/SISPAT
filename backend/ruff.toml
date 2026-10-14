@@ -1,0 +1,5 @@
+# Configuração mínima do ruff para o backend.
+[lint.per-file-ignores]
+# F821 é falso positivo nos modelos: as strings de relationship("Classe")
+# são resolvidas pelo registry do SQLAlchemy (configure_mappers() OK).
+"app/models/*.py" = ["F821"]

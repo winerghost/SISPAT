@@ -14,11 +14,12 @@ import {
 import { LG_QUERY, useMediaQuery } from "./use-media-query";
 
 // =============================================================================
-// Painel lateral do login (>= lg): orientações de uso em InfoSlider + slot
-// opcional de imagem institucional (vazio por padrão).
+// Painel de orientações do login: em InfoSlider + slot opcional de imagem
+// institucional (vazio por padrão). >= lg fica ao lado do formulário; abaixo
+// de lg fica ABAIXO dele (ordem do DOM).
 // =============================================================================
-// Abaixo de lg o painel não aparece (CSS) e o autoplay fica desligado (só
-// liga quando a media query lg casa — sem timer rodando em tela oculta).
+// Abaixo de lg o autoplay fica desligado (só liga quando a media query lg
+// casa — navegação manual/touch no mobile, sem rotação automática).
 // Posicionado DEPOIS do formulário no DOM: o Tab chega primeiro aos campos.
 // =============================================================================
 
@@ -36,11 +37,11 @@ export function AuthGuidancePanel({ image = LOGIN_INSTITUTIONAL_IMAGE, className
     <div
       aria-labelledby={headingId}
       role="group"
-      className={cn("hidden min-w-0 flex-col justify-center gap-4 lg:flex", className)}
+      className={cn("flex min-w-0 flex-col justify-center gap-4", className)}
     >
       {image && (
         <div className="relative aspect-[16/9] overflow-hidden rounded-cards border border-ash-stroke">
-          <Image src={image.src} alt={image.alt} fill sizes="(min-width: 1024px) 40vw, 0px" className="object-cover" />
+          <Image src={image.src} alt={image.alt} fill sizes="(min-width: 1024px) 40vw, 100vw" className="object-cover" />
         </div>
       )}
       <div className="flex flex-col gap-1">

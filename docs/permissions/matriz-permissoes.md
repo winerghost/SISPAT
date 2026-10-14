@@ -153,6 +153,29 @@ agir; o *onde* é sempre governado por `user_unit_access`.
   `result = 'DENIED'`, suficiente para detectar tentativas de acesso indevido
   sem expor detalhes internos ao usuário final.
 
+### 5.1 Permissões do seed 0005 sem consumidor (AUD-14-03)
+
+Das 8 permissões do seed `0005_seed_security_permissions`, apenas
+`users.invite` e `users.revoke_access` têm rota consumidora hoje. As demais
+são **reservadas, sem rota ainda** (nenhuma rota foi inventada; todas
+vinculadas só ao `ADM`):
+
+| Permissão | Uso previsto |
+|---|---|
+| `users.activate` | Rota futura de ativação de conta de usuário convidado (`/api/v1/admin/users/<id>/activate`). |
+| `users.deactivate` | Rota futura de desativação de conta (`/api/v1/admin/users/<id>/deactivate`). |
+| `users.assign_role` | Rota/campo futuro de alteração de perfil de usuário (edição administrativa). |
+| `users.assign_unit` | Rota/campo futuro de concessão/revogação de acesso a unidades. |
+| `security.manage_mfa` | Rota administrativa futura de recuperação assistida de MFA de OUTRO usuário. |
+| `security.view_auth_logs` | Rota futura de consulta de trilhas de autenticação/segurança. |
+
+`security.manage_mfa` **não** é exigida em
+`DELETE /api/v1/security/mfa/factors/<uuid>`: a rota é autosserviço (só o
+próprio fator, AAL2, rate limit, regra do último fator do ADM) e a permissão
+é exclusiva do ADM; exigi-la impediria USER/RH de gerir o próprio fator. O
+cadastro do primeiro fator ocorre direto no Supabase Auth (frontend) e não
+passa por essa rota. Decisão sujeita à confirmação institucional.
+
 ## 6. Pontos explicitamente pendentes de validação institucional
 
 1. Se deve existir um nível de superusuário com bypass de escopo de unidade

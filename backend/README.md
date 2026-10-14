@@ -146,3 +146,16 @@ pytest
 
 (Nenhum teste de integração com banco real está incluído nesta fase —
 apenas a fundação de schema/modelos.)
+
+## Validação de JWT (HS256 legado + ES256/JWKS)
+
+O projeto Supabase assina com ES256; o backend valida via JWKS
+(`app/auth/jwks.py`) e mantém HS256 legado por compatibilidade.
+
+| Variável | Padrão | Descrição |
+|---|---|---|
+| `SUPABASE_JWT_ALGORITHMS` | `HS256,ES256` | Allowlist (somente HS256/ES256). Use `ES256` para desligar o segredo legado. |
+| `SUPABASE_JWT_SECRET` | — | Exigido (>= 32 car. em produção) só se HS256 estiver habilitado. |
+| `SUPABASE_JWKS_URL` | `<SUPABASE_URL>/auth/v1/.well-known/jwks.json` | HTTPS obrigatório em produção; sem redirects. |
+| `SUPABASE_JWKS_CACHE_SECONDS` | `600` | TTL do cache; `kid` desconhecido => no máx. 1 refetch/30 s. |
+| `SUPABASE_JWKS_TIMEOUT_SECONDS` | `3` | Timeout da busca (JWKS indisponível sem cache => 401). |

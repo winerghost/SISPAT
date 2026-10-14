@@ -423,7 +423,7 @@ test.describe("logomarca AGU no login", () => {
       await expect(logo).toBeVisible();
       await expect.poll(() => logo.evaluate((el) => (el as HTMLImageElement).naturalWidth)).toBeGreaterThan(0);
       // Texto da marca do sistema permanece visível.
-      await expect(page.locator("#conteudo").getByText("SISPAT-AGU", { exact: true })).toBeVisible();
+      await expect(page.getByRole("banner").getByText("SISPAT-AGU", { exact: true })).toBeVisible();
       const overflow = await page.evaluate(
         () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
       );
@@ -432,4 +432,79 @@ test.describe("logomarca AGU no login", () => {
       expect(box && box.x >= 0 && box.x + box.width <= width).toBe(true);
     });
   }
+});
+
+test.describe("tela pública autônoma (/login e /ativar-conta, sem shell do app)", () => {
+  for (const path of ["/login", "/ativar-conta"]) {
+    test(`${path}: sem sidebar/menu/header do app; marca, <main> e rodapé próprios`, async ({ page }) => {
+      await installMocks(page);
+      await page.goto(path);
+      await waitForHydration(page);
+
+      // Shell do app ausente.
+      await expect(page.getByRole("navigation", { name: "Navegação principal" })).toHaveCount(0);
+      await expect(page.getByRole("button", { name: "Abrir menu de navegação" })).toHaveCount(0);
+      await expect(page.locator("aside")).toHaveCount(0);
+      await expect(page.getByRole("navigation", { name: "Trilha de navegação" })).toHaveCount(0);
+
+      // Marca + landmarks próprios.
+      const banner = page.getByRole("banner");
+      await expect(banner.getByText("SISPAT-AGU", { exact: true })).toBeVisible();
+      const logo = banner.getByRole("img", { name: "Logomarca da Advocacia-Geral da União" });
+      await expect(logo).toBeVisible();
+      await expect.poll(() => logo.evaluate((el) => (el as HTMLImageElement).naturalWidth)).toBeGreaterThan(0);
+      await expect(page.locator("main#conteudo")).toHaveCount(1);
+      const footer = page.getByRole("contentinfo");
+      await expect(footer).toContainText("Sistema de Gestão Patrimonial — AGU, Palmas/TO");
+      await expect(footer).toContainText(`© ${new Date().getFullYear()}`);
+      await expect(footer).toContainText("Acesso apenas por convite");
+
+      // Sem cadastro aberto, sem "esqueci a senha" (não há fluxo implementado).
+      await expect(page.getByRole("link", { name: /cadastre|criar conta|registr|esqueceu/i })).toHaveCount(0);
+
+      // Viewport inteiro, sem rolagem horizontal.
+      const m = await page.evaluate(() => ({
+        overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+        height: document.documentElement.scrollHeight,
+        vh: window.innerHeight,
+      }));
+      expect(m.overflow).toBeLessThanOrEqual(0);
+      expect(m.height).toBeGreaterThanOrEqual(m.vh);
+    });
+  }
+
+  test("skip link leva ao <main> da tela pública", async ({ page }) => {
+    await installMocks(page);
+    await page.goto("/login");
+    await waitForHydration(page);
+    await page.keyboard.press("Tab");
+    await expect(page.getByRole("link", { name: "Pular para o conteúdo" })).toBeFocused();
+    await page.keyboard.press("Enter");
+    await expect(page.locator("main#conteudo")).toBeFocused();
+  });
+
+  test("rota protegida sem sessão → /login, estável (sem loop de redirecionamento)", async ({ page }) => {
+    await installMocks(page);
+    let navigations = 0;
+    page.on("framenavigated", (frame) => {
+      if (frame === page.mainFrame()) navigations += 1;
+    });
+    await page.goto("/configuracoes");
+    await expect(page).toHaveURL(/\/login$/);
+    await expect(page.getByRole("heading", { level: 1, name: "Entrar" })).toBeVisible();
+    const settled = navigations;
+    await page.waitForTimeout(1000);
+    expect(navigations, "sem novas navegações após estabilizar").toBe(settled);
+    expect(navigations).toBeLessThanOrEqual(3);
+    await expect(page).toHaveURL(/\/login$/);
+  });
+
+  test("área do app mantém o shell (menu) com sessão", async ({ page }) => {
+    await installMocks(page, { role: "ADM" });
+    await seedSession(page, { role: "ADM" });
+    await page.goto("/");
+    await waitForHydration(page);
+    await expect(page.getByRole("navigation", { name: "Navegação principal", exact: true })).toBeVisible();
+    await expect(page.getByRole("contentinfo")).toHaveCount(0);
+  });
 });

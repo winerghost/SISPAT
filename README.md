@@ -128,6 +128,9 @@ SISPAT-AGU/
 ├── frontend/                 # Next.js (fase futura — esqueleto mínimo)
 │   ├── Dockerfile
 │   └── src/{app,components,features,lib}/
+│                              # app/(publico): /login e /ativar-conta (tela
+│                              # autônoma, sem menu); app/(app): shell + rotas
+│                              # autenticadas (URLs inalteradas)
 ├── infra/
 │   └── cloudpanel/           # Modelo de vhost Nginx para o CloudPanel
 │                              # (infra/cloudpanel/vhost.conf.example)

@@ -5,7 +5,6 @@ import { useRouter } from "next/navigation";
 import { CheckCircle2 } from "lucide-react";
 
 import { FadeIn, SlideIn } from "@/components/animations";
-import { AguLogo } from "@/components/brand/agu-logo";
 import { AnimatedFormMessage, AuthField, AuthGuidancePanel } from "@/components/features/auth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -38,7 +37,8 @@ import { getSupabaseClient } from "@/lib/supabase-client";
 // existe no mesmo commit e recebe o foco); erros com AnimatedFormMessage
 // (role="alert" mantido); `<Button loading>`; após a confirmação real, um
 // status "Acesso confirmado" aparece enquanto o `router.push` já está em
-// curso (não atrasa o redirect). >= lg: painel lateral de orientações
+// curso (não atrasa o redirect). Marca (AguLogo + eyebrow), rodapé e fundo
+// vêm de (publico)/layout.tsx (tela autônoma, sem shell). >= lg: painel lateral de orientações
 // (AuthGuidancePanel/InfoSlider), DEPOIS do formulário na ordem do DOM.
 // =============================================================================
 
@@ -177,16 +177,14 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="flex min-h-[calc(100vh-4rem)] flex-col items-center justify-center p-4 sm:p-8">
+    <div className="flex flex-1 flex-col items-center justify-center p-4 sm:p-8">
       <div className="grid w-full max-w-sm gap-10 lg:max-w-[56rem] lg:grid-cols-[minmax(0,24rem)_minmax(0,1fr)] lg:items-center xl:gap-14">
         <SlideIn
           distance="sm"
           className="flex w-full min-w-0 flex-col gap-6 rounded-cards border border-ash-stroke p-card-padding"
         >
-          <AguLogo />
           <FadeIn key={step} className="flex flex-col gap-6">
             <div className="flex flex-col gap-1">
-              <span className="text-eyebrow text-pale-stone">SISPAT-AGU</span>
               <h1 className="text-heading text-[28px] text-bone">
                 {step === "credentials" ? "Entrar" : "Verificação em duas etapas"}
               </h1>

@@ -62,7 +62,7 @@ function check(name, html) {
 }
 // 2) Lista de usuários (nome/e-mail/papéis vindos da API)
 {
-  const Page = require(path.join(FE, "src/app/administracao/usuarios/page.tsx")).default;
+  const Page = require(path.join(FE, "src/app/(app)/administracao/usuarios/page.tsx")).default;
   const qc = new QueryClient();
   qc.setQueryData(["users", 1], { total: 4, page: 1, page_size: 20,
     users: P.map((p, i) => ({ id: `u${i}`, name: p, email: p, active: true, roles: [p] })) });

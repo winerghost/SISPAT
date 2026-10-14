@@ -92,11 +92,28 @@ derivada de `../logo.png`) é exibida na tela de login por
 `components/brand/agu-logo.tsx`, sobre um Light Surface Card (#eeeeee, raio
 10px, sem sombra) para manter contraste; não recolorir nem aplicar filtros.
 
+## Tela de login única (route groups)
+
+`/login` e `/ativar-conta` ficam em `src/app/(publico)/` e usam
+`(publico)/layout.tsx`: viewport inteiro (`min-h-dvh`) sobre #101010, cabeçalho
+com `AguLogo` + eyebrow `SISPAT-AGU`, `<main id="conteudo">` e rodapé
+(copyright, "Sistema de Gestão Patrimonial — AGU, Palmas/TO" e a nota "Acesso
+apenas por convite…"). Sem Sidebar/Header/AuthGuard. As demais rotas ficam em
+`(app)/`, cujo layout traz o shell e o `AuthGuard` (sem sessão → `/login`,
+destino fixo, sem loop). Os grupos não alteram as URLs. O fluxo de login
+(senha → MFA TOTP → AAL2 via `/me`) e o foco WCAG 2.4.3 não mudaram; o painel
+de orientações (`AuthGuidancePanel`) fica ao lado do formulário em `lg` e abaixo
+dele em telas menores. Não há "Cadastre-se" (só convite) nem "Esqueceu a
+senha?" (fluxo inexistente). Testes: `e2e/functional.spec.ts` ("tela pública
+autônoma") e a matriz de `e2e/support/screens.ts`.
+
 ## Estrutura
 
 ```
 src/
-  app/                     # App Router (rotas, layout raiz, globals.css)
+  app/                     # App Router (layout raiz = html/body/providers/skip link)
+    (app)/                 # Shell autenticado: Sidebar + Header + AuthGuard (/, /configuracoes, /administracao)
+    (publico)/             # Telas autônomas SEM shell: /login e /ativar-conta
   components/
     layout/                # Shell: sidebar, header, itens de navegação
     ui/                     # Componentes base no padrão shadcn/ui

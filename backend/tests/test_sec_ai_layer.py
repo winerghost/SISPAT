@@ -529,8 +529,8 @@ def test_celery_rejeita_pickle_e_task_nao_aceita_config_arbitraria():
 # ---------------------------------------------------------------------------
 
 FRONTEND_FILES = [
-    "frontend/src/app/configuracoes/page.tsx",
-    "frontend/src/app/configuracoes/inteligencia-artificial/page.tsx",
+    "frontend/src/app/(app)/configuracoes/page.tsx",
+    "frontend/src/app/(app)/configuracoes/inteligencia-artificial/page.tsx",
     "frontend/src/components/features/settings/ai-settings-form.tsx",
     "frontend/src/components/features/settings/ai-settings-labels.ts",
     "frontend/src/components/features/settings/deepseek-transfer-dialog.tsx",
@@ -539,9 +539,20 @@ FRONTEND_FILES = [
 ]
 
 
+def _resolve_frontend(rel: str):
+    """Aceita route groups do App Router (ex.: `app/(app)/configuracoes/...`),
+    que não mudam a URL; evita que a varredura vire `skip` silencioso ao mover telas."""
+    path = ROOT / rel
+    prefix = "frontend/src/app/"
+    if path.exists() or not rel.startswith(prefix):
+        return path
+    matches = sorted((ROOT / prefix).glob("(*)/" + rel[len(prefix):]))
+    return matches[0] if matches else path
+
+
 @pytest.mark.parametrize("rel", FRONTEND_FILES)
 def test_frontend_settings_sem_padroes_perigosos(rel):
-    path = ROOT / rel
+    path = _resolve_frontend(rel)
     if not path.exists():
         pytest.skip(f"{rel} ausente")
     source = path.read_text(encoding="utf-8")

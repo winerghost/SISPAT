@@ -7,7 +7,7 @@ import { waitForAnimations } from "./support/screens";
 
 // =============================================================================
 // Carrossel (Embla) — exercitado pelo InfoSlider do painel lateral do login
-// (>= lg). Não há rota de demonstração: ImageCarousel/AssetGallery não são
+// (ao lado >= lg, abaixo do formulário < lg). Não há rota de demonstração: ImageCarousel/AssetGallery não são
 // testados aqui (ver docs/ux/evidence/auth-carrossel.md).
 // =============================================================================
 
@@ -245,9 +245,12 @@ test.describe("prefers-reduced-motion", () => {
 test.describe("mobile (< lg)", () => {
   test.use({ viewport: { width: 375, height: 667 } });
 
-  test("painel lateral oculto e sem autoplay", async ({ page }) => {
+  test("painel abaixo do formulário (ordem do DOM) e sem autoplay", async ({ page }) => {
     const carousel = await openLogin(page);
-    await expect(carousel).toBeHidden();
+    await expect(carousel).toBeVisible();
+    const formBox = await page.getByRole("button", { name: "Entrar" }).boundingBox();
+    const panelBox = await carousel.boundingBox();
+    expect(panelBox!.y, "painel abaixo do formulário").toBeGreaterThan(formBox!.y + formBox!.height);
     await expect(page.locator("[aria-roledescription='carousel']")).toHaveAttribute("data-autoplay", "off");
   });
 });

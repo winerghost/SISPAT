@@ -98,6 +98,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # Tamanho mínimo de segredos simétricos exigido em produção (256 bits em
 # caracteres ASCII; o segredo JWT legado do Supabase tem 40+ caracteres).
 _MIN_SECRET_LENGTH = 32
+_ALLOWED_JWT_ALGORITHMS = frozenset({"HS256", "ES256"})
 
 
 class Settings(BaseSettings):
@@ -172,6 +173,23 @@ class Settings(BaseSettings):
         ),
     )
     jwt_leeway_seconds: int = Field(default=30, ge=0, le=300)
+    supabase_jwt_algorithms: str = Field(
+        default="HS256,ES256",
+        description=(
+            "Algoritmos JWT aceitos (allowlist: HS256, ES256). HS256 exige "
+            "SUPABASE_JWT_SECRET; ES256 usa o JWKS do projeto. Para desligar "
+            "o segredo legado, defina apenas ES256."
+        ),
+    )
+    supabase_jwks_url: str | None = Field(
+        default=None,
+        description=(
+            "Override do JWKS. Padrão: <SUPABASE_URL>/auth/v1/.well-known/jwks.json "
+            "(HTTPS obrigatório em produção)."
+        ),
+    )
+    supabase_jwks_cache_seconds: int = Field(default=600, ge=30, le=86_400)
+    supabase_jwks_timeout_seconds: float = Field(default=3.0, gt=0, le=10)
 
     # --- Limites de requisição ---
     max_content_length_bytes: int = Field(default=1_048_576, ge=1024)
@@ -340,11 +358,37 @@ class Settings(BaseSettings):
                 raise ValueError(
                     f"SECRET_KEY deve ter ao menos {_MIN_SECRET_LENGTH} caracteres em produção."
                 )
-            if self.supabase_jwt_secret is not None and len(self.supabase_jwt_secret) < _MIN_SECRET_LENGTH:
+            # Regra: o segredo HS256 só é exigido/validado se HS256 estiver
+            # habilitado; com SUPABASE_JWT_ALGORITHMS=ES256 ele é ignorado.
+            if (
+                "HS256" in self.supabase_jwt_algorithms_list
+                and self.supabase_jwt_secret is not None
+                and len(self.supabase_jwt_secret) < _MIN_SECRET_LENGTH
+            ):
                 raise ValueError(
                     f"SUPABASE_JWT_SECRET deve ter ao menos {_MIN_SECRET_LENGTH} caracteres em produção."
                 )
         return self
+
+    @model_validator(mode="after")
+    def _validate_jwt_algorithms(self) -> "Settings":
+        """Allowlist {HS256, ES256}; ES256 sem URL de JWKS derivável é erro."""
+        algs = self.supabase_jwt_algorithms_list
+        if not algs or any(a not in _ALLOWED_JWT_ALGORITHMS for a in algs):
+            raise ValueError("SUPABASE_JWT_ALGORITHMS deve conter apenas HS256 e/ou ES256.")
+        return self
+
+    @property
+    def supabase_jwt_algorithms_list(self) -> list[str]:
+        return [a.strip().upper() for a in self.supabase_jwt_algorithms.split(",") if a.strip()]
+
+    @property
+    def supabase_jwks_effective_url(self) -> str | None:
+        if self.supabase_jwks_url:
+            return self.supabase_jwks_url.strip()
+        if self.supabase_url:
+            return f"{self.supabase_url.strip().rstrip('/')}/auth/v1/.well-known/jwks.json"
+        return None
 
     @property
     def supabase_jwt_expected_issuer(self) -> str | None:

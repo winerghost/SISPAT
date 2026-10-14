@@ -3,7 +3,7 @@
 Fluxo:
     1. Lê o header `Authorization: Bearer <token>` da requisição.
     2. Decodifica/verifica a assinatura do JWT com PyJWT, usando o segredo
-       HS256 configurado em `settings.supabase_jwt_secret`, exigindo os
+       HS256 (`settings.supabase_jwt_secret`) ou o JWKS ES256, exigindo os
        claims `exp`, `iat`, `sub`, `aud` (= `SUPABASE_JWT_AUDIENCE`), `iss`
        (quando configurado/derivável de `SUPABASE_URL`) e `role ==
        "authenticated"` (rejeita chaves `anon`/`service_role`), com
@@ -45,22 +45,11 @@ AAL (Authenticator Assurance Level) — `flask.g.current_session_aal`:
     frontend NUNCA decide isso por conta própria; esta leitura no backend,
     a partir do JWT assinado pelo Supabase, é a única fonte de verdade.
 
-LIMITAÇÃO DOCUMENTADA — HS256 (segredo legado) vs. JWKS/RS256:
-    Esta implementação assume que o projeto Supabase ainda usa o esquema
-    "legado" de assinatura simétrica HS256, com um único segredo
-    compartilhado (`SUPABASE_JWT_SECRET`, disponível em
-    Project Settings > API > JWT Settings no painel do Supabase).
-
-    Projetos Supabase mais novos podem ter migrado para assinatura
-    assimétrica (RS256/ES256) com rotação de chaves via JWKS, publicado em
-    `https://<project-ref>.supabase.co/auth/v1/.well-known/jwks.json`. Se
-    for o caso deste projeto, a verificação aqui PRECISARÁ ser adaptada
-    para: (a) ler o `kid` do header do JWT; (b) buscar (e cachear,
-    idealmente com TTL e invalidação por `kid` desconhecido) a chave
-    pública correspondente nesse endpoint JWKS; (c) verificar a assinatura
-    com essa chave pública em vez do segredo HS256 fixo. Essa adaptação é
-    uma pendência conhecida, fora do escopo desta fase — NÃO implementada
-    aqui.
+ALGORITMOS (HS256 legado + ES256/JWKS):
+    Ver `_decode_supabase_jwt` e `app.auth.jwks`. O projeto atual assina com
+    ES256 (JWKS público). O segredo HS256 legado continua aceito enquanto
+    `SUPABASE_JWT_ALGORITHMS` incluir HS256; para eliminá-lo, defina
+    `SUPABASE_JWT_ALGORITHMS=ES256` e revogue o segredo no Supabase.
 """
 from __future__ import annotations
 
@@ -78,6 +67,7 @@ from app.authorization.security_events import (
     SEVERITY_LOW,
     record_security_event,
 )
+from app.auth.jwks import get_signing_key
 from app.config.settings import get_settings
 from app.database.session import get_db_session
 from app.models.rbac import Role, RolePermission, User, UserRole
@@ -85,6 +75,9 @@ from app.models.rbac import Role, RolePermission, User, UserRole
 logger = logging.getLogger(__name__)
 
 _AUTH_HEADER_PREFIX = "Bearer "
+
+# Allowlist fixa de algoritmos (nunca "none"; nunca vinda do cliente).
+_ALLOWED_ALGORITHMS = frozenset({"HS256", "ES256"})
 
 # Limite de tamanho do token (defesa contra cabeçalhos gigantes).
 _MAX_TOKEN_LENGTH = 8192
@@ -115,31 +108,50 @@ def _extract_session_aal(claims: dict[str, Any]) -> str:
 
 
 def _decode_supabase_jwt(token: str, settings: Any) -> dict[str, Any]:
-    """Decodifica e valida o JWT do Supabase Auth.
+    """Decodifica e valida o JWT do Supabase Auth (HS256 legado ou ES256/JWKS).
 
-    Validações (todas obrigatórias):
-        - assinatura HS256 com `SUPABASE_JWT_SECRET` (somente HS256 — impede
-          `alg=none`/confusão de algoritmo);
-        - presença de `exp`, `iat`, `sub` e `aud` (`options.require`);
-        - `exp`/`iat` com tolerância de relógio `JWT_LEEWAY_SECONDS`;
-        - `aud == SUPABASE_JWT_AUDIENCE` (padrão "authenticated");
-        - `iss == SUPABASE_JWT_ISSUER` (ou `<SUPABASE_URL>/auth/v1`), quando
-          configurado/derivável.
+    O header é NÃO CONFIÁVEL: `alg` é despachado de forma estrita por
+    allowlist fixa {HS256, ES256} (interseção com
+    `SUPABASE_JWT_ALGORITHMS`). HS256 só verifica com `SUPABASE_JWT_SECRET`;
+    ES256 só com a chave pública do JWKS localizada por `kid`. Nunca se usa
+    uma chave de um tipo para o outro (algorithm confusion); `none` e
+    qualquer outro `alg` são rejeitados.
+
+    Validações (todas obrigatórias): assinatura; `exp`/`iat`/`sub`/`aud`
+    (`options.require`); `exp`/`iat` com `JWT_LEEWAY_SECONDS`;
+    `aud == SUPABASE_JWT_AUDIENCE`; `iss` esperado quando derivável.
     Levanta `jwt.PyJWTError` em qualquer falha.
     """
+    header = jwt.get_unverified_header(token)  # só lê; não confia
+    alg = header.get("alg")
+    if not isinstance(alg, str) or alg not in _ALLOWED_ALGORITHMS:
+        raise jwt.InvalidAlgorithmError("algorithm not allowed")
+    if alg not in settings.supabase_jwt_algorithms_list:
+        raise jwt.InvalidAlgorithmError("algorithm disabled")
+
+    if alg == "HS256":
+        if not settings.supabase_jwt_secret:
+            raise jwt.InvalidAlgorithmError("hs256 not configured")
+        key: Any = settings.supabase_jwt_secret
+    else:  # ES256
+        kid = header.get("kid")
+        if not isinstance(kid, str) or not kid or len(kid) > 128:
+            raise jwt.InvalidTokenError("missing kid")
+        key = get_signing_key(kid, settings)
+
     issuer = settings.supabase_jwt_expected_issuer
     required_claims = ["exp", "iat", "sub", "aud"]
     if issuer:
         required_claims.append("iss")
     decode_kwargs: dict[str, Any] = {
-        "algorithms": ["HS256"],
+        "algorithms": [alg],
         "audience": settings.supabase_jwt_audience,
         "leeway": settings.jwt_leeway_seconds,
         "options": {"require": required_claims},
     }
     if issuer:
         decode_kwargs["issuer"] = issuer
-    return jwt.decode(token, settings.supabase_jwt_secret, **decode_kwargs)
+    return jwt.decode(token, key, **decode_kwargs)
 
 
 def _auth_failed(reason: str, actor_user_id: Any = None) -> None:
@@ -243,12 +255,16 @@ def require_auth(view_func: F) -> F:
             logger.info("Acesso negado: header Authorization ausente ou mal-formado.")
             abort(401)
 
-        if not settings.supabase_jwt_secret:
+        algs = settings.supabase_jwt_algorithms_list
+        hs_ok = "HS256" in algs and bool(settings.supabase_jwt_secret)
+        es_ok = "ES256" in algs and bool(settings.supabase_jwks_effective_url)
+        if not (hs_ok or es_ok):
             # Falha de configuração do servidor, não do cliente — ainda
             # assim respondemos 401 genérico, sem expor que é um problema
             # de configuração (não é um detalhe que o cliente deva saber).
             logger.error(
-                "SUPABASE_JWT_SECRET não configurado; verificação de JWT indisponível."
+                "Nem SUPABASE_JWT_SECRET (HS256) nem JWKS (ES256) configurados; "
+                "verificação de JWT indisponível."
             )
             abort(401)
 
@@ -261,7 +277,9 @@ def require_auth(view_func: F) -> F:
         except jwt.PyJWTError as exc:
             # Nunca logar o token em si — apenas a classe do erro.
             logger.info("Token JWT rejeitado (%s).", exc.__class__.__name__)
-            _auth_failed(f"invalid_token:{exc.__class__.__name__}")
+            _auth_failed(
+                getattr(exc, "audit_reason", None) or f"invalid_token:{exc.__class__.__name__}"
+            )
 
         auth_user_id = claims.get("sub")
         if not isinstance(auth_user_id, str) or not auth_user_id or len(auth_user_id) > 255:

@@ -34,6 +34,20 @@ ESCOPO E PENDÊNCIA DOCUMENTADA — autorremoção vs. recuperação administrat
     + `require_aal2` do PRÓPRIO administrador que está executando a
     recuperação em nome de outro usuário).
 
+DECISÃO AUD-14-03 — `security.manage_mfa` NÃO é exigida aqui:
+    A permissão `security.manage_mfa` (seed 0005, vinculada só ao ADM) é
+    reservada para a gestão ADMINISTRATIVA de fatores de OUTROS usuários
+    (rota de recuperação assistida descrita acima, ainda inexistente). Esta
+    rota é autosserviço: age só sobre `auth_user_id` da sessão, exige AAL2,
+    é limitada por rate limit e protegida pela regra do último fator do ADM.
+    Exigir `security.manage_mfa` aqui impediria USER/RH de remover o próprio
+    fator (a permissão é só do ADM) sem ganho de segurança. A emissão do
+    primeiro fator (enroll/verify) é feita pelo frontend direto no Supabase
+    Auth e não passa por este módulo, portanto o bootstrap do ADM em AAL1
+    não é afetado. A rota administrativa futura DEVE usar:
+    `require_auth → require_role("ADM") → require_aal2 →
+    require_permission("security.manage_mfa") → rate_limit`.
+
 VALIDAÇÃO DO `factor_id` (auditoria 2026-10-13):
     A rota usa o conversor `<uuid:factor_id>`: qualquer valor que não seja
     um UUID (ex.: `..`, `%2E%2E`, `x?y=1`) resulta em 404 ANTES de chegar à

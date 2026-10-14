@@ -57,11 +57,13 @@ import uuid
 from typing import Any
 
 from flask import Blueprint, abort, g, jsonify, request
+from sqlalchemy import func, or_
 from sqlalchemy.orm import selectinload
 
 from app.api.v1.schemas import InviteRequest, RevokeRequest, parse_body, reject_unexpected_fields
 from app.auth.supabase_auth import require_auth
 from app.authorization.rbac import (
+    get_accessible_unit_ids,
     require_aal2,
     require_permission,
     require_role,
@@ -80,6 +82,7 @@ from app.authorization.security_events import (
 )
 from app.database.session import get_db_session
 from app.integrations.supabase_admin_client import SupabaseAdminClient
+from app.models.invites import Invite, InviteUnit
 from app.models.rbac import User, UserRole
 from app.security.rate_limit import rate_limit
 from app.services.invite_service import (
@@ -116,6 +119,11 @@ _ACTIVATE_RATE_LIMIT_WINDOW_SECONDS = 3600
 # Papéis atribuíveis por convite (espelha `InviteService`); checado também
 # aqui para registrar a tentativa de escalonamento em `audit_logs`.
 _INVITABLE_ROLE_CODES = ("USER", "RH")
+
+# Revogação: 10/hora por ADM, fail-closed (coerente com o convite).
+_REVOKE_RATE_LIMIT_PER_HOUR = 10
+_REVOKE_RATE_LIMIT_WINDOW_SECONDS = 3600
+_REVOKE_TARGET_NOT_FOUND_MESSAGE = "Usuário não encontrado."
 
 _UNIT_SCOPE_DENIED_MESSAGE = (
     "Você não possui acesso administrativo a uma ou mais unidades informadas."
@@ -316,19 +324,78 @@ def activate_invite_endpoint():
     return jsonify(result), 200
 
 
+def _target_unit_ids(db: Any, target_id: uuid.UUID) -> set[uuid.UUID]:
+    """Unidades do alvo: vínculos ativos (`UserUnitAccess`) UNIDOS às
+    unidades de convites PENDENTES dele (casados por `auth_user_id` ou
+    e-mail normalizado, mesmo critério de `InviteService.revoke_access`).
+
+    Convidado pendente ainda não tem `UserUnitAccess` (criado só na
+    ativação); sem esta união ele ficaria irrevogável.
+    """
+    units = set(get_accessible_unit_ids(target_id, db))
+    target = db.query(User).filter(User.id == target_id).first()
+    if target is None:
+        return units
+    filters = [func.lower(Invite.email) == (target.email or "").strip().lower()]
+    if getattr(target, "auth_user_id", None):
+        filters.append(Invite.invited_auth_user_id == target.auth_user_id)
+    rows = (
+        db.query(InviteUnit.unit_id)
+        .join(Invite, Invite.id == InviteUnit.invite_id)
+        .filter(Invite.status == "PENDENTE", or_(*filters))
+        .all()
+    )
+    for row in rows:
+        value = row[0] if isinstance(row, tuple) else getattr(row, "unit_id", row)
+        try:
+            units.add(value if isinstance(value, uuid.UUID) else uuid.UUID(str(value)))
+        except (ValueError, AttributeError, TypeError):
+            continue
+    return units
+
+
+def _target_in_actor_scope(db: Any, actor_id: Any, target_id: uuid.UUID) -> bool:
+    """True se o alvo (acesso ativo ou convite pendente) compartilha ao
+    menos uma unidade com o ator. Fail-closed: sem unidades => False."""
+    actor_units = get_accessible_unit_ids(actor_id, db)
+    if not actor_units:
+        return False
+    return bool(actor_units & _target_unit_ids(db, target_id))
+
+
+def _deny_revoke_target(actor_id: Any, target_id: uuid.UUID) -> None:
+    """Audita e responde 404 genérico (igual p/ inexistente e alheio)."""
+    record_security_event(
+        EVENT_UNIT_SCOPE_DENIED,
+        severity=SEVERITY_MEDIUM,
+        actor_user_id=actor_id,
+        target_type="user",
+        target_id=target_id,
+        details={"context": "users.revoke"},
+    )
+    abort(404, description=_REVOKE_TARGET_NOT_FOUND_MESSAGE)
+
+
 @users_bp.route("/<uuid:user_id>/revoke", methods=["POST"])
 @require_auth
 @require_role("ADM")
 @require_aal2
 @require_permission("users.revoke_access")
+@rate_limit(
+    _current_user_rate_limit_key,
+    limit=_REVOKE_RATE_LIMIT_PER_HOUR,
+    window_seconds=_REVOKE_RATE_LIMIT_WINDOW_SECONDS,
+    fail_open=False,
+)
 def revoke_user_access_endpoint(user_id: uuid.UUID):
     """`POST /api/v1/users/<user_id>/revoke` -- revoga todo o acesso
     operacional do usuário informado.
 
     Corpo JSON opcional: `{"reason"?}`. Retorna 200 em sucesso; 404 se o
-    usuário não existir; 409 se `user_id` for o último administrador (ADM)
-    ativo do sistema (revogação bloqueada para nunca deixar o sistema sem
-    nenhum ADM).
+    usuário não existir OU não compartilhar nenhuma unidade com o ADM
+    (resposta idêntica, sem enumeração; negação auditada); 409 se `user_id`
+    for o último administrador (ADM) ativo do sistema (revogação bloqueada
+    para nunca deixar o sistema sem nenhum ADM); 429 acima de 10/hora.
     """
     body = request.get_json(silent=True)
     reason = None
@@ -352,12 +419,17 @@ def revoke_user_access_endpoint(user_id: uuid.UUID):
 
     try:
         with get_db_session() as db:
+            # Escopo de unidade do alvo (AUD-14-01): o alvo precisa
+            # compartilhar ao menos uma unidade com o ADM. Alvo inexistente,
+            # sem unidades ou alheio caem na MESMA resposta (404 genérico).
+            if not _target_in_actor_scope(db, actor.id, user_id):
+                _deny_revoke_target(actor.id, user_id)
             service = InviteService(db, SupabaseAdminClient())
             service.revoke_access(
                 target_user_id=user_id, revoked_by_user_id=actor.id, reason=reason
             )
-    except UserNotFoundError as exc:
-        abort(404, description=str(exc))
+    except UserNotFoundError:
+        _deny_revoke_target(actor.id, user_id)
         raise AssertionError("inalcançável")  # pragma: no cover
     except LastAdminError as exc:
         record_security_event(

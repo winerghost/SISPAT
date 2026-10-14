@@ -166,6 +166,8 @@ def backend_mocks():
         scope = stack.enter_context(
             patch("app.api.v1.users.units_outside_scope", return_value=[])
         )
+        # Escopo do alvo do revoke (AUD-14-01) coberto em test_sec_revoke_scope.py.
+        stack.enter_context(patch("app.api.v1.users._target_in_actor_scope", return_value=True))
         yield SimpleNamespace(
             session=session,
             invite_service=invite_service,
