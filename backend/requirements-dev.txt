@@ -3,5 +3,5 @@
 #   pip install -r requirements-dev.txt
 -r requirements.txt
 
-pytest==9.0.3             # CVE-2025-71176 corrigido em 9.0.3
+pytest==9.1.1             # CVE-2025-71176 corrigido em 9.0.3
 pytest-cov==7.1.0
