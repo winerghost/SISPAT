@@ -11,6 +11,9 @@ arquivos de migração versionados:
     - a migração 0004_db_security_hardening cobre todas as tabelas dos
       modelos com RLS, torna audit_logs append-only, bloqueia DELETE físico
       patrimonial, revoga anon/authenticated e tem downgrade;
+    - a migração 0005_settings_ai_users cria ai_settings/user_preferences
+      com RLS + REVOKE, é aditiva/idempotente, semeia permissões só para o
+      ADM e tem downgrade que só remove o que ela criou;
     - o espelho .sql corresponde à migração Alembic;
     - nenhuma função SECURITY DEFINER sem search_path fixo.
 """
@@ -36,6 +39,8 @@ VERSIONS_DIR = MIGRATIONS_DIR / "versions"
 SQL_DIR = MIGRATIONS_DIR / "sql"
 HARDENING_PY = VERSIONS_DIR / "0004_db_security_hardening.py"
 HARDENING_SQL = SQL_DIR / "0006_db_security_hardening.sql"
+SETTINGS_PY = VERSIONS_DIR / "0005_settings_ai_users.py"
+SETTINGS_SQL = SQL_DIR / "0007_settings_ai_users.sql"
 
 _DESTRUCTIVE_SQL = [
     re.compile(r"\bDROP\s+(TABLE|COLUMN|SCHEMA|DATABASE)\b", re.IGNORECASE),
@@ -111,7 +116,7 @@ def test_db_alembic_revision_chain_is_linear() -> None:
     down_targets = [d for d in revisions.values() if d is not None]
     assert len(down_targets) == len(set(down_targets)), "ramificação (branch) de revisões"
     heads = set(revisions) - set(down_targets)
-    assert heads == {"0004_db_security_hardening"}, heads
+    assert heads == {"0005_settings_ai_users"}, heads
 
 
 # ---------------------------------------------------------------------------
@@ -178,9 +183,13 @@ def hardening() -> ModuleType:
 
 
 def test_db_hardening_covers_every_model_table_with_rls(hardening) -> None:
+    # Tabelas criadas depois da 0004 têm RLS habilitado na própria migração
+    # que as cria (0005: NEW_TABLES); ver testes da 0005 abaixo.
+    settings_mig = _load_module(SETTINGS_PY)
+    covered = set(hardening.APP_TABLES) | set(settings_mig.NEW_TABLES)
     model_tables = set(Base.metadata.tables)
-    assert model_tables <= set(hardening.APP_TABLES), model_tables - set(hardening.APP_TABLES)
-    for table in model_tables:
+    assert model_tables <= covered, model_tables - covered
+    for table in model_tables & set(hardening.APP_TABLES):
         assert f"'{table}'" in hardening.ENABLE_RLS_SQL
 
 
@@ -230,3 +239,110 @@ def test_db_hardening_sql_mirror_matches_alembic(hardening) -> None:
 
 def test_db_hardening_downgrade_never_disables_rls(hardening) -> None:
     assert "DISABLE ROW LEVEL SECURITY" not in hardening.DOWNGRADE_SQL.upper()
+
+
+# ---------------------------------------------------------------------------
+# Migração 0005_settings_ai_users
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def settings_migration() -> ModuleType:
+    return _load_module(SETTINGS_PY)
+
+
+def test_db_0005_revises_0004(settings_migration) -> None:
+    assert settings_migration.revision == "0005_settings_ai_users"
+    assert settings_migration.down_revision == "0004_db_security_hardening"
+
+
+def test_db_0005_new_tables_have_rls_and_revoke(settings_migration) -> None:
+    assert set(settings_migration.NEW_TABLES) == {"ai_settings", "user_preferences"}
+    for table in settings_migration.NEW_TABLES:
+        assert f"ALTER TABLE public.{table} ENABLE ROW LEVEL SECURITY" in (
+            settings_migration.ENABLE_RLS_NEW_TABLES_SQL
+        )
+        assert f"REVOKE ALL ON TABLE public.{table} FROM anon, authenticated" in (
+            settings_migration.REVOKE_API_ROLES_NEW_TABLES_SQL
+        )
+    # REVOKE condicionado à existência das roles do Supabase.
+    assert "pg_roles WHERE rolname = 'anon'" in settings_migration.REVOKE_API_ROLES_NEW_TABLES_SQL
+    # sem políticas permissivas
+    assert "CREATE POLICY" not in "
+".join(settings_migration.UPGRADE_STATEMENTS).upper()
+
+
+def test_db_0005_is_idempotent_by_construction(settings_migration) -> None:
+    upgrade_sql = "
+".join(settings_migration.UPGRADE_STATEMENTS)
+    for match in re.finditer(r"CREATE\s+TABLE\s+(?!IF\s+NOT\s+EXISTS)", upgrade_sql):
+        pytest.fail(f"CREATE TABLE sem IF NOT EXISTS: {match.group(0)!r}")
+    for match in re.finditer(r"ADD\s+COLUMN\s+(?!IF\s+NOT\s+EXISTS)", upgrade_sql):
+        pytest.fail(f"ADD COLUMN sem IF NOT EXISTS: {match.group(0)!r}")
+    for match in re.finditer(r"INSERT\s+INTO", upgrade_sql):
+        tail = upgrade_sql[match.start():]
+        stmt = tail.split(";", 1)[0]
+        assert "ON CONFLICT" in stmt, stmt[:80]
+
+
+def test_db_0005_ai_settings_is_singleton_disabled_and_keyless(settings_migration) -> None:
+    sql = settings_migration.CREATE_AI_SETTINGS_SQL
+    assert "CHECK (id = 1)" in sql
+    assert "enabled boolean NOT NULL DEFAULT false" in sql
+    assert "provider IN ('none','openai','anthropic','deepseek')" in sql
+    assert "provider <> 'deepseek' OR deepseek_acknowledged_at IS NOT NULL" in sql
+    # chaves de API nunca no banco
+    assert not re.search(r"api_key|secret|token\s+text", sql, re.IGNORECASE)
+    seed = settings_migration.SEED_AI_SETTINGS_SQL
+    assert "1, false, 'none'" in seed and "ON CONFLICT (id) DO NOTHING" in seed
+
+
+def test_db_0005_user_preferences_checks(settings_migration) -> None:
+    sql = settings_migration.CREATE_USER_PREFERENCES_SQL
+    assert "density IN ('comfortable','compact')" in sql
+    assert "font_scale IN (100, 112, 125)" in sql
+
+
+def test_db_0005_permissions_seeded_only_for_adm(settings_migration) -> None:
+    sql = settings_migration.SEED_PERMISSIONS_SQL
+    for code in settings_migration.NEW_PERMISSIONS:
+        assert f"'{code}'" in sql
+    assert re.findall(r"WHERE r\.code = '(\w+)'", sql) == ["ADM"]
+    assert "'USER'" not in sql and "'RH'" not in sql
+
+
+def test_db_0005_downgrade_only_removes_its_own_objects(settings_migration) -> None:
+    sql = settings_migration.DOWNGRADE_SQL
+    dropped_tables = set(re.findall(r"DROP TABLE IF EXISTS public\.(\w+)", sql))
+    assert dropped_tables == set(settings_migration.NEW_TABLES)
+    dropped_cols = set(re.findall(r"DROP COLUMN IF EXISTS (\w+)", sql))
+    assert dropped_cols == {
+        "version", "sessions_revoked_at", "avatar_object_key", "deactivated_at", "deactivated_by"
+    }
+    assert not re.search(r"^\s*DELETE\s+FROM|TRUNCATE", sql, re.IGNORECASE | re.MULTILINE)
+    assert "DISABLE ROW LEVEL SECURITY" not in sql.upper()
+
+
+def test_db_0005_sql_mirror_matches_alembic(settings_migration) -> None:
+    mirror = SETTINGS_SQL.read_text(encoding="utf-8")
+    for statement in settings_migration.UPGRADE_STATEMENTS:
+        assert statement.strip("
+") in mirror
+    assert "PENDENTE DE APLICAÇÃO" in mirror
+
+
+def test_db_0005_models_match_migration_constraints() -> None:
+    from app.models.rbac import User
+    from app.models.settings import AISettings, UserPreferences
+
+    assert AISettings.__tablename__ == "ai_settings"
+    assert UserPreferences.__tablename__ == "user_preferences"
+    ai_checks = {c.name for c in AISettings.__table__.constraints}
+    assert {"ck_ai_settings_singleton", "ck_ai_settings_provider", "ck_ai_settings_deepseek_ack"} <= ai_checks
+    pref_checks = {c.name for c in UserPreferences.__table__.constraints}
+    assert {"ck_user_preferences_density", "ck_user_preferences_font_scale"} <= pref_checks
+    cols = User.__table__.c
+    for name in ("version", "sessions_revoked_at", "avatar_object_key", "deactivated_at", "deactivated_by"):
+        assert name in cols, name
+    assert not cols.version.nullable
+    assert not any("key" in c.name and c.name != "avatar_object_key" for c in AISettings.__table__.columns)
