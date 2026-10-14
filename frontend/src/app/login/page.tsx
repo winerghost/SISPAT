@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { CheckCircle2 } from "lucide-react";
 
 import { FadeIn, SlideIn } from "@/components/animations";
+import { AguLogo } from "@/components/brand/agu-logo";
 import { AnimatedFormMessage, AuthField, AuthGuidancePanel } from "@/components/features/auth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -182,6 +183,7 @@ export default function LoginPage() {
           distance="sm"
           className="flex w-full min-w-0 flex-col gap-6 rounded-cards border border-ash-stroke p-card-padding"
         >
+          <AguLogo />
           <FadeIn key={step} className="flex flex-col gap-6">
             <div className="flex flex-col gap-1">
               <span className="text-eyebrow text-pale-stone">SISPAT-AGU</span>

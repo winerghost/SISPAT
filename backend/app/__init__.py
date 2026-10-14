@@ -19,8 +19,8 @@ from app.errors import register_error_handlers
 
 logger = logging.getLogger(__name__)
 
-# Métodos efetivamente usados pela API (GET/POST/DELETE) + preflight.
-_CORS_ALLOWED_METHODS = "GET, POST, DELETE, OPTIONS"
+# Métodos usados pela API (GET/POST/PATCH/DELETE; PUT reservado ao avatar) + preflight.
+_CORS_ALLOWED_METHODS = "GET, POST, PUT, PATCH, DELETE, OPTIONS"
 
 # Cabeçalhos de segurança aplicados a TODAS as respostas da API (JSON).
 _SECURITY_HEADERS = {

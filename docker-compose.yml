@@ -18,7 +18,7 @@
 #
 # Uso:
 #   docker compose up -d --build                    # base/produção
-#   docker compose --profile worker up -d           # + worker (quando existir app.celery_app)
+#   docker compose --profile worker up -d           # + worker Celery (com beat embutido)
 #   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
 # =============================================================================
 
@@ -99,9 +99,10 @@ services:
     logging: *default-logging
 
   # ---------------------------------------------------------------------------
-  # Worker — processamento assíncrono (Celery). DESATIVADO por padrão
-  # (profile "worker") porque o módulo app.celery_app ainda não existe na
-  # Fase 1; sem o profile, o container entraria em crash-loop.
+  # Worker — processamento assíncrono (Celery, app.celery_app) com beat
+  # embutido (-B; um ÚNICO worker para não duplicar tarefas periódicas).
+  # Opt-in via profile "worker": a IA e as tarefas periódicas são opcionais
+  # e o sistema funciona sem ele (NullProvider).
   # ---------------------------------------------------------------------------
   worker:
     <<: *hardening
@@ -118,7 +119,7 @@ services:
       - .env
     environment:
       - TZ=${TZ:-America/Araguaina}
-    command: ["celery", "-A", "app.celery_app", "worker", "--loglevel=info"]
+    command: ["celery", "-A", "app.celery_app", "worker", "-B", "--loglevel=info"]
     networks:
       - backend-net
       - egress-net

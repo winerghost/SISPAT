@@ -1,8 +1,10 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 
 import {
   expectNoXss,
   installMocks,
+  type MockOptions,
+  type MockState,
   LEGACY_STORAGE_KEY,
   SESSION_STORAGE_KEY,
   seedSession,
@@ -19,7 +21,9 @@ test.use({ viewport: { width: 1366, height: 768 } });
 
 const PROTECTED = [
   "/",
+  "/configuracoes",
   "/configuracoes/seguranca",
+  "/configuracoes/inteligencia-artificial",
   "/administracao/usuarios",
   "/administracao/importacao/google-sheets",
 ];
@@ -231,4 +235,201 @@ test("segurança: nome do fator com marcador XSS é texto; remover → modal →
   await expect(page.getByRole("dialog")).toBeHidden();
   expect(state.calls.some((c) => c.method === "DELETE" && c.url.includes("/security/mfa/factors/"))).toBe(true);
   expect(await expectNoXss(page)).toEqual({ executed: undefined, injectedImgs: 0 });
+});
+
+// ---------------------------------------------------------------------------
+// Configurações — índice e Inteligência Artificial (contrato:
+// docs/architecture/modulo-configuracoes.md). A autorização real é do backend:
+// o mock responde 403 para USER/RH e AAL2_REQUIRED para ADM em aal1.
+// ---------------------------------------------------------------------------
+
+const IA_PATH = "/configuracoes/inteligencia-artificial";
+
+async function openIa(page: Page, opts: MockOptions = { role: "ADM" }): Promise<MockState> {
+  const state = await installMocks(page, opts);
+  await seedSession(page, opts);
+  await page.goto(IA_PATH);
+  await waitForHydration(page);
+  return state;
+}
+
+function aiPatches(state: MockState) {
+  return state.calls.filter((c) => c.method === "PATCH" && c.url.endsWith("/v1/settings/ai"));
+}
+
+test.describe("configurações — índice", () => {
+  test("ADM vê Segurança e Inteligência Artificial", async ({ page }) => {
+    await installMocks(page, { role: "ADM" });
+    await seedSession(page, { role: "ADM" });
+    await page.goto("/configuracoes");
+    await waitForHydration(page);
+    const main = page.getByRole("main");
+    await expect(main.getByRole("link", { name: /Segurança/ })).toBeVisible();
+    await expect(main.getByRole("link", { name: /Inteligência Artificial/ })).toBeVisible();
+    await expect(page.getByRole("navigation", { name: "Trilha de navegação" })).toContainText("Configurações");
+  });
+
+  for (const role of ["USER", "RH"] as const) {
+    test(`${role} não vê o cartão de IA`, async ({ page }) => {
+      await installMocks(page, { role });
+      await seedSession(page, { role });
+      await page.goto("/configuracoes");
+      await waitForHydration(page);
+      const main = page.getByRole("main");
+      await expect(main.getByRole("link", { name: /Segurança/ })).toBeVisible();
+      await expect(main.getByRole("link", { name: /Inteligência Artificial/ })).toHaveCount(0);
+    });
+  }
+});
+
+test.describe("configurações — Inteligência Artificial", () => {
+  test("salvar envia version e campos do contrato; tela reflete a resposta", async ({ page }) => {
+    const state = await openIa(page);
+    await expect(page.getByRole("navigation", { name: "Trilha de navegação" })).toContainText(
+      "Inteligência Artificial",
+    );
+    await expect(
+      page.getByText("Conteúdo gerado por IA pode conter erros. A IA é consultiva e não altera dados."),
+    ).toBeVisible();
+    const salvar = page.getByRole("button", { name: "Salvar" });
+    await expect(salvar).toBeDisabled();
+
+    const geral = page.getByRole("switch", { name: "Ligar a Inteligência Artificial" });
+    await expect(geral).toHaveAttribute("aria-checked", "false");
+    await geral.check();
+    await expect(geral).toHaveAttribute("aria-checked", "true");
+    await page.getByLabel("Provedor", { exact: true }).selectOption("openai");
+    const modelo = page.getByLabel("Modelo", { exact: true });
+    await expect(modelo.locator("option")).toHaveText(["openai-modelo-sintetico-a", "openai-modelo-sintetico-b"]);
+    await modelo.selectOption("openai-modelo-sintetico-b");
+    await page.getByRole("switch", { name: "Pergunte ao SISPAT" }).check();
+    await page.getByLabel("Teto mensal de tokens").fill("300000");
+
+    const req = page.waitForRequest((r) => r.url().endsWith("/v1/settings/ai") && r.method() === "PATCH");
+    await salvar.click();
+    expect((await req).postDataJSON()).toEqual({
+      version: 1,
+      enabled: true,
+      provider: "openai",
+      model: "openai-modelo-sintetico-b",
+      features: { alerts_explain: false, executive_summary: false, assistant: true, data_quality: false },
+      monthly_token_cap: 300000,
+    });
+    await expect(page.getByText("Configurações de IA salvas.")).toBeVisible();
+    await expect(page.locator("[data-state='success']").filter({ hasText: "Ativa" })).toBeVisible();
+    await expect(salvar).toBeDisabled();
+    expect(state.ai.version).toBe(2);
+
+    // Testar conexão: resultado do backend em linguagem humana.
+    await page.getByRole("button", { name: "Testar conexão" }).click();
+    await expect(page.getByText("Conexão funcionando")).toBeVisible();
+    await expect(page.getByText("O provedor respondeu em 840 ms.")).toBeVisible();
+  });
+
+  test("409 version_conflict: recarrega a versão nova e avisa", async ({ page }) => {
+    const state = await openIa(page);
+    const teto = page.getByLabel("Teto mensal de tokens");
+    await expect(teto).toHaveValue("200000");
+    // Outra pessoa salvou no meio tempo.
+    state.ai = { ...state.ai, version: 7, monthly_token_cap: 123456 };
+
+    await teto.fill("999");
+    const reload = page.waitForRequest((r) => r.url().endsWith("/v1/settings/ai") && r.method() === "GET");
+    await page.getByRole("button", { name: "Salvar" }).click();
+    await expect(page.getByRole("alert").filter({ hasText: "Outra pessoa alterou estas configurações" })).toBeVisible();
+    await reload;
+    await expect(teto).toHaveValue("123456");
+    expect(aiPatches(state)).toHaveLength(1);
+    expect((aiPatches(state)[0]!.body as { version: number }).version).toBe(1);
+
+    // Salvar de novo usa a versão recarregada.
+    await teto.fill("150000");
+    await page.getByRole("button", { name: "Salvar" }).click();
+    await expect(page.getByText("Configurações de IA salvas.")).toBeVisible();
+    expect((aiPatches(state)[1]!.body as { version: number }).version).toBe(7);
+  });
+
+  test("DeepSeek exige aceite LGPD com checkbox e envia acknowledge_international_transfer", async ({ page }) => {
+    const state = await openIa(page);
+    const provedor = page.getByLabel("Provedor", { exact: true });
+    await provedor.selectOption("deepseek");
+    const dialog = page.getByRole("dialog", { name: "Transferência internacional de dados" });
+    await expect(dialog).toBeVisible();
+    await expect(dialog).toContainText("servidores fora do Brasil");
+    await expect(dialog).toContainText("dados agregados e anonimizados");
+
+    // Cancelar mantém o provedor anterior.
+    await dialog.getByRole("button", { name: "Cancelar" }).click();
+    await expect(dialog).toBeHidden();
+    await expect(provedor).toHaveValue("none");
+
+    await provedor.selectOption("deepseek");
+    await expect(dialog).toBeVisible();
+    const confirmar = dialog.getByRole("button", { name: "Confirmar e usar DeepSeek" });
+    await expect(confirmar).toBeDisabled();
+    await dialog.getByRole("checkbox").check();
+    await confirmar.click();
+    await expect(dialog).toBeHidden();
+    await expect(provedor).toHaveValue("deepseek");
+    await expect(page.getByLabel("Modelo", { exact: true })).toHaveValue("deepseek-modelo-sintetico-a");
+
+    const req = page.waitForRequest((r) => r.url().endsWith("/v1/settings/ai") && r.method() === "PATCH");
+    await page.getByRole("button", { name: "Salvar" }).click();
+    expect((await req).postDataJSON()).toMatchObject({
+      version: 1,
+      provider: "deepseek",
+      model: "deepseek-modelo-sintetico-a",
+      acknowledge_international_transfer: true,
+    });
+    await expect(page.getByText("Configurações de IA salvas.")).toBeVisible();
+    expect(state.ai.deepseek_acknowledged).toBe(true);
+    await expect(page.getByText("Aceite de transferência internacional de dados (LGPD) já registrado.")).toBeVisible();
+  });
+
+  test("AI_ENABLED=false no servidor: aviso claro; chaves só como Configurada/Não configurada", async ({ page }) => {
+    await openIa(page, { role: "ADM", ai: { env_enabled: false } });
+    await expect(
+      page.getByText("A IA está desligada no servidor (AI_ENABLED). Peça ao responsável pela infraestrutura."),
+    ).toBeVisible();
+    const chaves = page.getByRole("list", { name: "Situação das chaves" });
+    await expect(chaves.getByText("Configurada", { exact: true })).toHaveCount(2);
+    await expect(chaves.getByText("Não configurada", { exact: true })).toHaveCount(1);
+  });
+
+  test("ADM sem AAL2: mensagem de verificação em duas etapas", async ({ page }) => {
+    await openIa(page, { role: "ADM", aal: "aal1" });
+    await expect(page.getByRole("main").getByRole("alert")).toContainText("verificação em duas etapas (AAL2)");
+    await expect(page.getByRole("switch")).toHaveCount(0);
+  });
+
+  for (const role of ["USER", "RH"] as const) {
+    test(`${role}: backend nega (403) e nenhum formulário aparece`, async ({ page }) => {
+      const state = await openIa(page, { role });
+      await expect(page.getByRole("main").getByRole("alert")).toContainText("Você não tem permissão");
+      await expect(page.getByRole("switch")).toHaveCount(0);
+      expect(aiPatches(state)).toHaveLength(0);
+    });
+  }
+});
+
+test.describe("logomarca AGU no login", () => {
+  for (const width of [320, 768, 1920]) {
+    test(`carrega, sem rolagem horizontal e sem layout shift (${width}px)`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 800 });
+      await installMocks(page);
+      await page.goto("/login");
+      await waitForHydration(page);
+      const logo = page.getByRole("img", { name: "Logomarca da Advocacia-Geral da União" });
+      await expect(logo).toBeVisible();
+      await expect.poll(() => logo.evaluate((el) => (el as HTMLImageElement).naturalWidth)).toBeGreaterThan(0);
+      // Texto da marca do sistema permanece visível.
+      await expect(page.locator("#conteudo").getByText("SISPAT-AGU", { exact: true })).toBeVisible();
+      const overflow = await page.evaluate(
+        () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      );
+      expect(overflow).toBeLessThanOrEqual(0);
+      const box = await logo.boundingBox();
+      expect(box && box.x >= 0 && box.x + box.width <= width).toBe(true);
+    });
+  }
 });

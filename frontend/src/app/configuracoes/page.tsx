@@ -52,7 +52,7 @@ export default function ConfiguracoesPage() {
                 >
                   <span className="flex items-center gap-2 text-eyebrow text-pale-stone">
                     <Icon className="h-4 w-4 shrink-0" aria-hidden />
-                    Configurações
+                    {section.adminOnly ? "Somente ADM" : "Sua conta"}
                   </span>
                   <span className="text-body text-bone">{section.label}</span>
                   {section.description ? (

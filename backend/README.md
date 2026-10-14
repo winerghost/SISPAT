@@ -17,10 +17,30 @@ backend/
     models/                 # Modelos ORM (um arquivo por grupo de entidades)
   migrations/
     env.py, script.py.mako
-    versions/0001_initial_schema.py   # Migração Alembic inicial
-    sql/0001_initial_schema.sql       # Espelho em SQL puro da migração
-    sql/0002_seeds_roles_permissions.sql  # Seeds de roles/permissions
+    versions/                         # Cadeia Alembic (0001 ... 0005, head)
+    sql/                              # Espelhos SQL puros + seeds manuais
 ```
+
+### Cadeia Alembic
+
+`0001_initial_schema` → `0002_import_previews` → `0003_invites` →
+`0004_db_security_hardening` → `0005_settings_ai_users` (**head**).
+
+### Alembic ↔ espelho SQL (`migrations/sql/`)
+
+A numeração dos arquivos SQL é própria e **não** coincide com a do Alembic:
+
+| Espelho SQL | Migração Alembic |
+|---|---|
+| `0001` | `0001_initial_schema` |
+| `0003` | `0002_import_previews` |
+| `0004` | `0003_invites` |
+| `0006` | `0004_db_security_hardening` |
+| `0007` | `0005_settings_ai_users` |
+
+Os seeds SQL `0002` (roles/permissions) e `0005` (8 permissões de gestão de
+usuários/segurança, atribuídas somente ao ADM) **não são migrações Alembic**:
+são aplicados manualmente e são idempotentes (`ON CONFLICT DO NOTHING`).
 
 ## Rodando localmente (com Python + Alembic)
 
@@ -79,15 +99,23 @@ Quando não houver conectividade Python → Postgres no ambiente, o schema
 pode ser aplicado diretamente via **Supabase SQL Editor** (ou MCP do
 Supabase), executando, nesta ordem:
 
-1. `migrations/sql/0001_initial_schema.sql` — cria extensões, o tipo
-   `asset_located_status` e as 20 tabelas com seus índices e constraints.
-2. `migrations/sql/0002_seeds_roles_permissions.sql` — insere os papéis
-   `ADM`/`USER`/`RH`, as permissions e os vínculos `role_permissions`
-   (idempotente: pode ser reexecutado sem duplicar dados).
+1. `0001_initial_schema.sql` — extensões, tipo `asset_located_status` e as
+   20 tabelas com índices e constraints.
+2. `0002_seeds_roles_permissions.sql` — papéis `ADM`/`USER`/`RH`,
+   permissions e `role_permissions` (idempotente, `ON CONFLICT DO NOTHING`).
+3. Espelhos de schema na ordem: `0003`, `0004`, `0006`, `0007` (ver tabela
+   acima). O seed `0005_seed_security_permissions.sql` (idempotente) exige
+   apenas o `0002` e o `0004_invites.sql` já aplicados (pré-requisito
+   declarado no cabeçalho do próprio arquivo); não depende do `0006`.
 
-Os dois arquivos `.sql` são mantidos **semanticamente idênticos** à
-migração Alembic `versions/0001_initial_schema.py`. Qualquer alteração de
-schema deve ser replicada nos dois lugares.
+Cada espelho de schema é mantido **semanticamente idêntico** à migração
+Alembic correspondente. Qualquer alteração de schema deve ser replicada nos
+dois lugares.
+
+**Nota operacional:** no SQL Editor do Supabase o `BEGIN`/`COMMIT` não foi
+confiável; executar os `INSERT` dos seeds **sem transação explícita**
+funcionou (os seeds são idempotentes, então reexecutar é seguro).
+Nenhuma migração deve ser aplicada em produção sem autorização.
 
 ## Convenções do schema
 

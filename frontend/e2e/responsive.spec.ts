@@ -12,6 +12,11 @@ import { LG, openScreen, SCREENS, VIEWPORTS } from "./support/screens";
 // test-results/ (fora do versionamento).
 // =============================================================================
 
+// O `next dev` compila cada rota na primeira visita (~8,5 s medidos para
+// /administracao/usuarios, isolado). Com workers em paralelo isso passava dos
+// 15 s padrão. Só a navegação para uma rota ainda não compilada usa este limite.
+const FIRST_COMPILE_TIMEOUT = 45_000;
+
 for (const viewport of VIEWPORTS) {
   test.describe(`${viewport.width}x${viewport.height}`, () => {
     test.use({ viewport });
@@ -62,7 +67,7 @@ for (const viewport of VIEWPORTS) {
         await expect(drawer).toBeVisible();
         await drawer.getByRole("button", { name: "Administração" }).click();
         await drawer.getByRole("link", { name: "Usuários" }).click();
-        await expect(page).toHaveURL(/\/administracao\/usuarios$/);
+        await expect(page).toHaveURL(/\/administracao\/usuarios$/, { timeout: FIRST_COMPILE_TIMEOUT });
         await expect(drawer).toBeHidden();
         await expect(page.getByRole("heading", { level: 1, name: "Usuários" })).toBeVisible();
       } else {
@@ -70,7 +75,7 @@ for (const viewport of VIEWPORTS) {
         await expect(desktopNav).toBeVisible();
         await desktopNav.getByRole("button", { name: "Administração" }).click();
         await desktopNav.getByRole("link", { name: "Usuários" }).click();
-        await expect(page).toHaveURL(/\/administracao\/usuarios$/);
+        await expect(page).toHaveURL(/\/administracao\/usuarios$/, { timeout: FIRST_COMPILE_TIMEOUT });
         await expect(page.getByRole("heading", { level: 1, name: "Usuários" })).toBeVisible();
       }
     });

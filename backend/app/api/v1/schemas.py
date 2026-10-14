@@ -14,10 +14,19 @@ from __future__ import annotations
 
 import re
 import uuid
-from typing import Any, TypeVar
+from typing import Any, Literal, TypeVar
 
 from flask import abort
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictBool,
+    StrictInt,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 from app.authorization.security_events import (
     EVENT_MASS_ASSIGNMENT_REJECTED,
@@ -55,6 +64,14 @@ PRIVILEGED_FIELD_NAMES = frozenset(
         "active",
         "status",
         "aal",
+        # Configuração de IA: chaves vivem só no ambiente do backend e o
+        # aceite DeepSeek/autoria são gravados pelo servidor.
+        "api_key",
+        "openai_api_key",
+        "anthropic_api_key",
+        "deepseek_api_key",
+        "deepseek_acknowledged_at",
+        "deepseek_acknowledged_by",
     }
 )
 
@@ -97,6 +114,44 @@ class ConfirmImportRequest(_StrictModel):
 
     preview_id: uuid.UUID
     selected_item_ids: list[uuid.UUID] = Field(max_length=10000)
+
+
+class AIFeaturesUpdate(_StrictModel):
+    """Funcionalidades de IA (somente as 4 chaves da allowlist)."""
+
+    alerts_explain: StrictBool | None = None
+    executive_summary: StrictBool | None = None
+    assistant: StrictBool | None = None
+    data_quality: StrictBool | None = None
+
+
+class AISettingsUpdate(_StrictModel):
+    """Corpo de `PATCH /api/v1/settings/ai` (todos opcionais exceto `version`).
+
+    Nunca aceita chave de API, autoria (`updated_by`) ou aceite gravado
+    (`deepseek_acknowledged_*`): esses vêm só do servidor. O modelo é
+    validado contra a allowlist do provedor no serviço (`invalid_model`).
+    """
+
+    version: StrictInt = Field(ge=1, le=2_147_483_647)
+    enabled: StrictBool | None = None
+    provider: Literal["none", "openai", "anthropic", "deepseek"] | None = None
+    model: str | None = Field(default=None, min_length=1, max_length=100)
+    features: AIFeaturesUpdate | None = None
+    monthly_token_cap: StrictInt | None = Field(default=None, ge=0, le=50_000_000)
+    acknowledge_international_transfer: StrictBool | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_explicit_nulls(cls, data: Any) -> Any:
+        # `null` explícito não tem significado neste contrato (omitir = manter).
+        # Com campos desconhecidos, deixa o `extra_forbidden` acontecer (e
+        # ser auditado por `parse_body`).
+        if isinstance(data, dict) and not (set(data) - set(cls.model_fields)):
+            for name in cls.model_fields:
+                if name in data and data[name] is None:
+                    raise ValueError(f"{name} não pode ser nulo")
+        return data
 
 
 def reject_unexpected_fields(field_names: list[str] | set[str], *, context: str) -> None:

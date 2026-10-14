@@ -5,7 +5,8 @@ Sistema de Gestão Patrimonial da **Advocacia-Geral da União (AGU)** — unidad
 
 > **Status atual: Fase 1 — banco de dados, modelagem e permissionamento em
 > andamento.** Frontend e demais fases ainda não foram iniciados (ver
-> `CLAUDE.md`).
+> `CLAUDE.md`, mantido localmente — ver
+> [Documentação local](#documentação-local-não-versionada)).
 
 ## Visão geral
 
@@ -34,15 +35,34 @@ O SISPAT-AGU controla o inventário patrimonial da unidade, com:
 
 ## Documentos de governança
 
-- [`DESIGN.md`](./DESIGN.md) — fonte oficial do Design System ("Factory",
+- `DESIGN.md` — fonte oficial do Design System ("Factory",
   tema dark) para quando o frontend for implementado.
-- [`CLAUDE.md`](./CLAUDE.md) — regras de arquitetura, segurança, permissões
+- `CLAUDE.md` — regras de arquitetura, segurança, permissões
   e fases do projeto.
 
 **Estes dois arquivos são documentos de governança imutáveis: não devem ser
 substituídos, recriados ou modificados sem autorização explícita.** Qualquer
 alteração de infraestrutura ou código deve respeitar o que está definido
-neles.
+neles. Ambos são mantidos localmente, fora do repositório (ver
+[Documentação local](#documentação-local-não-versionada)).
+
+## Documentação local (não versionada)
+
+Os itens abaixo ficam **somente na máquina do desenvolvedor** (estão no
+`.gitignore`):
+
+- `CLAUDE.md`, `DESIGN.md` e a pasta `.claude/` (agentes, skills e settings
+  locais do Claude Code), além de `.agents/skills/` — guias de trabalho do
+  desenvolvedor.
+- `docs/security/SECURITY_AUDIT.md`, `docs/security/evidence/` e
+  `docs/security-audit/` — relatórios de segurança com detalhes de
+  vulnerabilidades (inclusive pendentes de correção), PoCs e caminhos de
+  exploração.
+
+Consequência prática: quem clonar o repositório (inclusive a VPS, atualizada
+via `git pull`) **não terá esses arquivos**. A consulta à auditoria de
+segurança exigida antes de implantar é feita **na máquina do desenvolvedor**,
+não na VPS.
 
 ## Como subir o ambiente de desenvolvimento
 
@@ -116,10 +136,11 @@ SISPAT-AGU/
 ├── docker-compose.yml        # Serviços base (produção)
 ├── docker-compose.dev.yml    # Overrides de desenvolvimento
 ├── .env.example               # Modelo de variáveis de ambiente (sem valores reais)
-├── DESIGN.md                  # Design System — imutável sem autorização
-├── CLAUDE.md                  # Regras de arquitetura/governança — imutável sem autorização
 └── README.md
 ```
+
+> `DESIGN.md`, `CLAUDE.md` e `.claude/` existem apenas na máquina local do
+> desenvolvedor e não aparecem em um clone do repositório.
 
 ## Segurança
 
@@ -138,8 +159,10 @@ SISPAT-AGU/
 
 ### Auditoria e verificações (2026-10-13)
 
-Relatório completo: [`docs/security/SECURITY_AUDIT.md`](docs/security/SECURITY_AUDIT.md)
-(evidências por frente em `docs/security/evidence/`). Scripts (Git Bash/Linux):
+Relatório completo: `docs/security/SECURITY_AUDIT.md`, com evidências por
+frente em `docs/security/evidence/` — ambos mantidos localmente, fora do
+repositório (ver [Documentação local](#documentação-local-não-versionada)).
+Scripts (Git Bash/Linux):
 
 | Script | O que faz |
 |---|---|
@@ -154,11 +177,66 @@ Dependências Python: `backend/requirements.txt` (pins exatos), `backend/require
 regenerar o lock: `scripts/check-dependencies.sh --lock`.
 CI: `.github/workflows/ci.yml` (sem deploy) + `.github/dependabot.yml`.
 
-**Impedimento à homologação:** a migração `0004_db_security_hardening` e as migrações
-0002/0003/0005 **não estão aplicadas em produção** (ver §11 do relatório).
+### Estado do banco de produção (Supabase `tocbtonqnahmtegfkrmn`, 2026-10-14)
+
+- Alembic aplicado até `0004_db_security_hardening`.
+- `0005_settings_ai_users` **ainda NÃO aplicada** (pendente de autorização);
+  deve ser testada antes num branch do Supabase.
+- Seeds SQL `0002` (roles/permissions) e `0005` (permissões de gestão de
+  usuários/segurança) aplicados.
+- Primeiro ADM criado por bootstrap (Supabase Auth + `users` + `user_roles` +
+  `user_unit_access` + `audit_logs` com `BOOTSTRAP_FIRST_ADMIN`), sem expor
+  dados pessoais além do necessário.
+- 4 unidades: 023401 PF, 023402 PU, 023403 CJU, 023404 UEA.
+
+Cadeia e mapeamento Alembic ↔ SQL: `backend/README.md`. Notas sobre os dois
+históricos de migração: `docs/database/historico-migracoes.md`.
+
+### Bootstrap do primeiro ADM (passos genéricos)
+
+1. Criar o usuário no Supabase Auth (painel/API de admin, com a Service Role
+   Key apenas no backend), sem senha em log ou repositório.
+2. Inserir o registro em `users` com `auth_user_id` do Auth.
+3. Vincular o papel ADM em `user_roles` e as unidades em `user_unit_access`.
+4. Registrar o evento `BOOTSTRAP_FIRST_ADMIN` em `audit_logs`.
+5. No primeiro login, cadastrar o MFA (TOTP); rotas administrativas exigem AAL2.
+
+### Subida local (desenvolvimento)
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+```
+
+- Abra sempre por `http://127.0.0.1:3000` (não `localhost`).
+- `FRONTEND_MEMORY=2G` é somente para dev; **nunca** em produção.
+
+## Inteligência Artificial (opcional, desligada por padrão)
+
+A IA é **consultiva e somente leitura**: nunca altera dados nem executa ações. Contrato da API em
+[`docs/architecture/modulo-configuracoes.md`](./docs/architecture/modulo-configuracoes.md).
+
+- **Provedores:** OpenAI, Anthropic e DeepSeek, via HTTPS direto do backend
+  (`backend/app/services/ai/`), sem SDKs. Os modelos aceitos são uma allowlist em
+  `services/ai/models.py`. O DeepSeek exige aceite explícito do ADM sobre transferência
+  internacional de dados (LGPD), registrado em auditoria.
+- **Chaves:** só no `.env` do backend (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`,
+  `DEEPSEEK_API_KEY`). Nunca vão para banco, API, log ou frontend; a tela mostra apenas
+  "Configurada"/"Não configurada".
+- **Interruptor geral:** `AI_ENABLED=false` (padrão) desliga tudo, independentemente do que
+  estiver salvo no banco. Limites: `AI_TIMEOUT_SECONDS`, `AI_MAX_TOKENS`,
+  `AI_RATE_LIMIT_PER_USER`, `AI_RATE_LIMIT_PER_UNIT`, `AI_MONTHLY_TOKEN_CAP`,
+  `AI_CIRCUIT_FAILURE_THRESHOLD`, `AI_CIRCUIT_OPEN_SECONDS` (ver `.env.example`).
+- **Degradação graciosa:** sem chave, chave inválida, timeout, cota esgotada, Redis fora ou
+  provedor fora do ar → o `NullProvider` assume e o sistema segue normalmente.
+- **Privacidade:** só dados agregados e patrimoniais são enviados; uma varredura bloqueia o
+  envio se encontrar CPF, e-mail, telefone ou tokens. Dados importados vão delimitados como
+  dados, nunca como instruções.
+- **Tela:** Configurações → Inteligência Artificial (somente ADM com MFA/AAL2).
+- **Worker:** tarefas de IA rodam no Celery (`app/celery_app.py`), com agendador embutido
+  (`worker -B`); suba com `--profile worker`.
 
 ## Fases do projeto
 
-1. **Fase 1 (atual):** banco de dados, modelagem e permissionamento.
-2. Fases seguintes (frontend, integrações completas, etc.) só começam após
-   a Fase 1 ser validada — ver `CLAUDE.md`.
+1. **Fase 1 (concluída):** banco de dados, modelagem e permissionamento.
+2. **Em andamento:** importação do Google Sheets, MFA/convite, UX e o módulo de
+   Configurações (IA, Aparência, Gestão de Usuários) — ver `CLAUDE.md` (mantido localmente).

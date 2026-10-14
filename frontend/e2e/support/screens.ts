@@ -160,7 +160,7 @@ export const SCREENS: ScreenDef[] = [
     path: "/configuracoes/inteligencia-artificial",
     session: { role: "ADM" },
     prepare: async (page) => {
-      await page.getByLabel("Provedor").selectOption("deepseek");
+      await page.getByLabel("Provedor", { exact: true }).selectOption("deepseek");
       await expect(page.getByRole("dialog", { name: "Transferência internacional de dados" })).toBeVisible();
     },
   },

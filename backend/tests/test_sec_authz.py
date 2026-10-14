@@ -34,7 +34,13 @@ from app import create_app
 
 JWT_SECRET = "test-jwt-secret-sintetico-com-32-bytes-ou-mais"  # igual ao default de tests/conftest.py
 
-ALL_ADMIN_PERMISSIONS = {"users.invite", "users.revoke_access", "users.manage", "imports.execute"}
+ALL_ADMIN_PERMISSIONS = {
+    "users.invite",
+    "users.revoke_access",
+    "users.manage",
+    "imports.execute",
+    "settings.ai.manage",
+}
 
 MASS_ASSIGNMENT_FIELDS = [
     "role",
@@ -67,6 +73,9 @@ ADMIN_ENDPOINTS = [
     ("POST", "/api/v1/imports/google-sheets/preview", None, "imports.execute"),
     ("GET", f"/api/v1/imports/google-sheets/preview/{_PREVIEW_ID}/items", None, "imports.execute"),
     ("POST", "/api/v1/imports/google-sheets/confirm", _VALID_CONFIRM_BODY, "imports.execute"),
+    ("GET", "/api/v1/settings/ai", None, "settings.ai.manage"),
+    ("PATCH", "/api/v1/settings/ai", {"version": 1}, "settings.ai.manage"),
+    ("POST", "/api/v1/settings/ai/test", None, "settings.ai.manage"),
 ]
 
 AUTHENTICATED_ENDPOINTS = ADMIN_ENDPOINTS + [
@@ -141,6 +150,9 @@ def backend_mocks():
             patch("app.api.v1.imports.get_db_session", lambda: _fake_session_cm(session))
         )
         stack.enter_context(
+            patch("app.api.v1.ai_settings.get_db_session", lambda: _fake_session_cm(session))
+        )
+        stack.enter_context(
             patch("app.api.v1.users.InviteService", MagicMock(return_value=invite_service))
         )
         stack.enter_context(
@@ -189,7 +201,8 @@ def call(client, method: str, url: str, body=None, token: str | None = None):
 
 def _no_service_called(mocks) -> bool:
     return not (
-        mocks.invite_service.method_calls
+        mocks.session.execute.called
+        or mocks.invite_service.method_calls
         or mocks.import_service.method_calls
         or mocks.admin_client.method_calls
     )

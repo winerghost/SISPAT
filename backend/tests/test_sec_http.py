@@ -162,7 +162,7 @@ def test_cors_origem_permitida_sem_credentials_e_metodos_restritos(client, healt
     assert response.headers["Access-Control-Allow-Origin"] == ALLOWED_ORIGIN
     assert "Access-Control-Allow-Credentials" not in response.headers
     methods = {m.strip() for m in response.headers["Access-Control-Allow-Methods"].split(",")}
-    assert methods == {"GET", "POST", "DELETE", "OPTIONS"}
+    assert methods == {"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"}
     assert "Origin" in response.headers.get("Vary", "")
 
 

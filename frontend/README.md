@@ -65,6 +65,20 @@ Supabase/VPS reais. Evidências (screenshots) ficam em `test-results/`.
   `../docs/security/SECURITY_AUDIT.md`.
 - O frontend não toma decisões de segurança: toda autorização é do backend.
 
+## Configurações
+
+- Menu "Configurações" é um grupo: **Segurança** (todos) e **Inteligência
+  Artificial** (só ADM — ocultar é UX; o backend exige ADM + AAL2). "Aparência"
+  entra na Etapa 3 junto com a página.
+- `/configuracoes` lista as subseções do perfil (fonte: `nav-items.ts`).
+- `/configuracoes/inteligencia-artificial` usa `src/lib/ai-settings-api.ts`
+  (contrato em `../docs/architecture/modulo-configuracoes.md`): estado geral,
+  chaves só como "Configurada"/"Não configurada", provedor/modelo em `<select>`
+  nativo (modelos só da allowlist do backend), switches nativos
+  (`components/ui/switch.tsx`, `role="switch"`), teto mensal, `version` no
+  PATCH (409 recarrega e avisa), aviso LGPD obrigatório para DeepSeek e
+  "Testar conexão".
+
 ## Tema
 
 O tema visual segue **estritamente** `../DESIGN.md` ("Factory" — terminal war
@@ -72,6 +86,11 @@ room, dark-only). Não altere cores, tipografia, raios ou espaçamentos sem
 atualizar `DESIGN.md` primeiro — ele é a fonte oficial e imutável do Design
 System. Os tokens estão traduzidos em `tailwind.config.ts` e
 `src/app/globals.css`.
+
+Ativo de marca: a logomarca da AGU (`src/assets/brand/agu-logo.png`, 640 px,
+derivada de `../logo.png`) é exibida na tela de login por
+`components/brand/agu-logo.tsx`, sobre um Light Surface Card (#eeeeee, raio
+10px, sem sombra) para manter contraste; não recolorir nem aplicar filtros.
 
 ## Estrutura
 

@@ -6,12 +6,20 @@ Garantias:
     - `timeout` em toda chamada; `allow_redirects=False` (3xx = falha).
     - Retry SOMENTE em `Timeout`/`ConnectionError`, no máximo 2 tentativas.
     - Nunca lança exceção: devolve `HTTPOutcome`.
+    - AI-HTTP-01: `stream=True`; `Content-Length` acima de `MAX_RESPONSE_BYTES`
+      é recusado sem ler o corpo; o corpo é lido em blocos (`iter_content`)
+      e a leitura ABORTA ao passar do limite (bytes já descomprimidos, o que
+      também cobre "gzip bomb"). A resposta é SEMPRE fechada.
+    - AI-HTTP-02: a sessão própria usa `trust_env = False` — proxy
+      (`HTTPS_PROXY`), `.netrc` e `REQUESTS_CA_BUNDLE` do ambiente são
+      ignorados; TLS verificado com o bundle padrão (`verify=True`).
     - A chave (header) NUNCA é logada; logs só têm provedor, status e
       `type(exc).__name__`. O corpo de erro do provedor nunca é logado nem
       repassado.
 """
 from __future__ import annotations
 
+import json
 import logging
 import time
 from dataclasses import dataclass, field
@@ -42,6 +50,42 @@ PROVIDER_HOSTS: Mapping[str, str] = {
 MAX_ATTEMPTS = 2
 # Resposta acima disso é tratada como malformada (defesa contra respostas gigantes).
 MAX_RESPONSE_BYTES = 1_000_000
+READ_CHUNK_BYTES = 65_536
+
+
+def _new_session() -> requests.Session:
+    """Sessão sem configuração vinda do ambiente (AI-HTTP-02).
+
+    `trust_env=False`: um `HTTPS_PROXY`/`ALL_PROXY` ou `REQUESTS_CA_BUNDLE`
+    no ambiente do container não consegue desviar o tráfego (e a chave do
+    provedor) para um proxy nem trocar a CA confiável; credenciais de
+    `.netrc` também não são anexadas.
+    """
+    session = requests.Session()
+    session.trust_env = False
+    return session
+
+
+def _read_limited(response: Any) -> bytes | None:
+    """Corpo da resposta com no máximo `MAX_RESPONSE_BYTES`; None se exceder."""
+    headers = getattr(response, "headers", None) or {}
+    declared = headers.get("Content-Length") if hasattr(headers, "get") else None
+    if declared is not None:
+        try:
+            if int(str(declared).strip()) > MAX_RESPONSE_BYTES:
+                return None
+        except ValueError:
+            return None
+    chunks: list[bytes] = []
+    total = 0
+    for chunk in response.iter_content(chunk_size=READ_CHUNK_BYTES):
+        if not chunk:
+            continue
+        total += len(chunk)
+        if total > MAX_RESPONSE_BYTES:
+            return None
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 @dataclass(frozen=True)
@@ -64,7 +108,7 @@ class AIHttpClient:
         session: requests.Session | None = None,
         max_attempts: int = MAX_ATTEMPTS,
         backoff_seconds: float = 0.5,
-        sleep: Callable[[float], None] = time.sleep,
+        sleep: Callable[[float], None] | None = None,
     ) -> None:
         host = PROVIDER_HOSTS.get(provider)
         if host is None:
@@ -74,10 +118,10 @@ class AIHttpClient:
         self.provider = provider
         self.url = f"https://{host}{path}"
         self._timeout = timeout
-        self._session = session or requests.Session()
+        self._session = session or _new_session()
         self._attempts = max(1, min(int(max_attempts), MAX_ATTEMPTS))
         self._backoff = backoff_seconds
-        self._sleep = sleep
+        self._sleep = sleep or time.sleep
 
     def __repr__(self) -> str:
         return f"<AIHttpClient provider={self.provider!r}>"
@@ -98,6 +142,8 @@ class AIHttpClient:
                     headers=dict(headers),
                     timeout=self._timeout,
                     allow_redirects=False,
+                    verify=True,
+                    stream=True,
                 )
             except requests.exceptions.Timeout as exc:
                 kind = ERROR_TIMEOUT
@@ -109,7 +155,12 @@ class AIHttpClient:
                 logger.warning("ai_http: falha definitiva provider=%s erro=%s", self.provider, type(exc).__name__)
                 return HTTPOutcome(ok=False, error_kind=ERROR_CONNECTION)
             else:
-                return self._interpret(response)
+                try:
+                    return self._interpret(response)
+                finally:
+                    close = getattr(response, "close", None)
+                    if callable(close):
+                        close()
 
             logger.warning(
                 "ai_http: %s provider=%s tentativa=%d/%d erro=%s",
@@ -125,12 +176,16 @@ class AIHttpClient:
     def _interpret(self, response: requests.Response) -> HTTPOutcome:
         status = int(getattr(response, "status_code", 0) or 0)
         if 200 <= status < 300:
-            content = getattr(response, "content", b"") or b""
-            if isinstance(content, (bytes, str)) and len(content) > MAX_RESPONSE_BYTES:
+            try:
+                body = _read_limited(response)
+            except requests.exceptions.RequestException as exc:
+                logger.warning("ai_http: falha ao ler corpo provider=%s erro=%s", self.provider, type(exc).__name__)
+                return HTTPOutcome(ok=False, status_code=status, error_kind=ERROR_BAD_RESPONSE)
+            if body is None:
                 logger.warning("ai_http: resposta grande demais provider=%s", self.provider)
                 return HTTPOutcome(ok=False, status_code=status, error_kind=ERROR_BAD_RESPONSE)
             try:
-                payload = response.json()
+                payload = json.loads(body) if body else None
             except ValueError:
                 logger.warning("ai_http: JSON malformado provider=%s status=%d", self.provider, status)
                 return HTTPOutcome(ok=False, status_code=status, error_kind=ERROR_BAD_RESPONSE)

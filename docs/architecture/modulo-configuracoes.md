@@ -41,6 +41,8 @@ USER/RH → 403; ADM sem AAL2 → 403 `AAL2_REQUIRED`. Todos negados e auditados
 }
 ```
 
+- `updated_at`: ISO 8601 UTC, ou `null` se a configuração nunca foi gravada.
+
 - `status`: `"active"` (env ligado + banco ligado + provedor com chave + circuito fechado),
   `"disabled"` (desligado no env ou no banco), `"unavailable"` (ligado, mas sem chave,
   circuito aberto ou cota esgotada). A UI nunca recebe a razão técnica detalhada.
@@ -83,3 +85,19 @@ Sem corpo. Envia um prompt fixo, sem nenhum dado do sistema.
 
 - `result`: `"ok" | "disabled" | "not_configured" | "unavailable"`.
 - Sempre responde 200, mesmo quando o provedor falha. Nunca expõe a mensagem de erro do provedor.
+
+### Notas de implementação (backend, Etapa 1)
+
+- Código: `backend/app/api/v1/ai_settings.py` (rotas finas) e
+  `backend/app/services/ai_settings_service.py` (regras); testes em
+  `backend/tests/test_ai_settings_api.py`.
+- Rate limit por ADM (fail-closed): GET 300/h, PATCH 30/h, `/test` 5/h.
+- Troca de `provider` sem `model`: mantém o modelo atual se estiver na allowlist do novo
+  provedor; senão usa o padrão do provedor (primeiro da allowlist). `provider="none"` zera o
+  modelo; `model` enviado com `provider="none"` → 400 `invalid_model`.
+- `null` explícito em qualquer campo do PATCH → 400 `validation_error` (omitir = manter).
+- Linha `ai_settings` ausente (banco sem seed): GET devolve o padrão desligado com
+  `version: 1` e `updated_at: null`; o PATCH com `version: 1` cria a linha.
+- Concorrência: `SELECT ... FOR UPDATE` + comparação de `version`; 409 `version_conflict`.
+- Auditoria: `AI_SETTINGS_UPDATED` (previous/new, só campos de config) e, no primeiro aceite,
+  `AI_DEEPSEEK_ACKNOWLEDGED`, na mesma transação.

@@ -36,7 +36,8 @@ export interface AiSettings {
   keys: Record<AiKeyedProvider, AiKeyState>;
   models: Record<AiKeyedProvider, string[]>;
   version: number;
-  updated_at: string;
+  /** `null` quando a configuração ainda não foi gravada (banco sem seed). */
+  updated_at: string | null;
 }
 
 /** Corpo do PATCH (`extra="forbid"` no backend): só estes campos; `version` obrigatório. */

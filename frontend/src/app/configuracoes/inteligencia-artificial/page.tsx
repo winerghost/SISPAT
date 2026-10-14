@@ -42,7 +42,8 @@ const DATE_FORMAT = new Intl.DateTimeFormat("pt-BR", {
   timeStyle: "short",
 });
 
-function formatDate(iso: string): string | null {
+function formatDate(iso: string | null): string | null {
+  if (!iso) return null;
   const date = new Date(iso);
   return Number.isNaN(date.getTime()) ? null : DATE_FORMAT.format(date);
 }

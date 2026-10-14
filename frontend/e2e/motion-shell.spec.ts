@@ -107,7 +107,8 @@ test.describe("sidebar desktop", () => {
     await page.keyboard.press("ArrowDown");
     await expect(nav.getByRole("link", { name: "Patrimônios" })).toBeFocused();
     await page.keyboard.press("End");
-    await expect(nav.getByRole("link", { name: "Configurações" })).toBeFocused();
+    // "Configurações" virou grupo (Segurança, Inteligência Artificial): o último item é o botão.
+    await expect(nav.getByRole("button", { name: "Configurações" })).toBeFocused();
     await page.keyboard.press("Home");
     await expect(nav.getByRole("link", { name: "Home" })).toBeFocused();
 
@@ -235,12 +236,23 @@ test.describe("navegação por perfil (UX — backend continua autorizando)", ()
         await expect(nav.getByRole("link", { name: "Usuários" })).toHaveCount(0);
       }
 
+      // Grupo Configurações: Segurança para todos; Inteligência Artificial só ADM.
+      const settingsGroup = nav.getByRole("button", { name: "Configurações" });
+      await settingsGroup.click();
+      await expect(settingsGroup).toHaveAttribute("aria-expanded", "true");
+      await expect(nav.getByRole("link", { name: "Segurança" })).toBeVisible();
+      await expect(nav.getByRole("link", { name: "Inteligência Artificial" })).toHaveCount(role === "ADM" ? 1 : 0);
+      await expect(nav.getByRole("link", { name: "Aparência" })).toHaveCount(0);
+
       // Mesmo filtro no menu móvel.
       await page.setViewportSize({ width: 375, height: 667 });
       await page.getByRole("button", { name: "Abrir menu de navegação" }).click();
       const drawer = page.getByRole("dialog", { name: "SISPAT-AGU" });
       await expect(drawer.getByRole("link", { name: "Patrimônios" })).toBeVisible();
       await expect(drawer.getByRole("button", { name: "Administração" })).toHaveCount(role === "ADM" ? 1 : 0);
+      await drawer.getByRole("button", { name: "Configurações" }).click();
+      await expect(drawer.getByRole("link", { name: "Segurança" })).toBeVisible();
+      await expect(drawer.getByRole("link", { name: "Inteligência Artificial" })).toHaveCount(role === "ADM" ? 1 : 0);
     });
   }
 });

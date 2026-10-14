@@ -16,6 +16,9 @@ Variáveis de ambiente suportadas:
     REDIS_URL               URL de conexão com o Redis (cache/fila)
     CELERY_BROKER_URL       URL do broker Celery (default: usa REDIS_URL)
     CELERY_RESULT_BACKEND   URL do result backend Celery (default: usa REDIS_URL)
+    CELERY_BEAT_SCHEDULE_FILENAME  Caminho ABSOLUTO do arquivo de estado do beat
+                            (default: /tmp/celerybeat-schedule, tmpfs privado do
+                            container read_only do worker).
     SUPABASE_URL            URL do projeto Supabase (autenticação externa)
     SUPABASE_SERVICE_ROLE_KEY  Chave service_role do Supabase (uso apenas no backend)
     SUPABASE_JWT_SECRET     Segredo HS256 legado usado para verificar os JWTs emitidos
@@ -87,6 +90,7 @@ Variáveis de ambiente suportadas:
 from __future__ import annotations
 
 from functools import lru_cache
+from pathlib import PurePosixPath, PureWindowsPath
 
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -107,8 +111,12 @@ class Settings(BaseSettings):
     )
 
     # --- Banco de dados ---
+    # AI-CFG-01: todo campo que é (ou pode conter) segredo usa repr=False,
+    # para nunca aparecer em repr()/str() do Settings (logs, tracebacks com
+    # variáveis locais, Sentry). Os consumidores leem o atributo normalmente.
     database_url: str = Field(
         ...,
+        repr=False,
         description="URL de conexão SQLAlchemy/psycopg2 para o Postgres (Supabase).",
     )
     db_pool_size: int = Field(default=5, ge=1)
@@ -119,19 +127,31 @@ class Settings(BaseSettings):
     flask_env: str = Field(default="production")
     secret_key: str = Field(
         ...,
+        repr=False,
         description="Chave secreta da aplicação Flask (sessions, CSRF, etc.).",
     )
 
     # --- Redis / Celery ---
-    redis_url: str = Field(default="redis://localhost:6379/0")
-    celery_broker_url: str | None = Field(default=None)
-    celery_result_backend: str | None = Field(default=None)
+    # URLs do Redis/Celery contêm a senha do Redis (redis://:<senha>@host).
+    redis_url: str = Field(default="redis://localhost:6379/0", repr=False)
+    celery_broker_url: str | None = Field(default=None, repr=False)
+    celery_result_backend: str | None = Field(default=None, repr=False)
+    # AI-SAST-01: arquivo de estado do beat. Padrão no tmpfs PRIVADO do
+    # container do worker (read_only: true + tmpfs /tmp próprio do serviço,
+    # docker-compose.yml), onde nenhum outro processo pode pré-criar o
+    # arquivo; fora do container, defina um diretório do próprio app.
+    celery_beat_schedule_filename: str = Field(
+        default="/tmp/celerybeat-schedule",  # nosec B108
+        min_length=2,
+        max_length=255,
+    )
 
     # --- Supabase (autenticação externa) ---
     supabase_url: str | None = Field(default=None)
-    supabase_service_role_key: str | None = Field(default=None)
+    supabase_service_role_key: str | None = Field(default=None, repr=False)
     supabase_jwt_secret: str | None = Field(
         default=None,
+        repr=False,
         description=(
             "Segredo HS256 legado do Supabase Auth, usado por "
             "`app.auth.supabase_auth` para verificar a assinatura dos JWTs. "
@@ -182,10 +202,12 @@ class Settings(BaseSettings):
     )
     n8n_webhook_url: str | None = Field(
         default=None,
+        repr=False,  # URLs de webhook costumam carregar um token no caminho
         description="URL de webhook específica do n8n; usada com prioridade sobre n8n_base_url.",
     )
     n8n_api_key: str | None = Field(
         default=None,
+        repr=False,
         description="Credencial enviada no header Authorization ao chamar o n8n. Nunca é logada.",
     )
     n8n_request_timeout_seconds: int = Field(default=10, ge=1)
@@ -197,6 +219,7 @@ class Settings(BaseSettings):
     # módulo) — qualquer alteração de nome aqui deve ser replicada lá.
     google_sheets_credentials_json: str | None = Field(
         default=None,
+        repr=False,
         description=(
             "Caminho do arquivo de credenciais (service account) usado para "
             "autenticar na Google Sheets API."
@@ -289,6 +312,16 @@ class Settings(BaseSettings):
             self.celery_broker_url = self.redis_url
         if self.celery_result_backend is None:
             self.celery_result_backend = self.redis_url
+        return self
+
+    @model_validator(mode="after")
+    def _validate_beat_schedule_filename(self) -> "Settings":
+        """Caminho absoluto, sem `..` nem caracteres de controle."""
+        path = self.celery_beat_schedule_filename
+        absolute = PurePosixPath(path).is_absolute() or PureWindowsPath(path).is_absolute()
+        parts = path.replace("\\", "/").split("/")
+        if not absolute or ".." in parts or any(ord(c) < 32 for c in path):
+            raise ValueError("CELERY_BEAT_SCHEDULE_FILENAME deve ser um caminho absoluto, sem '..'.")
         return self
 
     @model_validator(mode="after")
