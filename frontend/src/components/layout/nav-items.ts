@@ -18,6 +18,8 @@ import {
   Plug,
   FileSpreadsheet,
   SlidersHorizontal,
+  Lock,
+  Sparkles,
 } from "lucide-react";
 
 // =============================================================================
@@ -40,6 +42,10 @@ export interface NavLeaf {
   label: string;
   href: string;
   icon: LucideIcon;
+  /** Texto curto usado em páginas-índice (ex.: /configuracoes). */
+  description?: string;
+  /** Só exibido para o papel ADM (UX — a autorização real é do backend). */
+  adminOnly?: boolean;
 }
 
 export interface NavGroup {
@@ -60,8 +66,17 @@ export const ADMIN_ROLE = "ADM";
  */
 export function filterNavItems(items: NavGroup[], roles: readonly string[] | undefined): NavGroup[] {
   const isAdmin = !!roles?.includes(ADMIN_ROLE);
-  return items.filter((item) => !item.adminOnly || isAdmin);
+  return items
+    .filter((item) => !item.adminOnly || isAdmin)
+    .map((item) =>
+      item.children
+        ? { ...item, children: item.children.filter((child) => !child.adminOnly || isAdmin) }
+        : item,
+    );
 }
+
+/** Rota-índice do grupo "Configurações". */
+export const SETTINGS_HREF = "/configuracoes";
 
 export const NAV_ITEMS: NavGroup[] = [
   { label: "Home", href: "/", icon: Home },
@@ -96,5 +111,26 @@ export const NAV_ITEMS: NavGroup[] = [
       },
     ],
   },
-  { label: "Configurações", href: "/configuracoes", icon: Settings },
+  {
+    // Grupo: o índice /configuracoes é alcançável pela trilha (breadcrumb).
+    // "Aparência" entra na Etapa 3, junto com a página (sem link para 404).
+    label: "Configurações",
+    href: SETTINGS_HREF,
+    icon: Settings,
+    children: [
+      {
+        label: "Segurança",
+        href: "/configuracoes/seguranca",
+        icon: Lock,
+        description: "Verificação em duas etapas (MFA) da sua conta.",
+      },
+      {
+        label: "Inteligência Artificial",
+        href: "/configuracoes/inteligencia-artificial",
+        icon: Sparkles,
+        adminOnly: true,
+        description: "Provedor, modelo, funcionalidades e teto de uso da IA consultiva.",
+      },
+    ],
+  },
 ];

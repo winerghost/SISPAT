@@ -268,18 +268,16 @@ def test_db_0005_new_tables_have_rls_and_revoke(settings_migration) -> None:
     # REVOKE condicionado à existência das roles do Supabase.
     assert "pg_roles WHERE rolname = 'anon'" in settings_migration.REVOKE_API_ROLES_NEW_TABLES_SQL
     # sem políticas permissivas
-    assert "CREATE POLICY" not in "
-".join(settings_migration.UPGRADE_STATEMENTS).upper()
+    assert "CREATE POLICY" not in "\n".join(settings_migration.UPGRADE_STATEMENTS).upper()
 
 
 def test_db_0005_is_idempotent_by_construction(settings_migration) -> None:
-    upgrade_sql = "
-".join(settings_migration.UPGRADE_STATEMENTS)
-    for match in re.finditer(r"CREATE\s+TABLE\s+(?!IF\s+NOT\s+EXISTS)", upgrade_sql):
+    upgrade_sql = "\n".join(settings_migration.UPGRADE_STATEMENTS)
+    for match in re.finditer(r"\bCREATE\s+TABLE\s+(?!IF\s+NOT\s+EXISTS)", upgrade_sql):
         pytest.fail(f"CREATE TABLE sem IF NOT EXISTS: {match.group(0)!r}")
-    for match in re.finditer(r"ADD\s+COLUMN\s+(?!IF\s+NOT\s+EXISTS)", upgrade_sql):
+    for match in re.finditer(r"\bADD\s+COLUMN\s+(?!IF\s+NOT\s+EXISTS)", upgrade_sql):
         pytest.fail(f"ADD COLUMN sem IF NOT EXISTS: {match.group(0)!r}")
-    for match in re.finditer(r"INSERT\s+INTO", upgrade_sql):
+    for match in re.finditer(r"\bINSERT\s+INTO\b", upgrade_sql):
         tail = upgrade_sql[match.start():]
         stmt = tail.split(";", 1)[0]
         assert "ON CONFLICT" in stmt, stmt[:80]
@@ -326,8 +324,7 @@ def test_db_0005_downgrade_only_removes_its_own_objects(settings_migration) -> N
 def test_db_0005_sql_mirror_matches_alembic(settings_migration) -> None:
     mirror = SETTINGS_SQL.read_text(encoding="utf-8")
     for statement in settings_migration.UPGRADE_STATEMENTS:
-        assert statement.strip("
-") in mirror
+        assert statement.strip("\n") in mirror
     assert "PENDENTE DE APLICAÇÃO" in mirror
 
 

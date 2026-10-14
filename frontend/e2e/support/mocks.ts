@@ -33,13 +33,70 @@ export interface MockOptions {
   aal?: "aal1" | "aal2";
   /** Se o usuário tem fator TOTP verificado (Supabase `user.factors`). */
   hasVerifiedFactor?: boolean;
+  /** Sobrescreve o estado inicial de `GET /api/v1/settings/ai`. */
+  ai?: Partial<AiSettingsMock>;
 }
 
-interface MockState {
+/** Espelho sintético do contrato `/api/v1/settings/ai` (docs/architecture/modulo-configuracoes.md). */
+export interface AiSettingsMock {
+  status: "active" | "disabled" | "unavailable";
+  env_enabled: boolean;
+  enabled: boolean;
+  provider: "none" | "openai" | "anthropic" | "deepseek";
+  model: string | null;
+  features: Record<"alerts_explain" | "executive_summary" | "assistant" | "data_quality", boolean>;
+  monthly_token_cap: number;
+  deepseek_acknowledged: boolean;
+  keys: Record<"openai" | "anthropic" | "deepseek", "configured" | "not_configured">;
+  models: Record<"openai" | "anthropic" | "deepseek", string[]>;
+  version: number;
+  updated_at: string;
+}
+
+export interface MockState {
   role: Role;
   aal: "aal1" | "aal2";
   hasVerifiedFactor: boolean;
+  /** Estado mutável das configurações de IA (testes podem simular edição concorrente). */
+  ai: AiSettingsMock;
   calls: { method: string; url: string; body: unknown }[];
+}
+
+export function defaultAiSettings(): AiSettingsMock {
+  return {
+    status: "disabled",
+    env_enabled: true,
+    enabled: false,
+    provider: "none",
+    model: null,
+    features: { alerts_explain: false, executive_summary: false, assistant: false, data_quality: false },
+    monthly_token_cap: 200_000,
+    deepseek_acknowledged: false,
+    keys: { openai: "configured", anthropic: "not_configured", deepseek: "configured" },
+    models: {
+      openai: ["openai-modelo-sintetico-a", "openai-modelo-sintetico-b"],
+      anthropic: ["anthropic-modelo-sintetico-a"],
+      deepseek: ["deepseek-modelo-sintetico-a"],
+    },
+    version: 1,
+    updated_at: "2026-10-14T15:00:00Z",
+  };
+}
+
+const AI_PATCH_FIELDS = new Set([
+  "version",
+  "enabled",
+  "provider",
+  "model",
+  "features",
+  "monthly_token_cap",
+  "acknowledge_international_transfer",
+]);
+
+function aiStatus(ai: AiSettingsMock): AiSettingsMock["status"] {
+  if (!ai.env_enabled || !ai.enabled) return "disabled";
+  if (ai.provider === "none" || ai.keys[ai.provider] !== "configured") return "unavailable";
+  return "active";
 }
 
 const USER_ID = "00000000-0000-4000-8000-0000000000e2";
@@ -225,6 +282,7 @@ export async function installMocks(page: Page, opts: MockOptions = {}): Promise<
     role: opts.role ?? "ADM",
     aal: opts.aal ?? "aal2",
     hasVerifiedFactor: opts.hasVerifiedFactor ?? (opts.role ?? "ADM") === "ADM",
+    ai: { ...defaultAiSettings(), ...opts.ai },
     calls: [],
   };
 
@@ -345,6 +403,54 @@ export async function installMocks(page: Page, opts: MockOptions = {}): Promise<
 
     if (path === "/v1/users/activate-invite" && method === "POST") {
       return json(route, 200, { role: "USER", units: [] });
+    }
+
+    // Configurações de IA: ADM + AAL2 (como o backend: USER/RH → 403; ADM aal1 → AAL2_REQUIRED).
+    if (path === "/v1/settings/ai" || path === "/v1/settings/ai/test") {
+      if (state.role !== "ADM") return json(route, 403, { error: { code: "FORBIDDEN", message: "Proibido" } });
+      if (state.aal !== "aal2") {
+        return json(route, 403, { error: { code: "AAL2_REQUIRED", message: "MFA obrigatório" } });
+      }
+      const ai = state.ai;
+      if (path === "/v1/settings/ai/test" && method === "POST") {
+        if (!ai.env_enabled || !ai.enabled) return json(route, 200, { result: "disabled" });
+        if (ai.provider === "none" || ai.keys[ai.provider] !== "configured") {
+          return json(route, 200, { result: "not_configured" });
+        }
+        return json(route, 200, { result: "ok", latency_ms: 840 });
+      }
+      if (path === "/v1/settings/ai" && method === "GET") return json(route, 200, ai);
+      if (path === "/v1/settings/ai" && method === "PATCH") {
+        const patch = (body ?? {}) as Record<string, unknown>;
+        if (Object.keys(patch).some((key) => !AI_PATCH_FIELDS.has(key))) {
+          return json(route, 400, { error: { code: "validation_error", message: "Campo não permitido" } });
+        }
+        if (patch.version !== ai.version) {
+          return json(route, 409, { error: { code: "version_conflict", message: "Versão desatualizada" } });
+        }
+        const provider = (patch.provider as AiSettingsMock["provider"] | undefined) ?? ai.provider;
+        if (provider === "deepseek" && !ai.deepseek_acknowledged && patch.acknowledge_international_transfer !== true) {
+          return json(route, 400, { error: { code: "deepseek_ack_required", message: "Aceite obrigatório" } });
+        }
+        const model = (patch.model as string | undefined) ?? (provider === ai.provider ? ai.model : null);
+        if (provider !== "none" && model !== null && !ai.models[provider].includes(model)) {
+          return json(route, 400, { error: { code: "invalid_model", message: "Modelo inválido" } });
+        }
+        const next: AiSettingsMock = {
+          ...ai,
+          enabled: (patch.enabled as boolean | undefined) ?? ai.enabled,
+          provider,
+          model: provider === "none" ? null : model,
+          features: { ...ai.features, ...(patch.features as Partial<AiSettingsMock["features"]> | undefined) },
+          monthly_token_cap: (patch.monthly_token_cap as number | undefined) ?? ai.monthly_token_cap,
+          deepseek_acknowledged: ai.deepseek_acknowledged || patch.acknowledge_international_transfer === true,
+          version: ai.version + 1,
+          updated_at: new Date().toISOString(),
+        };
+        next.status = aiStatus(next);
+        state.ai = next;
+        return json(route, 200, next);
+      }
     }
 
     if (/^\/v1\/users\/[^/]+\/revoke$/.test(path)) return json(route, 204);

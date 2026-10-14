@@ -11,7 +11,28 @@
 *.pem
 *.key
 google_sheets_credentials*.json
-*.md
+CLAUDE.md
+DESIGN.md
+
+
+# ---------------------------------------------------------------------------
+# Documentação sensível — fica só na máquina local
+# ---------------------------------------------------------------------------
+# Relatórios de auditoria de segurança descrevem vulnerabilidades (inclusive
+# pendentes de correção em produção) com PoCs e caminhos de exploração.
+# O restante da documentação (README, CLAUDE.md, DESIGN.md, docs/) É versionado.
+docs/security/SECURITY_AUDIT.md
+docs/security/evidence/
+docs/security-audit/
+
+# ---------------------------------------------------------------------------
+# Ferramentas locais do Claude Code / agentes
+# ---------------------------------------------------------------------------
+# Skills de terceiros: reinstaláveis a partir de skills-lock.json.
+.agents/skills/
+.claude/skills/
+# Preferências pessoais de permissão do Claude Code.
+.claude/settings.local.json
 
 # ---------------------------------------------------------------------------
 # Python (backend)

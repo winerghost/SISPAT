@@ -11,7 +11,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Text, UniqueConstraint, text
+from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Integer, Text, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -23,6 +23,13 @@ class User(TimestampMixin, Base):
     """Usuário da aplicação SISPAT-AGU."""
 
     __tablename__ = "users"
+    __table_args__ = (
+        CheckConstraint("version >= 1", name="ck_users_version_positive"),
+        CheckConstraint(
+            "avatar_object_key IS NULL OR char_length(avatar_object_key) BETWEEN 1 AND 200",
+            name="ck_users_avatar_object_key_length",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
@@ -32,6 +39,22 @@ class User(TimestampMixin, Base):
     email: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    # --- Gestão de usuários (migração 0005_settings_ai_users) ---
+    # Controle otimista: incrementado EXPLICITAMENTE pela camada de serviço
+    # (comparação `version` do cliente x banco -> 409). Não é `version_id_col`
+    # do mapper nesta etapa para não alterar fluxos existentes (invite_service).
+    version: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("1"))
+    # JWTs com `iat` anterior a este instante são rejeitados por `require_auth`.
+    sessions_revoked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # Chave do objeto no bucket privado `avatars` (nunca uma URL pública).
+    avatar_object_key: Mapped[str | None] = mapped_column(Text, nullable=True)
+    deactivated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    deactivated_by: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
 
     role_links: Mapped[list["UserRole"]] = relationship(
         back_populates="user",

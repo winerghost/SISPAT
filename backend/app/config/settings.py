@@ -64,6 +64,25 @@ Variáveis de ambiente suportadas:
     INVITE_TTL_DAYS         Dias de validade do REGISTRO LOCAL de um convite
                             (`app.services.invite_service.InviteService.create_invite`)
                             antes de expirar e não poder mais ser aceito (default: 7).
+    AI_ENABLED              Chave geral da IA consultiva (default: false). Quando false,
+                            VENCE qualquer configuração do banco (`ai_settings`): toda
+                            chamada vira NullProvider, sem rede.
+    OPENAI_API_KEY          Chave da API OpenAI. SEGREDO: só no ambiente do backend;
+                            nunca em banco, resposta da API, log ou frontend.
+    ANTHROPIC_API_KEY       Chave da API Anthropic. SEGREDO (mesmas regras).
+    DEEPSEEK_API_KEY        Chave da API DeepSeek. SEGREDO (mesmas regras). O uso do
+                            DeepSeek exige aceite explícito do ADM (transferência
+                            internacional de dados, LGPD).
+    AI_TIMEOUT_SECONDS      Timeout (s) de cada chamada HTTP ao provedor (default: 20).
+    AI_MAX_TOKENS           Máximo de tokens de saída por chamada (default: 800).
+    AI_RATE_LIMIT_PER_USER  Chamadas de IA por usuário por hora (default: 20).
+    AI_RATE_LIMIT_PER_UNIT  Chamadas de IA por unidade por hora (default: 100).
+    AI_MONTHLY_TOKEN_CAP    Teto global de tokens/mês (default: 200000). O teto efetivo é
+                            o MENOR entre este valor e `ai_settings.monthly_token_cap`.
+    AI_CIRCUIT_FAILURE_THRESHOLD  Falhas consecutivas que abrem o circuito (default: 3).
+    AI_CIRCUIT_OPEN_SECONDS Tempo (s) com o circuito aberto -> NullProvider (default: 300).
+    WORKER_CPUS / WORKER_MEMORY  Limites do container worker (lidos só pelo
+                            docker-compose; não usados por este módulo).
 """
 from __future__ import annotations
 
@@ -245,6 +264,23 @@ class Settings(BaseSettings):
             "de expirar e não poder mais ser confirmada."
         ),
     )
+
+    # --- IA consultiva (app.services.ai). Chaves: repr=False para nunca
+    # aparecerem em repr()/logs do objeto Settings. ---
+    ai_enabled: bool = Field(
+        default=False,
+        description="Chave geral da IA; False vence qualquer configuração do banco.",
+    )
+    openai_api_key: str | None = Field(default=None, repr=False)
+    anthropic_api_key: str | None = Field(default=None, repr=False)
+    deepseek_api_key: str | None = Field(default=None, repr=False)
+    ai_timeout_seconds: int = Field(default=20, ge=1, le=120)
+    ai_max_tokens: int = Field(default=800, ge=1, le=8000)
+    ai_rate_limit_per_user: int = Field(default=20, ge=1, description="Chamadas/hora por usuário.")
+    ai_rate_limit_per_unit: int = Field(default=100, ge=1, description="Chamadas/hora por unidade.")
+    ai_monthly_token_cap: int = Field(default=200_000, ge=0, le=50_000_000)
+    ai_circuit_failure_threshold: int = Field(default=3, ge=1, le=100)
+    ai_circuit_open_seconds: int = Field(default=300, ge=10, le=86_400)
 
     @model_validator(mode="after")
     def _apply_celery_defaults(self) -> "Settings":

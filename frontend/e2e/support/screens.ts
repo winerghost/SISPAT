@@ -135,6 +135,36 @@ export const SCREENS: ScreenDef[] = [
     },
   },
   {
+    id: "configuracoes",
+    title: "Configurações — índice",
+    path: "/configuracoes",
+    session: { role: "ADM" },
+    prepare: async (page) => {
+      await expect(page.getByRole("heading", { level: 1, name: "Configurações" })).toBeVisible();
+      await expect(page.getByRole("main").getByRole("link", { name: /Inteligência Artificial/ })).toBeVisible();
+    },
+  },
+  {
+    id: "ia",
+    title: "Configurações / Inteligência Artificial (ADM)",
+    path: "/configuracoes/inteligencia-artificial",
+    session: { role: "ADM" },
+    prepare: async (page) => {
+      await expect(page.getByRole("switch", { name: "Ligar a Inteligência Artificial" })).toBeVisible();
+      await expect(page.getByRole("button", { name: "Testar conexão" })).toBeVisible();
+    },
+  },
+  {
+    id: "ia-deepseek",
+    title: "IA — aviso de transferência internacional (DeepSeek)",
+    path: "/configuracoes/inteligencia-artificial",
+    session: { role: "ADM" },
+    prepare: async (page) => {
+      await page.getByLabel("Provedor").selectOption("deepseek");
+      await expect(page.getByRole("dialog", { name: "Transferência internacional de dados" })).toBeVisible();
+    },
+  },
+  {
     id: "usuarios",
     title: "Administração de usuários",
     path: "/administracao/usuarios",
