@@ -14,6 +14,8 @@ import type { Config } from "tailwindcss";
 //  - Tipografia: fontFamily.sans/mono apontam para as variáveis CSS geradas
 //    pelo next/font (pacote "geist") com fallback exatamente como descrito
 //    no DESIGN.md (Inter/system-ui e JetBrains Mono/ui-monospace).
+//  - fontSize: em rem (12/14/16/36/44/72px a 100%) para que o tamanho de fonte
+//    da preferência de Aparência (root font-size 100/112/125%) escale a UI.
 //  - fontSize: cada papel do "Type Scale" (caption, body-sm, body, heading,
 //    heading-lg, display) vira uma chave de fontSize com [tamanho, {lineHeight,
 //    letterSpacing}] — permitindo `text-caption`, `text-heading`, etc.
@@ -65,12 +67,12 @@ const config: Config = {
         ],
       },
       fontSize: {
-        caption: ["12px", { lineHeight: "1", letterSpacing: "-0.24px" }],
-        "body-sm": ["14px", { lineHeight: "1.43" }],
-        body: ["16px", { lineHeight: "1.5" }],
-        heading: ["36px", { lineHeight: "1.1", letterSpacing: "-1.12px" }],
-        "heading-lg": ["44px", { lineHeight: "1.12", letterSpacing: "-1.1px" }],
-        display: ["72px", { lineHeight: "1", letterSpacing: "-2.88px" }],
+        caption: ["0.75rem", { lineHeight: "1", letterSpacing: "-0.24px" }],
+        "body-sm": ["0.875rem", { lineHeight: "1.43" }],
+        body: ["1rem", { lineHeight: "1.5" }],
+        heading: ["2.25rem", { lineHeight: "1.1", letterSpacing: "-1.12px" }],
+        "heading-lg": ["2.75rem", { lineHeight: "1.12", letterSpacing: "-1.1px" }],
+        display: ["4.5rem", { lineHeight: "1", letterSpacing: "-2.88px" }],
       },
       fontWeight: {
         regular: "400",
@@ -78,9 +80,10 @@ const config: Config = {
       },
       spacing: {
         "30": "120px", // 120px não existe na escala padrão do Tailwind (base 4px)
-        "section-gap": "96px",
-        "card-padding": "24px",
-        "element-gap": "24px",
+        // Aliases semânticos via variável: a densidade (compact) os reduz em globals.css.
+        "section-gap": "var(--section-gap)",
+        "card-padding": "var(--card-padding)",
+        "element-gap": "var(--element-gap)",
       },
       maxWidth: {
         page: "1200px",

@@ -285,3 +285,6 @@ A IA é **consultiva e somente leitura**: nunca altera dados nem executa ações
 1. **Fase 1 (concluída):** banco de dados, modelagem e permissionamento.
 2. **Em andamento:** importação do Google Sheets, MFA/convite, UX e o módulo de
    Configurações (IA, Aparência, Gestão de Usuários) — ver `CLAUDE.md` (mantido localmente).
+   Etapas 1 (IA), 2 (usuários) e 3 (Aparência: `/me/preferences`, cookie `sispat-ui`,
+   `/configuracoes/aparencia`) concluídas; falta a Etapa 4 (IA no dashboard). Evidências em
+   `docs/security/evidence/settings-module-etapa*.md`.

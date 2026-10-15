@@ -1,9 +1,11 @@
 import type { Metadata } from "next";
 import { GeistSans } from "geist/font/sans";
 import { GeistMono } from "geist/font/mono";
+import { cookies } from "next/headers";
 
 import { QueryProvider } from "@/lib/query-client";
 import { MotionProvider } from "@/components/animations/motion-provider";
+import { parseUiCookie, UI_COOKIE_NAME } from "@/lib/ui-preferences";
 
 import "./globals.css";
 
@@ -36,9 +38,21 @@ export const metadata: Metadata = {
   description: "Sistema de Gestão Patrimonial da AGU — unidade Palmas/TO.",
 };
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+export default async function RootLayout({ children }: { children: React.ReactNode }) {
+  // Aparência sem flash: cookie NÃO sensível `sispat-ui` (`density.font_scale`),
+  // parse estrito com allowlist — inválido/ausente → padrões. O backend segue
+  // sendo a fonte de verdade (ver src/lib/ui-preferences.ts).
+  const cookieStore = await cookies();
+  const ui = parseUiCookie(cookieStore.get(UI_COOKIE_NAME)?.value);
+
   return (
-    <html lang="pt-BR" className={`${GeistSans.variable} ${GeistMono.variable}`} data-theme="dark">
+    <html
+      lang="pt-BR"
+      className={`${GeistSans.variable} ${GeistMono.variable}`}
+      data-theme="dark"
+      data-density={ui.density}
+      data-font-scale={ui.font_scale}
+    >
       <body className="bg-obsidian-canvas text-bone antialiased">
         {/* WCAG 2.4.1 (Bypass Blocks): primeiro alvo de Tab, visível só no foco. */}
         <a

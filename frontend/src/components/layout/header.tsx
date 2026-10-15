@@ -70,7 +70,7 @@ export function Header() {
             return (
               <span
                 key={crumb.href}
-                className={isLast ? "flex min-w-0 items-center gap-1" : "hidden shrink-0 items-center gap-1 sm:flex"}
+                className={isLast ? "flex min-w-0 items-center gap-1" : "hidden min-w-0 items-center gap-1 sm:flex"}
               >
                 {index > 0 && (
                   <ChevronRight
@@ -99,7 +99,7 @@ export function Header() {
       <div className="flex shrink-0 items-center gap-3">
         {/* Busca global — input estático por enquanto, sem lógica de pesquisa.
             Oculta abaixo de md para não espremer a trilha/menu em telas pequenas. */}
-        <div className="relative hidden w-56 md:block lg:w-72">
+        <div className="relative hidden w-44 md:block lg:w-48 xl:w-72">
           <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-warm-granite" aria-hidden />
           <Input
             type="search"

@@ -6,6 +6,7 @@ import { Sidebar } from "@/components/layout/sidebar";
 import { Header } from "@/components/layout/header";
 import { AuthGuard } from "@/lib/auth-guard";
 import { useSupabaseSession } from "@/lib/session";
+import { useMyPreferences } from "@/lib/use-my-preferences";
 
 // =============================================================================
 // AppShell — Sidebar/Header só existem com sessão Supabase (auditoria F-6).
@@ -14,12 +15,23 @@ import { useSupabaseSession } from "@/lib/session";
 // do app. Só UX: a autorização é sempre do backend.
 // =============================================================================
 
+/**
+ * Sincroniza a aparência (cookie `sispat-ui` + atributos no <html>) com o que o
+ * backend guarda, assim que há sessão. Falha silenciosa: o sistema segue com o
+ * cookie/padrões.
+ */
+function UiPreferencesSync({ enabled }: { enabled: boolean }) {
+  useMyPreferences({ enabled });
+  return null;
+}
+
 export function AppShell({ children }: { children: ReactNode }) {
   const { session, loading } = useSupabaseSession();
   const showChrome = !loading && !!session;
 
   return (
     <div className="flex h-screen overflow-hidden">
+      <UiPreferencesSync enabled={showChrome} />
       {showChrome && <Sidebar />}
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
         {showChrome && <Header />}

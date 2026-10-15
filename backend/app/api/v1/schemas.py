@@ -213,6 +213,24 @@ class DeactivateRequest(VersionRequest):
     reason: str | None = Field(default=None, max_length=1000)
 
 
+class PreferencesUpdateRequest(_NoExplicitNullsModel):
+    """Corpo de `PATCH /api/v1/me/preferences` (Etapa 3 — Aparência).
+
+    `version` obrigatório (0 = criar a primeira linha). `user_id` e demais
+    campos nunca vêm do cliente (400 + evento). Ao menos uma preferência.
+    """
+
+    version: StrictInt = Field(ge=0, le=2_147_483_647)
+    density: Literal["comfortable", "compact"] | None = None
+    font_scale: Literal[100, 112, 125] | None = None
+
+    @model_validator(mode="after")
+    def _require_change(self) -> "PreferencesUpdateRequest":
+        if self.density is None and self.font_scale is None:
+            raise ValueError("informe density e/ou font_scale")
+        return self
+
+
 UserSortKey = Literal[
     "name", "-name", "email", "-email", "created_at", "-created_at", "last_login_at", "-last_login_at"
 ]

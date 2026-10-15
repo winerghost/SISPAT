@@ -31,13 +31,15 @@ Foto de perfil do PRÓPRIO usuário (Etapa 2; contrato em
 """
 from __future__ import annotations
 
-from flask import Blueprint, g, jsonify
+from flask import Blueprint, g, jsonify, request
 from werkzeug.exceptions import BadRequest
 
+from app.api.v1.schemas import PreferencesUpdateRequest, parse_body
 from app.api.v1.user_admin_http import (
     StorageUnavailableError,
     admin_rate_limit_key,
     avatar_error_response,
+    error_response,
     not_found_response,
     read_avatar_upload,
     reject_any_body,
@@ -50,6 +52,7 @@ from app.database.session import get_db_session
 from app.integrations.supabase_storage_client import SupabaseStorageClient
 from app.security.rate_limit import rate_limit
 from app.services.avatar_service import AvatarError, process_avatar
+from app.services.preferences_service import PreferencesService, PreferencesVersionConflictError
 from app.services.user_admin_service import UserAdminError, UserAdminService
 
 me_bp = Blueprint("me", __name__)
@@ -61,6 +64,8 @@ _ROLE_REQUIRING_MFA = "ADM"
 
 _AVATAR_WRITE_LIMIT = 20
 _AVATAR_READ_LIMIT = 600
+_PREFS_READ_LIMIT = 600
+_PREFS_WRITE_LIMIT = 60
 _WINDOW_SECONDS = 3600
 
 
@@ -88,6 +93,35 @@ def get_me():
         ),
         200,
     )
+
+
+@me_bp.route("/me/preferences", methods=["GET"])
+@require_auth
+@rate_limit(admin_rate_limit_key, limit=_PREFS_READ_LIMIT, window_seconds=_WINDOW_SECONDS)
+def get_my_preferences():
+    user = g.current_user
+    with get_db_session() as db:
+        payload = PreferencesService(db).get_view(user.id)
+    return jsonify(payload), 200
+
+
+@me_bp.route("/me/preferences", methods=["PATCH"])
+@require_auth
+@rate_limit(admin_rate_limit_key, limit=_PREFS_WRITE_LIMIT, window_seconds=_WINDOW_SECONDS)
+def update_my_preferences():
+    try:
+        changes = parse_body(
+            PreferencesUpdateRequest, request.get_json(silent=True), context="me.preferences.update"
+        )
+    except BadRequest as exc:
+        return validation_error(exc)
+    user = g.current_user
+    try:
+        with get_db_session() as db:
+            payload = PreferencesService(db, request_id=get_request_id()).update(user.id, changes)
+    except PreferencesVersionConflictError as exc:
+        return error_response(exc.status_code, exc.code, exc.message)
+    return jsonify(payload), 200
 
 
 def _self_service(db):

@@ -52,6 +52,7 @@ _TABLES = (
     "invites",
     "invite_units",
     "audit_logs",
+    "user_preferences",
 )
 
 ADMIN_PERMISSIONS = (

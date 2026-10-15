@@ -328,3 +328,36 @@ Corpo (`extra="forbid"`):
 - **Infra (pendente, fora do backend):** o `client_max_body_size 2m` do Nginx
   (`infra/cloudpanel/vhost.conf.example`) barra uploads perto de 2 MiB por causa da
   sobrecarga do multipart. Recomendo `3m`.
+
+## Etapa 3 — Aparência (preferências do próprio usuário)
+
+Qualquer perfil autenticado (`require_auth`, sem AAL2 nem permissão); o alvo é sempre o
+usuário do JWT (nenhum id vem do cliente). Tabela `user_preferences` (migração 0005).
+
+### `GET /api/v1/me/preferences`
+
+200 `{"density": "comfortable"|"compact", "font_scale": 100|112|125, "version": int}`.
+Sem linha: `comfortable` / `100` / `version: 0` (o GET não cria linha).
+
+### `PATCH /api/v1/me/preferences`
+
+Corpo `{"density"?, "font_scale"?, "version"}` (`extra="forbid"`). `version` é obrigatório
+(inteiro >= 0; `0` cria a primeira linha) e ao menos uma preferência deve vir. Resposta: mesmo
+formato do GET. Erros no formato `{"error": {"code", "message"}}`:
+
+- 400 `validation_error`: valor fora da allowlist, tipo errado, `null`, nenhum campo de
+  preferência, campo desconhecido ou privilegiado (`user_id`, `role`, `unit_id`...), que também
+  gera evento de segurança (`MASS_ASSIGNMENT_REJECTED` / `PRIVILEGE_ESCALATION_ATTEMPT`).
+- 409 `version_conflict`: versão diferente da atual (inclui `version > 0` sem linha e inserção
+  concorrente da primeira linha).
+
+### Notas de implementação (Etapa 3)
+
+- Código: `backend/app/services/preferences_service.py`, schema `PreferencesUpdateRequest`
+  em `api/v1/schemas.py`, rotas em `api/v1/me.py`. Testes: `backend/tests/test_preferences_api.py`.
+- `SELECT ... FOR UPDATE` + comparação de `version`; a primeira linha nasce com `version = 1`.
+- Auditoria `USER_PREFERENCES_UPDATED` (entidade `user_preferences`, `entity_id` = id do
+  usuário) na mesma transação, com `previous_values`/`new_values` = `{density, font_scale, version}`.
+- Rate limit por usuário (falha fechada): leitura 600/h, escrita 60/h.
+- Matriz de permissões: sem permissão nova (rota AUTH, como `/me`); registrada em
+  `test_sec_route_inventory.py`.

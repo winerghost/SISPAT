@@ -40,20 +40,21 @@
     SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 
   /* Typography — Scale */
-  --text-caption: 12px;
+  /* Em rem (= 12/14/16/36/44/72px a 100%): o root font-size da Aparência escala tudo. */
+  --text-caption: 0.75rem;
   --leading-caption: 1;
   --tracking-caption: -0.24px;
-  --text-body-sm: 14px;
+  --text-body-sm: 0.875rem;
   --leading-body-sm: 1.43;
-  --text-body: 16px;
+  --text-body: 1rem;
   --leading-body: 1.5;
-  --text-heading: 36px;
+  --text-heading: 2.25rem;
   --leading-heading: 1.1;
   --tracking-heading: -1.12px;
-  --text-heading-lg: 44px;
+  --text-heading-lg: 2.75rem;
   --leading-heading-lg: 1.12;
   --tracking-heading-lg: -1.1px;
-  --text-display: 72px;
+  --text-display: 4.5rem;
   --leading-display: 1;
   --tracking-display: -2.88px;
 
@@ -79,6 +80,10 @@
   --card-padding: 24px;
   --element-gap: 24px;
 
+  /* Densidade (Aparência): linhas de tabela. Compact reduz — ver abaixo. */
+  --density-cell-y: 12px;
+  --density-head-h: 40px;
+
   /* Border Radius */
   --radius-sm: 3px;
   --radius-lg: 10px;
@@ -103,6 +108,27 @@
   --motion-duration-slow: 320ms; /* só entradas nomeadas (sfDashboardFrameIn) */
   --motion-distance-sm: 4px;
   --motion-distance-md: 8px;
+}
+
+/* ===========================================================================
+ * Aparência (Etapa 3) — preferências do usuário em <html data-density/-font-scale>
+ * (renderizadas no servidor a partir do cookie `sispat-ui`, sem flash).
+ * Só tokens da escala do DESIGN.md: tipografia 12/14/16... escala pelo root
+ * font-size (tudo em rem); espaçamento em múltiplos de 8px via variáveis.
+ * Seletores sem `html` para que o card de prévia também os use.
+ * ======================================================================== */
+html[data-font-scale="112"] {
+  font-size: 112%;
+}
+html[data-font-scale="125"] {
+  font-size: 125%;
+}
+[data-density="compact"] {
+  --card-padding: 16px;
+  --element-gap: 16px;
+  --section-gap: 80px;
+  --density-cell-y: 8px;
+  --density-head-h: 32px;
 }
 
 @layer base {

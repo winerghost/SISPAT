@@ -176,6 +176,29 @@ export const SCREENS: ScreenDef[] = [
     },
   },
   {
+    id: "aparencia",
+    title: "Configurações / Aparência (densidade e fonte)",
+    path: "/configuracoes/aparencia",
+    session: { role: "USER" },
+    prepare: async (page) => {
+      await expect(page.getByRole("heading", { level: 1, name: "Aparência" })).toBeVisible();
+      await expect(page.getByText("Factory dark é o único tema oficial.")).toBeVisible();
+      await expect(page.getByRole("radio", { name: "Confortável" })).toBeChecked();
+      await expect(page.getByTestId("aparencia-previa")).toBeVisible();
+    },
+  },
+  {
+    id: "aparencia-compacta-125",
+    title: "Aparência — compacta + fonte 125% (rascunho e salva)",
+    path: "/configuracoes/aparencia",
+    session: { role: "USER", prefs: { density: "compact", font_scale: 125, version: 3 } },
+    prepare: async (page) => {
+      await expect(page.getByRole("radio", { name: "Compacta" })).toBeChecked();
+      await expect(page.getByRole("radio", { name: "125%" })).toBeChecked();
+      await expect(page.locator("html")).toHaveAttribute("data-font-scale", "125");
+    },
+  },
+  {
     id: "ia",
     title: "Configurações / Inteligência Artificial (ADM)",
     path: "/configuracoes/inteligencia-artificial",

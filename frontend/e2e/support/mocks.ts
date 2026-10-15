@@ -39,6 +39,10 @@ export interface MockOptions {
   enrollQrCode?: string;
   /** Sobrescreve o estado inicial de `GET /api/v1/settings/ai`. */
   ai?: Partial<AiSettingsMock>;
+  /** Sobrescreve o estado inicial de `GET /api/v1/me/preferences` (Aparência). */
+  prefs?: Partial<PreferencesMock>;
+  /** Status HTTP forçado em `GET /api/v1/me/preferences` (ex.: 500 testa o estado de erro). */
+  prefsGetStatus?: number;
   /** Resultado de `POST /users/<id>/password-reset` (padrão "sent"). */
   passwordReset?: "sent" | "unavailable";
   /** Supabase Storage fora do ar: rotas de foto → 503 `storage_unavailable`. */
@@ -69,6 +73,19 @@ export interface AiSettingsMock {
   updated_at: string;
 }
 
+/** Espelho sintético do contrato `/api/v1/me/preferences` (Etapa 3 — Aparência). */
+export interface PreferencesMock {
+  density: "comfortable" | "compact";
+  font_scale: 100 | 112 | 125;
+  version: number;
+}
+
+export function defaultPreferences(): PreferencesMock {
+  return { density: "comfortable", font_scale: 100, version: 0 };
+}
+
+const PREFS_PATCH_FIELDS = new Set(["density", "font_scale", "version"]);
+
 export interface MockState {
   role: Role;
   aal: "aal1" | "aal2";
@@ -78,6 +95,9 @@ export interface MockState {
   enrollQrCode: string;
   /** Estado mutável das configurações de IA (testes podem simular edição concorrente). */
   ai: AiSettingsMock;
+  /** Preferências de aparência do próprio usuário (testes podem simular edição concorrente). */
+  prefs: PreferencesMock;
+  prefsGetStatus: number | null;
   /** Usuários administráveis (contrato `UserSummary`); testes podem mutar. */
   users: UserMock[];
   /** Unidades do escopo do ADM (`GET /api/v1/units`). */
@@ -718,6 +738,8 @@ export async function installMocks(page: Page, opts: MockOptions = {}): Promise<
     unverifiedFactorId: opts.hasStaleUnverifiedFactor ? "factor-stale-e2e" : null,
     enrollQrCode: opts.enrollQrCode ?? DEFAULT_ENROLL_QR_CODE,
     ai: { ...defaultAiSettings(), ...opts.ai },
+    prefs: { ...defaultPreferences(), ...opts.prefs },
+    prefsGetStatus: opts.prefsGetStatus ?? null,
     users: defaultUsers(),
     units: UNITS.map((u) => ({ ...u })),
     audit: defaultAudit(),
@@ -865,6 +887,34 @@ export async function installMocks(page: Page, opts: MockOptions = {}): Promise<
         mfa_required: state.role === "ADM",
         has_avatar: state.meHasAvatar,
       });
+    }
+
+    if (path === "/v1/me/preferences" && (method === "GET" || method === "PATCH")) {
+      if (method === "GET") {
+        if (state.prefsGetStatus && state.prefsGetStatus >= 400) {
+          return json(route, state.prefsGetStatus, { error: { code: "INTERNAL", message: "SISPAT_BACKEND_MSG" } });
+        }
+        return json(route, 200, state.prefs);
+      }
+      const patch = (body ?? {}) as Record<string, unknown>;
+      const density = patch.density ?? state.prefs.density;
+      const fontScale = patch.font_scale ?? state.prefs.font_scale;
+      if (
+        Object.keys(patch).some((key) => !PREFS_PATCH_FIELDS.has(key)) ||
+        !["comfortable", "compact"].includes(density as string) ||
+        ![100, 112, 125].includes(fontScale as number)
+      ) {
+        return json(route, 400, { error: { code: "validation_error", message: "Campo não permitido" } });
+      }
+      if (patch.version !== state.prefs.version) {
+        return json(route, 409, { error: { code: "version_conflict", message: "Versão desatualizada" } });
+      }
+      state.prefs = {
+        density: density as PreferencesMock["density"],
+        font_scale: fontScale as PreferencesMock["font_scale"],
+        version: state.prefs.version + 1,
+      };
+      return json(route, 200, state.prefs);
     }
 
     if (await handleMyAvatar(route, state, method, path)) return;

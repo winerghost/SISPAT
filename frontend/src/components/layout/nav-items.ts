@@ -21,6 +21,7 @@ import {
   Lock,
   Sparkles,
   CircleUserRound,
+  Palette,
 } from "lucide-react";
 
 // =============================================================================
@@ -114,7 +115,6 @@ export const NAV_ITEMS: NavGroup[] = [
   },
   {
     // Grupo: o índice /configuracoes é alcançável pela trilha (breadcrumb).
-    // "Aparência" entra na Etapa 3, junto com a página (sem link para 404).
     label: "Configurações",
     href: SETTINGS_HREF,
     icon: Settings,
@@ -130,6 +130,12 @@ export const NAV_ITEMS: NavGroup[] = [
         href: "/configuracoes/seguranca",
         icon: Lock,
         description: "Verificação em duas etapas (MFA) da sua conta.",
+      },
+      {
+        label: "Aparência",
+        href: "/configuracoes/aparencia",
+        icon: Palette,
+        description: "Densidade da interface e tamanho da fonte.",
       },
       {
         label: "Inteligência Artificial",

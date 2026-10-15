@@ -107,7 +107,7 @@ test.describe("sidebar desktop", () => {
     await page.keyboard.press("ArrowDown");
     await expect(nav.getByRole("link", { name: "Patrimônios" })).toBeFocused();
     await page.keyboard.press("End");
-    // "Configurações" virou grupo (Segurança, Inteligência Artificial): o último item é o botão.
+    // "Configurações" virou grupo (Perfil, Segurança, Aparência, IA): o último item é o botão.
     await expect(nav.getByRole("button", { name: "Configurações" })).toBeFocused();
     await page.keyboard.press("Home");
     await expect(nav.getByRole("link", { name: "Home" })).toBeFocused();
@@ -244,7 +244,8 @@ test.describe("navegação por perfil (UX — backend continua autorizando)", ()
       await expect(nav.getByRole("link", { name: "Perfil", exact: true })).toBeVisible();
       await expect(nav.getByRole("link", { name: "Segurança" })).toBeVisible();
       await expect(nav.getByRole("link", { name: "Inteligência Artificial" })).toHaveCount(role === "ADM" ? 1 : 0);
-      await expect(nav.getByRole("link", { name: "Aparência" })).toHaveCount(0);
+      // "Aparência" (densidade/fonte) é para todos os perfis.
+      await expect(nav.getByRole("link", { name: "Aparência" })).toBeVisible();
 
       // Mesmo filtro no menu móvel.
       await page.setViewportSize({ width: 375, height: 667 });
@@ -255,6 +256,7 @@ test.describe("navegação por perfil (UX — backend continua autorizando)", ()
       await drawer.getByRole("button", { name: "Configurações" }).click();
       await expect(drawer.getByRole("link", { name: "Perfil", exact: true })).toBeVisible();
       await expect(drawer.getByRole("link", { name: "Segurança" })).toBeVisible();
+      await expect(drawer.getByRole("link", { name: "Aparência" })).toBeVisible();
       await expect(drawer.getByRole("link", { name: "Inteligência Artificial" })).toHaveCount(role === "ADM" ? 1 : 0);
     });
   }
