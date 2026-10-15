@@ -45,6 +45,34 @@ AAL (Authenticator Assurance Level) — `flask.g.current_session_aal`:
     frontend NUNCA decide isso por conta própria; esta leitura no backend,
     a partir do JWT assinado pelo Supabase, é a única fonte de verdade.
 
+SESSÕES REVOGADAS (`users.sessions_revoked_at`, AUD-14-08):
+    Depois de carregar o usuário, `require_auth` rejeita com 401 (evento
+    `AUTH_FAILED`, motivo `session_revoked`) todo JWT emitido ANTES da
+    revogação — ver `session_predates_revocation`. O `iat` do JWT tem
+    precisão de SEGUNDOS e `sessions_revoked_at` tem microssegundos; para a
+    decisão ser determinística, compara-se com o segundo truncado da
+    revogação e o token emitido NO MESMO SEGUNDO também é rejeitado
+    (`iat <= floor(revogação)`): falha fechada, ao custo de exigir novo
+    login de quem entrou na mesma fração de segundo da revogação.
+    Defesa contra refresh (UA-SESS-01/02): um refresh do Supabase gera
+    access token com `iat` novo, mas preserva o claim `amr` (métodos e
+    instantes da autenticação da sessão). Com `sessions_revoked_at`
+    preenchido, o token só é aceito se `iat > corte` E o `amr` for
+    bem-formado (todas as entradas válidas) com o MENOR instante > corte,
+    ou seja, TODA a autenticação da sessão é posterior à revogação. Um TOTP
+    re-verificado (ou um fator novo cadastrado) numa sessão antiga acrescenta
+    uma entrada recente, mas o primeiro fator continua anterior => 401.
+    `amr` ausente ou malformado => sessão tratada como revogada (falha
+    fechada). Um login novo tem todos os instantes após o corte => aceito.
+
+CLAIM `amr` (suposição documentada, validar em homologação):
+    O GoTrue emite `amr` como LISTA de objetos `{"method": str,
+    "timestamp": int}` (ex.: `[{"method": "password", "timestamp": ...},
+    {"method": "totp", "timestamp": ...}]`), em segundos Unix. Qualquer
+    outro formato (string, lista de strings estilo RFC 8176, timestamp não
+    numérico/booleano, lista gigante) é tratado como "sem informação":
+    `has_recent_totp` responde False (falha fechada).
+
 ALGORITMOS (HS256 legado + ES256/JWKS):
     Ver `_decode_supabase_jwt` e `app.auth.jwks`. O projeto atual assina com
     ES256 (JWKS público). O segredo HS256 legado continua aceito enquanto
@@ -54,6 +82,9 @@ ALGORITMOS (HS256 legado + ES256/JWKS):
 from __future__ import annotations
 
 import logging
+import math
+import time
+from datetime import datetime, timezone
 from functools import wraps
 from typing import Any, Callable, TypeVar
 
@@ -91,7 +122,99 @@ _EXPECTED_TOKEN_ROLE = "authenticated"
 # ver docstring do módulo). NUNCA alterar para "aal2".
 _DEFAULT_AAL = "aal1"
 
+# Limite defensivo de entradas lidas do claim `amr`.
+_MAX_AMR_ENTRIES = 20
+
 F = TypeVar("F", bound=Callable[..., Any])
+
+
+def _is_number(value: Any) -> bool:
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+    )
+
+
+def amr_entries(claims: dict[str, Any]) -> list[tuple[str, float]]:
+    """Entradas BEM-FORMADAS do claim `amr` como `(method, timestamp)`.
+
+    Entradas malformadas são descartadas; formato inesperado do claim (não
+    lista, lista grande demais) => lista vazia. Ver docstring do módulo.
+    """
+    amr = claims.get("amr")
+    if not isinstance(amr, list) or len(amr) > _MAX_AMR_ENTRIES:
+        return []
+    entries: list[tuple[str, float]] = []
+    for item in amr:
+        if not isinstance(item, dict):
+            continue
+        method = item.get("method")
+        timestamp = item.get("timestamp")
+        if isinstance(method, str) and 0 < len(method) <= 64 and _is_number(timestamp):
+            entries.append((method, float(timestamp)))
+    return entries
+
+
+def has_recent_totp(
+    claims: dict[str, Any],
+    *,
+    max_age_seconds: int = 300,
+    now: float | None = None,
+    future_skew_seconds: int = 30,
+) -> bool:
+    """True se a sessão verificou TOTP há no máximo `max_age_seconds`.
+
+    Exige uma entrada `{"method": "totp", "timestamp": t}` com
+    `agora - max_age <= t <= agora + future_skew`. Qualquer outra situação
+    (claim ausente, formato inesperado, só `password`, TOTP antigo ou
+    "no futuro") => False (falha fechada).
+    """
+    current = time.time() if now is None else now
+    for method, timestamp in amr_entries(claims):
+        if method != "totp":
+            continue
+        if current - max_age_seconds <= timestamp <= current + future_skew_seconds:
+            return True
+    return False
+
+
+def _to_utc_timestamp(value: datetime) -> float:
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.timestamp()
+
+
+def _strict_amr_timestamps(claims: dict[str, Any]) -> list[float] | None:
+    """Instantes do `amr` SÓ se TODAS as entradas forem bem-formadas; senão None."""
+    amr = claims.get("amr")
+    if not isinstance(amr, list) or not amr or len(amr) > _MAX_AMR_ENTRIES:
+        return None
+    entries = amr_entries(claims)
+    if len(entries) != len(amr):
+        return None
+    return [timestamp for _method, timestamp in entries]
+
+
+def session_predates_revocation(claims: dict[str, Any], revoked_at: datetime | None) -> bool:
+    """True se o JWT pertence a uma sessão anterior a `revoked_at` (=> 401).
+
+    Regra (ver docstring do módulo): corte = segundo truncado de
+    `revoked_at`; aceita só se `iat > corte` e o `amr` for bem-formado com
+    o MENOR instante > corte. Qualquer outro caso => True (falha fechada).
+    """
+    if revoked_at is None:
+        return False
+    if not isinstance(revoked_at, datetime):
+        return True  # valor inesperado no banco: falha fechada
+    cutoff = math.floor(_to_utc_timestamp(revoked_at))
+    iat = claims.get("iat")
+    if not _is_number(iat) or iat <= cutoff:
+        return True
+    auth_times = _strict_amr_timestamps(claims)
+    if auth_times is None:
+        return True
+    return min(auth_times) <= cutoff
 
 
 def _extract_session_aal(claims: dict[str, Any]) -> str:
@@ -301,6 +424,10 @@ def require_auth(view_func: F) -> F:
         if not user.active:
             logger.info("Usuário %s está inativo (active=False); acesso negado.", user.id)
             _auth_failed("inactive_user", actor_user_id=getattr(user, "id", None))
+
+        if session_predates_revocation(claims, getattr(user, "sessions_revoked_at", None)):
+            logger.info("Usuário %s com JWT anterior à revogação de sessões; acesso negado.", user.id)
+            _auth_failed("session_revoked", actor_user_id=getattr(user, "id", None))
 
         g.current_user = user
         g.current_user_roles = role_codes

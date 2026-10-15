@@ -16,8 +16,13 @@ Operações suportadas (todas sobre `{settings.supabase_url}/auth/v1/...`):
       futuro procedimento de recuperação administrativa assistida.
     - `delete_mfa_factor`: remove um fator MFA específico de um usuário
       (procedimento de recuperação administrativa).
-    - `deactivate_user`: desativa/revoga o acesso de um usuário (bane o
-      usuário no GoTrue).
+    - `deactivate_user` / `ban_user`: desativa/revoga o acesso de um usuário
+      (bane o usuário no GoTrue); `unban_user` desfaz o banimento.
+    - `send_password_recovery`: dispara o e-mail de recuperação de senha
+      enviado PELO PRÓPRIO Supabase (`POST /auth/v1/recover`); o link nunca
+      passa por este backend.
+    - `delete_all_mfa_factors`: remove todos os fatores MFA de um usuário
+      (reset administrativo de MFA).
 
 Diferença deliberada em relação a `app.integrations.n8n_client`:
     O `N8nClient` nunca propaga exceções por padrão, pois webhooks de
@@ -66,6 +71,10 @@ _SAFE_PATH_SEGMENT_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 
 _LOCAL_DEV_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 
+# Forma mínima de e-mail aceita antes de chamar `/recover` (o e-mail vem do
+# banco local, nunca do cliente; checagem defensiva de formato/tamanho).
+_EMAIL_SHAPE_RE = re.compile(r"[^@\s]{1,64}@[^@\s]{1,189}")
+
 
 def _safe_path_segment(value: Any, field_name: str) -> str:
     """Valida e codifica (`quote(safe="")`) um id usado como segmento de path."""
@@ -76,6 +85,32 @@ def _safe_path_segment(value: Any, field_name: str) -> str:
         )
         raise InvalidIdentifierError(f"Identificador '{field_name}' com formato inválido.")
     return quote(value, safe="")
+
+
+def is_safe_supabase_base_url(base: str, settings: Any) -> bool:
+    """`SUPABASE_URL` aceitável para tráfego com a Service Role Key.
+
+    A chave nunca trafega fora de HTTPS. `http://` só para localhost fora de
+    produção (Supabase CLI local). Sem credenciais embutidas, query ou
+    fragment na URL base. Reutilizada por `supabase_storage_client`.
+    """
+    try:
+        parsed = urlparse(base)
+        hostname = (parsed.hostname or "").lower()
+    except ValueError:
+        return False
+    is_production = bool(getattr(settings, "is_production", False))
+    return (
+        bool(hostname)
+        and parsed.username is None
+        and parsed.password is None
+        and not parsed.query
+        and not parsed.fragment
+        and (
+            parsed.scheme == "https"
+            or (parsed.scheme == "http" and hostname in _LOCAL_DEV_HOSTS and not is_production)
+        )
+    )
 
 
 class SupabaseAdminClientError(Exception):
@@ -94,6 +129,14 @@ class InviteRedirectNotAllowedError(SupabaseAdminClientError):
     Levantado ANTES de qualquer chamada de rede — proteção contra
     redirecionamento não autorizado após o convite.
     """
+
+
+class MfaResetIncompleteError(SupabaseAdminClientError):
+    """Remoção de fatores MFA incompleta; `removed` = quantos já foram removidos."""
+
+    def __init__(self, removed: int) -> None:
+        super().__init__("Remoção de fatores MFA incompleta.")
+        self.removed = removed
 
 
 class InvalidIdentifierError(SupabaseAdminClientError):
@@ -131,32 +174,7 @@ class SupabaseAdminClient:
             raise SupabaseAdminClientError(
                 "SUPABASE_URL não configurada; API Admin do Supabase indisponível."
             )
-        # A Service Role Key nunca trafega fora de HTTPS. `http://` só para
-        # localhost fora de produção (Supabase CLI local). Sem credenciais
-        # embutidas, query ou fragment na URL base.
-        try:
-            parsed = urlparse(base)
-            hostname = (parsed.hostname or "").lower()
-        except ValueError:
-            parsed, hostname = None, ""
-        is_production = bool(getattr(self._settings, "is_production", False))
-        valid = (
-            parsed is not None
-            and bool(hostname)
-            and parsed.username is None
-            and parsed.password is None
-            and not parsed.query
-            and not parsed.fragment
-            and (
-                parsed.scheme == "https"
-                or (
-                    parsed.scheme == "http"
-                    and hostname in _LOCAL_DEV_HOSTS
-                    and not is_production
-                )
-            )
-        )
-        if not valid:
+        if not is_safe_supabase_base_url(base, self._settings):
             logger.error(
                 "supabase_admin_client: SUPABASE_URL rejeitada (HTTPS obrigatório); "
                 "chamada à API Admin bloqueada."
@@ -186,6 +204,7 @@ class SupabaseAdminClient:
         method: str,
         path: str,
         json_body: dict[str, Any] | None = None,
+        params: dict[str, str] | None = None,
     ) -> requests.Response:
         """Executa uma requisição HTTP à API Admin, convertendo qualquer falha
         (rede, timeout, HTTP 4xx/5xx) em `SupabaseAdminClientError`.
@@ -201,6 +220,7 @@ class SupabaseAdminClient:
                 url,
                 headers=headers,
                 json=json_body,
+                params=params,
                 timeout=self._timeout_seconds,
                 # Nunca seguir redirects: `requests` remove `Authorization`
                 # ao mudar de host, mas NÃO remove o header customizado
@@ -333,3 +353,77 @@ class SupabaseAdminClient:
             f"/auth/v1/admin/users/{_safe_path_segment(auth_user_id, 'auth_user_id')}",
             json_body={"ban_duration": "876000h"},
         )
+
+    def ban_user(self, auth_user_id: str) -> None:
+        """Bane o usuário no Supabase Auth (alias explícito de `deactivate_user`)."""
+        self.deactivate_user(auth_user_id)
+
+    def unban_user(self, auth_user_id: str) -> None:
+        """Remove o banimento (`ban_duration: "none"`, valor do GoTrue para desbanir)."""
+        self._request(
+            "PUT",
+            f"/auth/v1/admin/users/{_safe_path_segment(auth_user_id, 'auth_user_id')}",
+            json_body={"ban_duration": "none"},
+        )
+
+    def send_password_recovery(self, email: str, redirect_to: str) -> None:
+        """Dispara o e-mail de recuperação de senha pelo PRÓPRIO Supabase Auth.
+
+        Usa `POST /auth/v1/recover` (o mesmo endpoint de
+        `supabase.auth.resetPasswordForEmail`): o GoTrue gera o link e envia o
+        e-mail; a resposta não contém link nem token, portanto este backend
+        nunca vê nem devolve credencial alguma (ao contrário de
+        `admin/generate_link`, que devolveria o link ao chamador).
+
+        `redirect_to` vai como query string (formato do GoTrue) e precisa estar
+        na allow-list `INVITE_ALLOWED_REDIRECT_URLS`; fora dela levanta
+        `InviteRedirectNotAllowedError` SEM chamada de rede.
+        """
+        if redirect_to not in self._settings.invite_allowed_redirect_urls_list:
+            logger.warning(
+                "supabase_admin_client: recuperação de senha com redirect_to fora da "
+                "allow-list; chamada bloqueada."
+            )
+            raise InviteRedirectNotAllowedError(
+                "A URL de redirecionamento informada não está na lista de URLs "
+                "previamente autorizadas."
+            )
+        if not isinstance(email, str) or not _EMAIL_SHAPE_RE.fullmatch(email):
+            raise SupabaseAdminClientError("E-mail inválido para recuperação de senha.")
+        self._request(
+            "POST",
+            "/auth/v1/recover",
+            json_body={"email": email},
+            params={"redirect_to": redirect_to},
+        )
+
+    def delete_all_mfa_factors(self, auth_user_id: str) -> int:
+        """Remove TODOS os fatores MFA do usuário; retorna quantos foram removidos.
+
+        UA-MFA-01: fator com `id` fora do formato seguro NÃO é ignorado em
+        silêncio — é logado (sem o id) e contado como falha. Qualquer falha
+        (id inválido, rede/HTTP no meio do processo) levanta
+        `MfaResetIncompleteError` com `removed` (quantos JÁ foram removidos),
+        para o chamador encerrar as sessões mesmo no reset parcial. A operação
+        é idempotente: repetir remove o restante.
+        """
+        factors = self.list_mfa_factors(auth_user_id)
+        removed = 0
+        failures = 0
+        for factor in factors:
+            factor_id = factor.get("id")
+            if not isinstance(factor_id, str) or not _SAFE_PATH_SEGMENT_RE.fullmatch(factor_id):
+                failures += 1
+                logger.warning(
+                    "supabase_admin_client: fator MFA com id em formato inválido; não removido "
+                    "(contado como falha)."
+                )
+                continue
+            try:
+                self.delete_mfa_factor(auth_user_id, factor_id)
+            except SupabaseAdminClientError as exc:
+                raise MfaResetIncompleteError(removed) from exc
+            removed += 1
+        if failures:
+            raise MfaResetIncompleteError(removed)
+        return removed

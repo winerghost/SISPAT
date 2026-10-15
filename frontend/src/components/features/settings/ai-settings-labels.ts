@@ -1,4 +1,5 @@
 import { ApiError } from "@/lib/api-client";
+import { formatRetryAfter, rateLimitMessage } from "@/lib/api-errors";
 import type {
   AiFeatureKey,
   AiProvider,
@@ -74,7 +75,7 @@ function commonErrorMessage(error: unknown): string | null {
   if (error.status === 0) return "Falha de rede ao comunicar com a API. Verifique sua conexão e tente novamente.";
   if (error.status === 401) return "Sessão não autenticada. Faça login novamente.";
   if (error.status === 403) return FORBIDDEN_MESSAGE;
-  if (error.status === 429) return "Muitas tentativas em pouco tempo. Aguarde e tente novamente.";
+  if (error.status === 429) return rateLimitMessage(error);
   return null;
 }
 
@@ -97,7 +98,7 @@ export function saveErrorMessage(error: unknown): string {
 
 export function testErrorMessage(error: unknown): string {
   if (error instanceof ApiError && error.status === 429) {
-    return "Limite de testes atingido (5 por hora). Tente novamente mais tarde.";
+    return `Limite de testes atingido (5 por hora). Aguarde ${formatRetryAfter(error.retryAfterSeconds)} e tente novamente.`;
   }
   return commonErrorMessage(error) ?? "Não foi possível testar a conexão agora. Tente novamente.";
 }

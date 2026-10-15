@@ -182,9 +182,12 @@ CI: `.github/workflows/ci.yml` (sem deploy) + `.github/dependabot.yml`.
 
 ### Estado do banco de produção (Supabase `tocbtonqnahmtegfkrmn`, 2026-10-14)
 
-- Alembic aplicado até `0004_db_security_hardening`.
-- `0005_settings_ai_users` **ainda NÃO aplicada** (pendente de autorização);
-  deve ser testada antes num branch do Supabase.
+- Alembic aplicado até `0005_settings_ai_users` (verificado em 2026-10-14:
+  colunas novas de `users`, `ai_settings`/`user_preferences` com RLS e sem grants
+  para `anon`/`authenticated`, IA desligada).
+- `migrations/sql/0008_storage_avatars.sql` (bucket privado `avatars` do Storage)
+  **NÃO aplicado**; requer autorização. Sem ele, as rotas de foto respondem 503
+  `storage_unavailable` e o resto do sistema segue normal.
 - Seeds SQL `0002` (roles/permissions) e `0005` (permissões de gestão de
   usuários/segurança) aplicados.
 - Primeiro ADM criado por bootstrap (Supabase Auth + `users` + `user_roles` +
@@ -203,6 +206,18 @@ históricos de migração: `docs/database/historico-migracoes.md`.
 3. Vincular o papel ADM em `user_roles` e as unidades em `user_unit_access`.
 4. Registrar o evento `BOOTSTRAP_FIRST_ADMIN` em `audit_logs`.
 5. No primeiro login, cadastrar o MFA (TOTP); rotas administrativas exigem AAL2.
+   A própria tela de login tem a etapa **"enroll"**: se o usuário exige MFA e
+   não tem fator verificado, exibe QR code e chave manual, pede o código de 6
+   dígitos e só então segue para o painel (aal2 confirmado pelo `/me`). O
+   segredo/QR ficam apenas em memória; "Voltar" remove o fator pendente e
+   encerra a sessão parcial. A decisão de acesso continua no backend.
+
+### Tela de login
+
+Tela única em `app/(publico)/login` (sem sidebar/header), com logo da AGU
+centralizada sobre o painel claro do Design System, etapas
+credenciais → MFA (ou cadastro do primeiro fator) e rodapé "Acesso apenas por
+convite" (sem cadastro público nem "esqueci a senha").
 
 ### Subida local (desenvolvimento)
 
@@ -212,6 +227,33 @@ docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
 
 - Abra sempre por `http://127.0.0.1:3000` (não `localhost`).
 - `FRONTEND_MEMORY=2G` é somente para dev; **nunca** em produção.
+
+## Gestão de usuários
+
+Tela **Administração → Usuários** (ADM com MFA/AAL2) e **Configurações → Perfil**
+(qualquer usuário). Contrato em
+[`docs/architecture/modulo-configuracoes.md`](./docs/architecture/modulo-configuracoes.md)
+(Etapa 2).
+
+- **Lista:** busca por nome/e-mail, filtros de perfil, unidade e situação, ordenação
+  por allowlist e paginação. O ADM só vê usuários das suas unidades (e contas sem
+  unidade); alvo alheio, inexistente ou malformado → mesmo 404.
+- **Detalhe:** perfil e unidades (checkboxes), conta (desativar/reativar, encerrar
+  sessões, e-mail de redefinição de senha, reset de MFA), foto e histórico de auditoria.
+- **Regras no backend:** controle otimista (`version`), sem auto-alteração, nunca
+  remove o último ADM, promover/rebaixar ADM exige confirmação. Mudanças de privilégio,
+  desativar ADM e reset de MFA exigem que **todas** as unidades do alvo estejam no
+  escopo de quem executa (`target_out_of_scope`).
+- **Sessões:** "encerrar sessões", desativar e reset de MFA gravam
+  `users.sessions_revoked_at`; o backend recusa JWTs emitidos antes disso.
+- **Reset de MFA:** exige que o ADM tenha confirmado o TOTP há no máximo 5 minutos
+  (claim `amr`; validar o formato num projeto de homologação).
+- **Redefinição de senha:** `PASSWORD_RESET_REDIRECT_URL` deve estar em
+  `INVITE_ALLOWED_REDIRECT_URLS`; o ADM nunca vê link nem senha.
+- **Foto:** até 2 MiB, JPEG/PNG/WebP validados pelos bytes, recodificada para WebP
+  512×512 sem metadados (Pillow), guardada no bucket privado `avatars` e exibida por
+  URL assinada de 5 min. No Nginx, só as rotas de foto aceitam `client_max_body_size 3m`
+  (`infra/cloudpanel/vhost.conf.example`).
 
 ## Inteligência Artificial (opcional, desligada por padrão)
 

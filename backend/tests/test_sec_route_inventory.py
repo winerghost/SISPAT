@@ -19,9 +19,8 @@ Como funciona:
 Allowlist pública (justificativa, revisar a cada rota nova):
     - GET/HEAD /api/health e /api/v1/health: healthcheck do Docker/CloudPanel;
       resposta fixa `{"status":"ok"}` ou 503 genérico, sem dados.
-    - GET/HEAD /static/<path:filename>: rota criada IMPLICITAMENTE pelo Flask
-      (`static_folder` padrão). `backend/app/static` não existe, logo responde
-      404; mesmo assim é superfície desnecessária numa API (PREDEPLOY-07,
+    - (removida) /static/<path:filename>: a rota implícita do Flask foi
+      eliminada com `Flask(__name__, static_folder=None)` (PREDEPLOY-07/B-4,
       ver `test_api_nao_registra_rota_static`).
 
 Tokens: JWT sintéticos assinados com o segredo FICTÍCIO de `tests/conftest.py`
@@ -61,8 +60,6 @@ PUBLIC_ALLOWLIST: dict[tuple[str, str], str] = {
     ("/api/health", "HEAD"): "healthcheck legado (Dockerfile/compose)",
     ("/api/v1/health", "GET"): "healthcheck versionado",
     ("/api/v1/health", "HEAD"): "healthcheck versionado",
-    ("/static/<path:filename>", "GET"): "implícita do Flask; sem pasta -> 404 (PREDEPLOY-07)",
-    ("/static/<path:filename>", "HEAD"): "implícita do Flask; sem pasta -> 404 (PREDEPLOY-07)",
 }
 
 AUTH = "auth"  # só exige usuário autenticado e ativo (por design)
@@ -86,6 +83,30 @@ EXPECTED_POLICY: dict[tuple[str, str], tuple[str, str | None]] = {
     ("/api/v1/settings/ai", "HEAD"): (ADMIN, "settings.ai.manage"),
     ("/api/v1/settings/ai", "PATCH"): (ADMIN, "settings.ai.manage"),
     ("/api/v1/settings/ai/test", "POST"): (ADMIN, "settings.ai.manage"),
+    ("/api/v1/settings/email/test", "POST"): (ADMIN, "settings.email.manage"),
+    ("/api/v1/security/mfa/factor-added-notice", "POST"): (AUTH, None),
+    # --- Gestão de usuários (Etapa 2) ---
+    ("/api/v1/me/avatar", "PUT"): (AUTH, None),
+    ("/api/v1/me/avatar", "DELETE"): (AUTH, None),
+    ("/api/v1/me/avatar-url", "GET"): (AUTH, None),
+    ("/api/v1/me/avatar-url", "HEAD"): (AUTH, None),
+    ("/api/v1/units", "GET"): (ADMIN, "users.manage"),
+    ("/api/v1/units", "HEAD"): (ADMIN, "users.manage"),
+    ("/api/v1/users/<uuid:user_id>", "GET"): (ADMIN, "users.manage"),
+    ("/api/v1/users/<uuid:user_id>", "HEAD"): (ADMIN, "users.manage"),
+    # PATCH: users.manage no decorator + users.assign_role/assign_unit por campo.
+    ("/api/v1/users/<uuid:user_id>", "PATCH"): (ADMIN, "users.manage"),
+    ("/api/v1/users/<uuid:user_id>/deactivate", "POST"): (ADMIN, "users.deactivate"),
+    ("/api/v1/users/<uuid:user_id>/activate", "POST"): (ADMIN, "users.activate"),
+    ("/api/v1/users/<uuid:user_id>/revoke-sessions", "POST"): (ADMIN, "users.revoke_sessions"),
+    ("/api/v1/users/<uuid:user_id>/password-reset", "POST"): (ADMIN, "users.reset_password"),
+    ("/api/v1/users/<uuid:user_id>/mfa-reset", "POST"): (ADMIN, "users.reset_mfa"),
+    ("/api/v1/users/<uuid:user_id>/audit", "GET"): (ADMIN, "audit.read"),
+    ("/api/v1/users/<uuid:user_id>/audit", "HEAD"): (ADMIN, "audit.read"),
+    ("/api/v1/users/<uuid:user_id>/avatar", "PUT"): (ADMIN, "users.avatar.manage"),
+    ("/api/v1/users/<uuid:user_id>/avatar", "DELETE"): (ADMIN, "users.avatar.manage"),
+    ("/api/v1/users/<uuid:user_id>/avatar-url", "GET"): (ADMIN, "users.manage"),
+    ("/api/v1/users/<uuid:user_id>/avatar-url", "HEAD"): (ADMIN, "users.manage"),
 }
 
 ALL_PERMISSIONS = {perm for _, perm in EXPECTED_POLICY.values() if perm} | {
@@ -93,6 +114,11 @@ ALL_PERMISSIONS = {perm for _, perm in EXPECTED_POLICY.values() if perm} | {
     "users.assign_role",
     "users.assign_unit",
     "audit.read",
+    "users.activate",
+    "users.reset_password",
+    "users.reset_mfa",
+    "users.revoke_sessions",
+    "users.avatar.manage",
 }
 
 _CONVERTER_RE = re.compile(r"<(?:(?P<conv>[a-zA-Z_][a-zA-Z0-9_]*)(?:\([^)]*\))?:)?(?P<name>[a-zA-Z_][a-zA-Z0-9_]*)>")
@@ -461,9 +487,8 @@ def test_rotas_publicas_nao_retornam_dados(guarded):
     assert response.status_code == 404
 
 
-@pytest.mark.xfail(strict=True, reason="PREDEPLOY-07: Flask registra /static/<path> numa API JSON")
 def test_api_nao_registra_rota_static():
-    """Correção sugerida: `Flask(__name__, static_folder=None)` em `app/__init__.py`."""
+    """PREDEPLOY-07/B-4 corrigido: `Flask(__name__, static_folder=None)`."""
     app = create_app()
     assert not any(rule.rule.startswith("/static") for rule in app.url_map.iter_rules())
 

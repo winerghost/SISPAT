@@ -45,6 +45,7 @@ nunca uma conexão Redis real.
 from __future__ import annotations
 
 import logging
+import threading
 from functools import wraps
 from typing import Any, Callable, TypeVar
 
@@ -60,8 +61,34 @@ F = TypeVar("F", bound=Callable[..., Any])
 _RATE_LIMIT_KEY_PREFIX = "sispat:ratelimit"
 
 
+_client_lock = threading.Lock()
+# url -> (fábrica usada, cliente). Guardar a fábrica (`redis.Redis.from_url`)
+# invalida o cache quando ela é substituída (patch nos testes) e evita que um
+# mock de um teste vaze para outro.
+_client_cache: dict[str, tuple[Any, redis.Redis]] = {}
+
+
 def _build_redis_client(redis_url: str) -> redis.Redis:
-    return redis.Redis.from_url(redis_url)
+    """Cliente Redis REUTILIZADO por URL (B-7: um pool por processo, não por requisição).
+
+    `Redis.from_url` não conecta; o pool abre conexões sob demanda e as
+    reabre após queda. Erros continuam saindo como `RedisError` na chamada
+    (`incr`), logo o comportamento fail-closed do `rate_limit` não muda.
+    """
+    factory = redis.Redis.from_url
+    with _client_lock:
+        cached = _client_cache.get(redis_url)
+        if cached is not None and cached[0] == factory:
+            return cached[1]
+        client = factory(redis_url)
+        _client_cache[redis_url] = (factory, client)
+        return client
+
+
+def reset_redis_client_cache() -> None:
+    """Descarta os clientes em cache (testes / recarga de configuração)."""
+    with _client_lock:
+        _client_cache.clear()
 
 
 def rate_limit(

@@ -18,7 +18,8 @@ export default function PublicLayout({ children }: { children: ReactNode }) {
 
   return (
     <div className="flex min-h-dvh w-full flex-col bg-obsidian-canvas">
-      <header className="mx-auto flex w-full max-w-[1200px] flex-wrap items-center justify-between gap-4 p-4 sm:px-8 sm:pt-8">
+      {/* Marca centralizada (logo sobre painel claro + nome do sistema). */}
+      <header className="mx-auto flex w-full max-w-[1200px] flex-col items-center gap-3 px-4 pt-4 sm:px-8 sm:pt-8">
         <AguLogo />
         <span className="text-eyebrow text-pale-stone">SISPAT-AGU</span>
       </header>

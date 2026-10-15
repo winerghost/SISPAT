@@ -70,6 +70,7 @@ restrito (unidade e/ou campo — ver coluna "Escopo").
 | Gerenciar perfis e permissões | `roles.manage` | `✔` | `—` | `—` | Global. |
 | Gerenciar integrações | `integrations.manage` | `✔` | `—` | `—` | Global (n8n, credenciais de integração com Google Sheets). |
 | Configurações de sistema | `system.manage` | `✔` | `—` | `—` | Global. |
+| Gerenciar/testar configuração de e-mail (SMTP) | `settings.email.manage` | `✔` | `—` | `—` | Global; exige AAL2; teste limitado a 3/h por ADM. Semeada pela migração Alembic `0006_email_settings_permission` (espelho `sql/0009`), somente ADM. |
 
 ## 3. Mapeamento perfil → permissões (seed inicial de `role_permissions`)
 

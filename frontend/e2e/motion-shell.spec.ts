@@ -240,6 +240,8 @@ test.describe("navegação por perfil (UX — backend continua autorizando)", ()
       const settingsGroup = nav.getByRole("button", { name: "Configurações" });
       await settingsGroup.click();
       await expect(settingsGroup).toHaveAttribute("aria-expanded", "true");
+      // "Perfil" (Meu perfil/foto) é para todos os perfis.
+      await expect(nav.getByRole("link", { name: "Perfil", exact: true })).toBeVisible();
       await expect(nav.getByRole("link", { name: "Segurança" })).toBeVisible();
       await expect(nav.getByRole("link", { name: "Inteligência Artificial" })).toHaveCount(role === "ADM" ? 1 : 0);
       await expect(nav.getByRole("link", { name: "Aparência" })).toHaveCount(0);
@@ -251,6 +253,7 @@ test.describe("navegação por perfil (UX — backend continua autorizando)", ()
       await expect(drawer.getByRole("link", { name: "Patrimônios" })).toBeVisible();
       await expect(drawer.getByRole("button", { name: "Administração" })).toHaveCount(role === "ADM" ? 1 : 0);
       await drawer.getByRole("button", { name: "Configurações" }).click();
+      await expect(drawer.getByRole("link", { name: "Perfil", exact: true })).toBeVisible();
       await expect(drawer.getByRole("link", { name: "Segurança" })).toBeVisible();
       await expect(drawer.getByRole("link", { name: "Inteligência Artificial" })).toHaveCount(role === "ADM" ? 1 : 0);
     });

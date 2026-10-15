@@ -12,8 +12,15 @@ Endpoints deste módulo:
     - `POST /api/v1/users/<user_id>/revoke`: revoga todo o acesso
       operacional de um usuário (`ADM` + AAL2 + permissão granular
       `users.revoke_access`).
-    - `GET /api/v1/users`: lista usuários e seus papéis atuais (`ADM` + AAL2 +
-      permissão granular `users.manage`).
+    - Gestão de usuários (Etapa 2, contrato em
+      `docs/architecture/modulo-configuracoes.md`; regra em
+      `app.services.user_admin_service`): `GET /users`, `GET/PATCH
+      /users/<id>`, `POST /users/<id>/{deactivate,activate,revoke-sessions,
+      password-reset,mfa-reset}`, `GET /users/<id>/audit`,
+      `PUT/DELETE /users/<id>/avatar` e `GET /users/<id>/avatar-url`.
+      Todas: `require_auth -> require_role("ADM") -> require_aal2 ->
+      require_permission(...) -> rate_limit` (fail-closed). Alvo fora do
+      escopo de unidade, inexistente ou malformado => o MESMO 404 `not_found`.
 
 Nenhum detalhe interno (de `InviteServiceError`, de exceções do
 SQLAlchemy, etc.) é exposto ao cliente -- toda resposta de erro usa
@@ -58,10 +65,33 @@ from typing import Any
 
 from flask import Blueprint, abort, g, jsonify, request
 from sqlalchemy import func, or_
-from sqlalchemy.orm import selectinload
+from werkzeug.exceptions import BadRequest
 
-from app.api.v1.schemas import InviteRequest, RevokeRequest, parse_body, reject_unexpected_fields
-from app.auth.supabase_auth import require_auth
+from app.api.v1.schemas import (
+    DeactivateRequest,
+    InviteRequest,
+    PageQuery,
+    RevokeRequest,
+    UserListQuery,
+    UserUpdateRequest,
+    VersionRequest,
+    parse_body,
+    parse_query,
+    reject_unexpected_fields,
+)
+from app.api.v1.user_admin_http import (
+    StorageUnavailableError,
+    admin_rate_limit_key,
+    avatar_error_response,
+    error_response,
+    read_avatar_upload,
+    reject_any_body,
+    service_error_response,
+    storage_unavailable_response,
+    make_target_quota,
+    validation_error,
+)
+from app.auth.supabase_auth import has_recent_totp, require_auth
 from app.authorization.rbac import (
     get_accessible_unit_ids,
     require_aal2,
@@ -70,21 +100,29 @@ from app.authorization.rbac import (
     units_outside_scope,
 )
 from app.authorization.security_events import (
+    EVENT_ACCESS_DENIED,
     EVENT_INVITE_ACTIVATION_FAILED,
     EVENT_PRIVILEGE_ESCALATION_ATTEMPT,
+    EVENT_REAUTH_REQUIRED,
     EVENT_REVOKE_BLOCKED,
     EVENT_UNIT_SCOPE_DENIED,
     EVENT_USER_ACCESS_REVOKED,
+    EVENT_USER_MFA_RESET,
+    EVENT_USER_PRIVILEGE_CHANGED,
+    EVENT_USER_PROVIDER_SYNC_FAILED,
     SEVERITY_HIGH,
     SEVERITY_LOW,
     SEVERITY_MEDIUM,
+    get_request_id,
     record_security_event,
 )
 from app.database.session import get_db_session
 from app.integrations.supabase_admin_client import SupabaseAdminClient
+from app.integrations.supabase_storage_client import SupabaseStorageClient
 from app.models.invites import Invite, InviteUnit
-from app.models.rbac import User, UserRole
+from app.models.rbac import User
 from app.security.rate_limit import rate_limit
+from app.services.avatar_service import AvatarError, process_avatar
 from app.services.invite_service import (
     InviteAlreadyPendingError,
     InviteExpiredError,
@@ -95,14 +133,30 @@ from app.services.invite_service import (
     LastAdminError,
     UserNotFoundError,
 )
+from app.services.user_admin_service import (
+    SelfChangeForbiddenError,
+    UserAdminError,
+    UserAdminService,
+)
 
 logger = logging.getLogger(__name__)
 
 users_bp = Blueprint("users", __name__, url_prefix="/users")
 
-_MAX_PAGE_SIZE = 100
-_MAX_PAGE = 100_000
-_DEFAULT_PAGE_SIZE = 25
+# Gestão de usuários (Etapa 2): limites por ADM/hora (fail-closed).
+_WINDOW = 3600
+_READ_LIMIT = 600
+_LIST_LIMIT = 1200  # busca/filtros da tela (digitação)
+_AUDIT_LIMIT = 300
+_PATCH_LIMIT = 60
+_ACCOUNT_ACTION_LIMIT = 30
+_PASSWORD_RESET_PER_ADMIN = 20
+_PASSWORD_RESET_PER_TARGET = 5
+_MFA_RESET_LIMIT = 10
+_AVATAR_WRITE_LIMIT = 30
+
+# Reautenticação do reset de MFA: TOTP verificado na sessão há <= 5 min.
+_REAUTH_MAX_AGE_SECONDS = 300
 
 # Limite de tentativas de convite: 10 convites/hora por usuário
 # administrador (ver `app.security.rate_limit`). `fail_open=False`
@@ -123,7 +177,9 @@ _INVITABLE_ROLE_CODES = ("USER", "RH")
 # Revogação: 10/hora por ADM, fail-closed (coerente com o convite).
 _REVOKE_RATE_LIMIT_PER_HOUR = 10
 _REVOKE_RATE_LIMIT_WINDOW_SECONDS = 3600
-_REVOKE_TARGET_NOT_FOUND_MESSAGE = "Usuário não encontrado."
+# Mesma mensagem do 404 padrão (rota com UUID malformado): alvo inexistente,
+# alheio e malformado têm corpo idêntico.
+_REVOKE_TARGET_NOT_FOUND_MESSAGE = "Recurso não encontrado."
 
 _UNIT_SCOPE_DENIED_MESSAGE = (
     "Você não possui acesso administrativo a uma ou mais unidades informadas."
@@ -156,23 +212,6 @@ def _serialize_invite(invite: Any, unit_ids: list[uuid.UUID]) -> dict[str, Any]:
         "unit_ids": [str(uid) for uid in unit_ids],
         "created_at": invite.created_at.isoformat(),
         "expires_at": invite.expires_at.isoformat(),
-    }
-
-
-def _serialize_user(user: User) -> dict[str, Any]:
-    role_codes = sorted(
-        {
-            user_role.role.code
-            for user_role in user.role_links
-            if user_role.role is not None and user_role.role.active
-        }
-    )
-    return {
-        "id": str(user.id),
-        "name": user.name,
-        "email": user.email,
-        "active": user.active,
-        "roles": role_codes,
     }
 
 
@@ -334,11 +373,15 @@ def _target_unit_ids(db: Any, target_id: uuid.UUID) -> set[uuid.UUID]:
     """
     units = set(get_accessible_unit_ids(target_id, db))
     target = db.query(User).filter(User.id == target_id).first()
-    if target is None:
-        return units
-    filters = [func.lower(Invite.email) == (target.email or "").strip().lower()]
-    if getattr(target, "auth_user_id", None):
-        filters.append(Invite.invited_auth_user_id == target.auth_user_id)
+    # AUD-14-07: a consulta de convites roda SEMPRE (alvo inexistente usa
+    # valores que não casam com nada), para que alvo alheio e inexistente
+    # executem o mesmo número de consultas (sem oráculo de tempo).
+    email = (target.email or "").strip().lower() if target is not None else ""
+    auth_user_id = (getattr(target, "auth_user_id", None) or "") if target is not None else ""
+    filters = [
+        func.lower(Invite.email) == email,
+        Invite.invited_auth_user_id == auth_user_id,
+    ]
     rows = (
         db.query(InviteUnit.unit_id)
         .join(Invite, Invite.id == InviteUnit.invite_id)
@@ -454,48 +497,337 @@ def revoke_user_access_endpoint(user_id: uuid.UUID):
     return jsonify({"status": "revoked", "user_id": str(user_id)}), 200
 
 
+# ---------------------------------------------------------------------------
+# Gestão de usuários (Etapa 2) — rotas finas sobre `UserAdminService`
+# ---------------------------------------------------------------------------
+
+
+def _service(db: Any, *, storage: bool = False) -> UserAdminService:
+    return UserAdminService(
+        db,
+        admin_client=SupabaseAdminClient(),
+        storage=SupabaseStorageClient() if storage else None,
+        request_id=get_request_id(),
+    )
+
+
+def _deny_missing_field_permission(actor: Any, permission: str):
+    record_security_event(
+        EVENT_ACCESS_DENIED,
+        severity=SEVERITY_MEDIUM,
+        actor_user_id=actor.id,
+        details={"reason": "missing_permission", "required": permission},
+    )
+    return error_response(403, "forbidden", "Acesso negado.")
+
+
 @users_bp.route("", methods=["GET"])
 @require_auth
 @require_role("ADM")
 @require_aal2
 @require_permission("users.manage")
+@rate_limit(admin_rate_limit_key, limit=_LIST_LIMIT, window_seconds=_WINDOW)
 def list_users_endpoint():
-    """`GET /api/v1/users` -- lista usuários e seus papéis atuais, paginado.
-
-    Exige `ADM` + AAL2 + `users.manage` (lista dados pessoais -- e-mails --
-    de todas as contas; operação administrativa crítica).
-
-    Query params: `page` (default 1), `page_size` (default 25, máximo 100).
-    """
+    """`GET /api/v1/users` — busca/filtros/ordenação por allowlist, com escopo."""
     try:
-        page = int(request.args.get("page", 1))
-    except (TypeError, ValueError):
-        abort(400, description="Parâmetro 'page' deve ser um número inteiro.")
-        raise AssertionError("inalcançável")  # pragma: no cover
-    try:
-        page_size = int(request.args.get("page_size", _DEFAULT_PAGE_SIZE))
-    except (TypeError, ValueError):
-        abort(400, description="Parâmetro 'page_size' deve ser um número inteiro.")
-        raise AssertionError("inalcançável")  # pragma: no cover
-
-    page = min(max(page, 1), _MAX_PAGE)
-    page_size = max(1, min(page_size, _MAX_PAGE_SIZE))
-
+        query = parse_query(UserListQuery, request.args, context="users.list")
+    except BadRequest as exc:
+        return validation_error(exc)
     with get_db_session() as db:
-        total = db.query(User).count()
-        users = (
-            db.query(User)
-            .options(selectinload(User.role_links).selectinload(UserRole.role))
-            .order_by(User.name.asc())
-            .offset((page - 1) * page_size)
-            .limit(page_size)
-            .all()
-        )
-        payload = {
-            "total": total,
-            "page": page,
-            "page_size": page_size,
-            "users": [_serialize_user(user) for user in users],
-        }
+        payload = _service(db).list_users(g.current_user.id, query)
+    return jsonify(payload), 200
 
+
+@users_bp.route("/<uuid:user_id>", methods=["GET"])
+@require_auth
+@require_role("ADM")
+@require_aal2
+@require_permission("users.manage")
+@rate_limit(admin_rate_limit_key, limit=_READ_LIMIT, window_seconds=_WINDOW)
+def get_user_endpoint(user_id: uuid.UUID):
+    actor = g.current_user
+    try:
+        with get_db_session() as db:
+            payload = _service(db).get_user(actor.id, user_id)
+    except UserAdminError as exc:
+        return service_error_response(exc, actor_id=actor.id, target_id=user_id, context="users.get")
+    return jsonify(payload), 200
+
+
+@users_bp.route("/<uuid:user_id>", methods=["PATCH"])
+@require_auth
+@require_role("ADM")
+@require_aal2
+@require_permission("users.manage")
+@rate_limit(admin_rate_limit_key, limit=_PATCH_LIMIT, window_seconds=_WINDOW)
+def update_user_endpoint(user_id: uuid.UUID):
+    """`PATCH /api/v1/users/<id>` — perfil (`users.assign_role`) e/ou
+    unidades (`users.assign_unit`); a permissão de cada campo é checada
+    ANTES de tocar o banco (além de `users.manage`, exigida no decorator)."""
+    try:
+        body = parse_body(UserUpdateRequest, request.get_json(silent=True), context="users.update")
+    except BadRequest as exc:
+        return validation_error(exc)
+    actor = g.current_user
+    permissions = getattr(g, "current_user_permissions", set())
+    if body.role is not None and "users.assign_role" not in permissions:
+        return _deny_missing_field_permission(actor, "users.assign_role")
+    if body.unit_ids is not None and "users.assign_unit" not in permissions:
+        return _deny_missing_field_permission(actor, "users.assign_unit")
+    try:
+        with get_db_session() as db:
+            result = _service(db).update_user(actor.id, user_id, body)
+    except UserAdminError as exc:
+        return service_error_response(exc, actor_id=actor.id, target_id=user_id, context="users.update")
+    if result.privilege_changed:
+        record_security_event(
+            EVENT_USER_PRIVILEGE_CHANGED,
+            severity=SEVERITY_HIGH,
+            actor_user_id=actor.id,
+            target_type="user",
+            target_id=user_id,
+            details={"from": result.previous_role, "to": result.new_role},
+            result="SUCESSO",
+        )
+    return jsonify(result.summary), 200
+
+
+@users_bp.route("/<uuid:user_id>/deactivate", methods=["POST"])
+@require_auth
+@require_role("ADM")
+@require_aal2
+@require_permission("users.deactivate")
+@rate_limit(admin_rate_limit_key, limit=_ACCOUNT_ACTION_LIMIT, window_seconds=_WINDOW)
+def deactivate_user_endpoint(user_id: uuid.UUID):
+    try:
+        body = parse_body(DeactivateRequest, request.get_json(silent=True), context="users.deactivate")
+    except BadRequest as exc:
+        return validation_error(exc)
+    actor = g.current_user
+    try:
+        with get_db_session() as db:
+            result = _service(db).deactivate(actor.id, user_id, body.version, body.reason or None)
+    except UserAdminError as exc:
+        return service_error_response(
+            exc, actor_id=actor.id, target_id=user_id, context="users.deactivate"
+        )
+    if result.changed and not result.provider_synced:
+        record_security_event(
+            EVENT_USER_PROVIDER_SYNC_FAILED,
+            severity=SEVERITY_MEDIUM,
+            actor_user_id=actor.id,
+            target_type="user",
+            target_id=user_id,
+            details={"operation": "ban"},
+        )
+    return jsonify(result.summary), 200
+
+
+@users_bp.route("/<uuid:user_id>/activate", methods=["POST"])
+@require_auth
+@require_role("ADM")
+@require_aal2
+@require_permission("users.activate")
+@rate_limit(admin_rate_limit_key, limit=_ACCOUNT_ACTION_LIMIT, window_seconds=_WINDOW)
+def activate_user_endpoint(user_id: uuid.UUID):
+    try:
+        body = parse_body(VersionRequest, request.get_json(silent=True), context="users.activate")
+    except BadRequest as exc:
+        return validation_error(exc)
+    actor = g.current_user
+    try:
+        with get_db_session() as db:
+            result = _service(db).activate(actor.id, user_id, body.version)
+    except UserAdminError as exc:
+        return service_error_response(exc, actor_id=actor.id, target_id=user_id, context="users.activate")
+    return jsonify(result.summary), 200
+
+
+@users_bp.route("/<uuid:user_id>/revoke-sessions", methods=["POST"])
+@require_auth
+@require_role("ADM")
+@require_aal2
+@require_permission("users.revoke_sessions")
+@rate_limit(admin_rate_limit_key, limit=_ACCOUNT_ACTION_LIMIT, window_seconds=_WINDOW)
+def revoke_sessions_endpoint(user_id: uuid.UUID):
+    rejected = reject_any_body("users.revoke_sessions")
+    if rejected is not None:
+        return rejected
+    actor = g.current_user
+    try:
+        with get_db_session() as db:
+            payload = _service(db).revoke_sessions(actor.id, user_id)
+    except UserAdminError as exc:
+        return service_error_response(
+            exc, actor_id=actor.id, target_id=user_id, context="users.revoke_sessions"
+        )
+    return jsonify(payload), 200
+
+
+@users_bp.route("/<uuid:user_id>/password-reset", methods=["POST"])
+@require_auth
+@require_role("ADM")
+@require_aal2
+@require_permission("users.reset_password")
+@rate_limit(admin_rate_limit_key, limit=_PASSWORD_RESET_PER_ADMIN, window_seconds=_WINDOW)
+def password_reset_endpoint(user_id: uuid.UUID):
+    """E-mail de recuperação enviado pelo Supabase; o ADM nunca vê link/senha.
+
+    Limite de 5/h por ALVO consumido no serviço só depois do escopo (UA-RL-01).
+    """
+    rejected = reject_any_body("users.password_reset")
+    if rejected is not None:
+        return rejected
+    actor = g.current_user
+    try:
+        with get_db_session() as db:
+            payload = _service(db).send_password_reset(
+                actor.id,
+                user_id,
+                consume_target_quota=make_target_quota(
+                    "password_reset",
+                    user_id,
+                    limit=_PASSWORD_RESET_PER_TARGET,
+                    window_seconds=_WINDOW,
+                ),
+            )
+    except UserAdminError as exc:
+        return service_error_response(
+            exc, actor_id=actor.id, target_id=user_id, context="users.password_reset"
+        )
+    return jsonify(payload), 200
+
+
+@users_bp.route("/<uuid:user_id>/mfa-reset", methods=["POST"])
+@require_auth
+@require_role("ADM")
+@require_aal2
+@require_permission("users.reset_mfa")
+@rate_limit(admin_rate_limit_key, limit=_MFA_RESET_LIMIT, window_seconds=_WINDOW)
+def mfa_reset_endpoint(user_id: uuid.UUID):
+    """Remove todos os fatores MFA do alvo. Exige reautenticação: a sessão do
+    ADM precisa ter verificado TOTP há <= 5 min (claim `amr`, ver
+    `app.auth.supabase_auth.has_recent_totp`)."""
+    rejected = reject_any_body("users.mfa_reset")
+    if rejected is not None:
+        return rejected
+    actor = g.current_user
+    if user_id == actor.id:
+        return service_error_response(
+            SelfChangeForbiddenError(), actor_id=actor.id, target_id=user_id, context="users.mfa_reset"
+        )
+    claims = getattr(g, "current_user_claims", None) or {}
+    if not has_recent_totp(claims, max_age_seconds=_REAUTH_MAX_AGE_SECONDS):
+        record_security_event(
+            EVENT_REAUTH_REQUIRED,
+            severity=SEVERITY_MEDIUM,
+            actor_user_id=actor.id,
+            target_type="user",
+            target_id=user_id,
+            details={"context": "users.mfa_reset"},
+        )
+        return error_response(
+            403,
+            "REAUTH_REQUIRED",
+            "Confirme sua identidade com o código do autenticador (TOTP) e tente novamente.",
+        )
+    try:
+        with get_db_session() as db:
+            payload = _service(db).reset_mfa(actor.id, user_id)
+    except UserAdminError as exc:
+        return service_error_response(exc, actor_id=actor.id, target_id=user_id, context="users.mfa_reset")
+    record_security_event(
+        EVENT_USER_MFA_RESET,
+        severity=SEVERITY_HIGH,
+        actor_user_id=actor.id,
+        target_type="user",
+        target_id=user_id,
+        details={"removed_factors": payload["removed_factors"]},
+        result="SUCESSO",
+    )
+    return jsonify(payload), 200
+
+
+@users_bp.route("/<uuid:user_id>/audit", methods=["GET"])
+@require_auth
+@require_role("ADM")
+@require_aal2
+@require_permission("audit.read")
+@rate_limit(admin_rate_limit_key, limit=_AUDIT_LIMIT, window_seconds=_WINDOW)
+def user_audit_endpoint(user_id: uuid.UUID):
+    try:
+        query = parse_query(PageQuery, request.args, context="users.audit")
+    except BadRequest as exc:
+        return validation_error(exc)
+    actor = g.current_user
+    try:
+        with get_db_session() as db:
+            payload = _service(db).audit_history(actor.id, user_id, query.page, query.page_size)
+    except UserAdminError as exc:
+        return service_error_response(exc, actor_id=actor.id, target_id=user_id, context="users.audit")
+    return jsonify(payload), 200
+
+
+@users_bp.route("/<uuid:user_id>/avatar", methods=["PUT"])
+@require_auth
+@require_role("ADM")
+@require_aal2
+@require_permission("users.avatar.manage")
+@rate_limit(admin_rate_limit_key, limit=_AVATAR_WRITE_LIMIT, window_seconds=_WINDOW)
+def put_user_avatar_endpoint(user_id: uuid.UUID):
+    try:
+        webp = process_avatar(read_avatar_upload())
+    except AvatarError as exc:
+        return avatar_error_response(exc)
+    except BadRequest as exc:
+        return validation_error(exc)
+    actor = g.current_user
+    try:
+        with get_db_session() as db:
+            payload = _service(db, storage=True).set_avatar(actor.id, user_id, webp)
+    except UserAdminError as exc:
+        return service_error_response(exc, actor_id=actor.id, target_id=user_id, context="users.avatar")
+    except StorageUnavailableError:
+        return storage_unavailable_response()
+    return jsonify(payload), 200
+
+
+@users_bp.route("/<uuid:user_id>/avatar", methods=["DELETE"])
+@require_auth
+@require_role("ADM")
+@require_aal2
+@require_permission("users.avatar.manage")
+@rate_limit(admin_rate_limit_key, limit=_AVATAR_WRITE_LIMIT, window_seconds=_WINDOW)
+def delete_user_avatar_endpoint(user_id: uuid.UUID):
+    rejected = reject_any_body("users.avatar.delete")
+    if rejected is not None:
+        return rejected
+    actor = g.current_user
+    try:
+        with get_db_session() as db:
+            payload = _service(db, storage=True).remove_avatar(actor.id, user_id)
+    except UserAdminError as exc:
+        return service_error_response(exc, actor_id=actor.id, target_id=user_id, context="users.avatar")
+    except StorageUnavailableError:
+        return storage_unavailable_response()
+    return jsonify(payload), 200
+
+
+@users_bp.route("/<uuid:user_id>/avatar-url", methods=["GET"])
+@require_auth
+@require_role("ADM")
+@require_aal2
+@require_permission("users.manage")
+@rate_limit(admin_rate_limit_key, limit=_READ_LIMIT, window_seconds=_WINDOW)
+def user_avatar_url_endpoint(user_id: uuid.UUID):
+    actor = g.current_user
+    try:
+        with get_db_session() as db:
+            payload = _service(db, storage=True).avatar_url(actor.id, user_id)
+    except UserAdminError as exc:
+        return service_error_response(
+            exc, actor_id=actor.id, target_id=user_id, context="users.avatar_url"
+        )
+    except StorageUnavailableError:
+        return storage_unavailable_response()
     return jsonify(payload), 200

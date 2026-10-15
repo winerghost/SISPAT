@@ -16,9 +16,9 @@
 //     ser liberada (precisa de `current_aal === 'aal2'` quando
 //     `mfa_required` for `true`).
 //
-// `apiClient` (ver `@/lib/api-client`) agora anexa o header Authorization
-// automaticamente; `getAuthHeaders()` é mantido para chamadas explícitas
-// (o header explícito tem precedência e é idêntico).
+// `apiClient` (ver `@/lib/api-client`) anexa o header Authorization
+// automaticamente (após conferir a origem da API); `getAuthHeaders()` é mantido
+// para chamadas explícitas (o header explícito tem precedência e é idêntico).
 //
 // IMPORTANTE: nada aqui é mecanismo de segurança — `useMe()`/
 // `isAdministrativeAreaUnlocked()` só decidem UX. A autorização (RBAC, AAL2,
@@ -47,6 +47,16 @@ export interface MeResponse {
   permissions: string[];
   current_aal: AuthenticatorAssuranceLevel;
   mfa_required: boolean;
+  /**
+   * Se o usuário tem foto de perfil (UA-FE-01). Opcional por compatibilidade
+   * com backends antigos: `undefined` é tratado como `false`.
+   */
+  has_avatar?: boolean;
+}
+
+/** Chave do cache de `/me`: só o id do usuário (`sub`), nunca o token. */
+export function meQueryKey(userId: string | null): readonly ["me", string | null] {
+  return ["me", userId];
 }
 
 /** Monta o header Authorization a partir da sessão Supabase atual, se houver. */
@@ -103,9 +113,19 @@ export function useSupabaseSession(): { session: Session | null; loading: boolea
  */
 export function useMe(): UseQueryResult<MeResponse, ApiError> {
   const { session, loading } = useSupabaseSession();
+  const queryClient = useQueryClient();
+  const userId = session?.user?.id ?? null;
+
+  // Sem sessão: descarta o cache de `/me` (identidade/permissões do usuário
+  // anterior não podem sobreviver ao logout).
+  useEffect(() => {
+    if (!loading && !session) queryClient.removeQueries({ queryKey: ["me"] });
+  }, [loading, session, queryClient]);
 
   return useQuery<MeResponse, ApiError>({
-    queryKey: ["me", session?.access_token ?? null],
+    // Chave estável por usuário (F-3): NUNCA o JWT (mudaria a cada refresh e
+    // deixaria o token no cache/devtools). `fetchMe` lê o token atual.
+    queryKey: meQueryKey(userId),
     queryFn: fetchMe,
     enabled: !loading && !!session,
     retry: false,

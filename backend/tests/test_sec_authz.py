@@ -40,6 +40,15 @@ ALL_ADMIN_PERMISSIONS = {
     "users.manage",
     "imports.execute",
     "settings.ai.manage",
+    "users.deactivate",
+    "users.activate",
+    "users.assign_role",
+    "users.assign_unit",
+    "users.revoke_sessions",
+    "users.reset_password",
+    "users.reset_mfa",
+    "users.avatar.manage",
+    "audit.read",
 }
 
 MASS_ASSIGNMENT_FIELDS = [
@@ -76,12 +85,28 @@ ADMIN_ENDPOINTS = [
     ("GET", "/api/v1/settings/ai", None, "settings.ai.manage"),
     ("PATCH", "/api/v1/settings/ai", {"version": 1}, "settings.ai.manage"),
     ("POST", "/api/v1/settings/ai/test", None, "settings.ai.manage"),
+    # Gestão de usuários (Etapa 2)
+    ("GET", "/api/v1/units", None, "users.manage"),
+    ("GET", f"/api/v1/users/{_TARGET_USER_ID}", None, "users.manage"),
+    ("PATCH", f"/api/v1/users/{_TARGET_USER_ID}", {"version": 1, "role": "USER"}, "users.manage"),
+    ("POST", f"/api/v1/users/{_TARGET_USER_ID}/deactivate", {"version": 1}, "users.deactivate"),
+    ("POST", f"/api/v1/users/{_TARGET_USER_ID}/activate", {"version": 1}, "users.activate"),
+    ("POST", f"/api/v1/users/{_TARGET_USER_ID}/revoke-sessions", None, "users.revoke_sessions"),
+    ("POST", f"/api/v1/users/{_TARGET_USER_ID}/password-reset", None, "users.reset_password"),
+    ("POST", f"/api/v1/users/{_TARGET_USER_ID}/mfa-reset", None, "users.reset_mfa"),
+    ("GET", f"/api/v1/users/{_TARGET_USER_ID}/audit", None, "audit.read"),
+    ("PUT", f"/api/v1/users/{_TARGET_USER_ID}/avatar", None, "users.avatar.manage"),
+    ("DELETE", f"/api/v1/users/{_TARGET_USER_ID}/avatar", None, "users.avatar.manage"),
+    ("GET", f"/api/v1/users/{_TARGET_USER_ID}/avatar-url", None, "users.manage"),
 ]
 
 AUTHENTICATED_ENDPOINTS = ADMIN_ENDPOINTS + [
     ("GET", "/api/v1/me", None, None),
     ("POST", "/api/v1/users/activate-invite", None, None),
     ("DELETE", f"/api/v1/security/mfa/factors/{uuid.uuid4()}", None, None),
+    ("PUT", "/api/v1/me/avatar", None, None),
+    ("DELETE", "/api/v1/me/avatar", None, None),
+    ("GET", "/api/v1/me/avatar-url", None, None),
 ]
 
 

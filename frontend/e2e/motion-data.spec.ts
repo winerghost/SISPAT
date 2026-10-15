@@ -254,10 +254,11 @@ test.describe("usuários — tabela e convite", () => {
   test("tabela: linhas, hover/foco com transição, estado ativo com ícone + texto", async ({ page }) => {
     await openAs(page, USERS_PATH);
     const rows = page.getByRole("table").locator("tbody tr");
-    await expect(rows).toHaveCount(3);
+    await expect(rows).toHaveCount(4);
     const transition = await rows.first().evaluate((el) => getComputedStyle(el).transitionProperty);
     expect(transition).toContain("background-color");
-    const ativo = rows.first().locator("td").nth(3);
+    // Colunas: Nome, E-mail, Perfil, Unidades, Status, Último acesso, Ações.
+    const ativo = rows.first().locator("td").nth(4);
     await expect(ativo).toContainText("Ativo");
     await expect(ativo.locator("svg")).toHaveCount(1);
   });
@@ -287,7 +288,7 @@ test.describe("usuários — tabela e convite", () => {
     await expect(dialog.getByLabel("Justificativa", { exact: true })).toBeVisible();
 
     await dialog.getByLabel("E-mail institucional").fill("atrasado@exemplo.invalid");
-    await dialog.getByLabel("Unidades (IDs separados por vírgula)").fill("60000000-0000-4000-8000-000000000001");
+    await dialog.getByRole("checkbox", { name: /PSU-TO/ }).check();
     const invite = await holdRequest(page, /\/users\/invite$/, "POST");
     await dialog.getByRole("button", { name: "Enviar convite" }).click();
     await invite.hit;

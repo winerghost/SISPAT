@@ -17,9 +17,16 @@
 //     baixo e é mitigado por img-src/connect-src/font-src restritos.
 //   - connect-src: só a própria origem, a origem da API (NEXT_PUBLIC_API_URL,
 //     se absoluta) e a origem do Supabase Auth (NEXT_PUBLIC_SUPABASE_URL).
+//   - img-src: 'self', data:, blob: (pré-visualização local da foto antes do
+//     envio) e SÓ `<origem do Supabase>/storage/v1/object/sign/avatars/` — as fotos de perfil vêm de URLs ASSINADAS
+//     e temporárias do bucket privado `avatars` (Supabase Storage), pedidas ao
+//     backend só na hora de exibir.
 //   - frame-ancestors 'none', object-src 'none', base-uri 'self',
 //     form-action 'self'.
 // =============================================================================
+
+/** Prefixo das URLs assinadas do bucket privado `avatars` (Supabase Storage). */
+export const AVATAR_SIGNED_PATH = "/storage/v1/object/sign/avatars/";
 
 export interface CspOptions {
   nonce: string;
@@ -66,7 +73,10 @@ export function buildContentSecurityPolicy({
     "style-src": ["'self'", "'unsafe-inline'"],
     // data: é necessário para o QR code TOTP (SVG em data URI, renderizado via
     // <img>, onde SVG não executa script).
-    "img-src": ["'self'", "data:", "blob:"],
+    // Fotos de perfil: SÓ o prefixo das URLs assinadas do bucket privado
+    // `avatars` (UA-CSP-01). A barra final faz a CSP casar por prefixo de
+    // caminho; nenhum outro conteúdo do Supabase carrega como imagem.
+    "img-src": ["'self'", "data:", "blob:", ...(supabaseOrigin ? [`${supabaseOrigin}${AVATAR_SIGNED_PATH}`] : [])],
     "font-src": ["'self'"],
     "connect-src": [...connectSrc],
     "frame-src": ["'none'"],

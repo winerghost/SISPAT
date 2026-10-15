@@ -25,5 +25,22 @@ Dependem de autorização explícita e de migração Alembic versionada + espelh
 
 ## Estado em produção
 
-Alembic aplicado até `0004_db_security_hardening`; `0005_settings_ai_users`
-pendente de autorização.
+Alembic aplicado até `0005_settings_ai_users` (conforme registrado em
+2026-10-15). `0006_email_settings_permission` (head atual) está **escrita e
+pendente de aplicação**: semeia a permissão `settings.email.manage` e a
+vincula somente ao ADM (aditiva, idempotente, `ON CONFLICT DO NOTHING`).
+Espelho SQL: `backend/migrations/sql/0009_email_settings_permission.sql`
+(sem `BEGIN`/`COMMIT`). Downgrade remove só essa permissão e seu vínculo.
+
+Aplicar: `cd backend; alembic upgrade head`.
+
+Verificação pós-aplicação:
+
+```sql
+SELECT r.code AS role, p.code
+FROM role_permissions rp
+JOIN roles r ON r.id = rp.role_id
+JOIN permissions p ON p.id = rp.permission_id
+WHERE p.code = 'settings.email.manage';   -- esperado: 1 linha, role = ADM
+SELECT version_num FROM alembic_version;  -- esperado: 0006_email_settings_permission
+```

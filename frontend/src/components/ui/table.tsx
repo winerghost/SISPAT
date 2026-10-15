@@ -32,7 +32,9 @@ interface TableProps extends React.HTMLAttributes<HTMLTableElement> {
 
 const Table = React.forwardRef<HTMLTableElement, TableProps>(
   ({ className, busy = false, ...props }, ref) => (
-    <div className="w-full overflow-x-auto">
+    // `relative`: elementos absolutos internos (ex.: textos sr-only nos
+    // cabeçalhos) ficam contidos na rolagem da tabela, nunca na da página.
+    <div className="relative w-full overflow-x-auto">
       <table
         ref={ref}
         aria-busy={busy || undefined}

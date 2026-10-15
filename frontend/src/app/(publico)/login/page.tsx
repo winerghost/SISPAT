@@ -5,11 +5,19 @@ import { useRouter } from "next/navigation";
 import { CheckCircle2 } from "lucide-react";
 
 import { FadeIn, SlideIn } from "@/components/animations";
-import { AnimatedFormMessage, AuthField, AuthGuidancePanel } from "@/components/features/auth";
+import {
+  AnimatedFormMessage,
+  AuthField,
+  AuthGuidancePanel,
+  TotpEnrollDetails,
+} from "@/components/features/auth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { signInErrorMessage, SIGN_IN_MESSAGES } from "@/lib/auth-errors";
+import { discardUnverifiedFactor, startTotpEnrollment, type TotpEnrollment } from "@/lib/mfa";
 import { fetchMe } from "@/lib/session";
 import { getSupabaseClient } from "@/lib/supabase-client";
+import { notifyMfaFactorAdded } from "@/lib/users-api";
 
 // =============================================================================
 // /login — SISPAT-AGU
@@ -21,15 +29,21 @@ import { getSupabaseClient } from "@/lib/supabase-client";
 //      lista os fatores (`supabase.auth.mfa.listFactors()`), seleciona o
 //      fator TOTP verificado, pede o código e chama
 //      `supabase.auth.mfa.challengeAndVerify({ factorId, code })`.
+//   3b. Se `mfa_required` mas NÃO há fator TOTP verificado (ADM único, bootstrap):
+//      etapa "enroll" — `supabase.auth.mfa.enroll()` com a sessão AAL1 (QR +
+//      chave manual + código de 6 dígitos → `challengeAndVerify`). Segredo/QR
+//      ficam só em memória (estado React), são descartados ao concluir/voltar;
+//      "Voltar" remove (unenroll) o fator pendente e encerra a sessão local.
 //   4. Após verificar, re-chama `/me` para confirmar `current_aal === 'aal2'`
 //      antes de liberar a navegação — só então redireciona.
 //
 // Sem rota de cadastro: este sistema não tem autorregistro — contas só
 // existem por convite ADM (`/administracao/usuarios` → `/ativar-conta`).
 //
-// Mensagens de erro são sempre genéricas (sem detalhe técnico), tanto para
-// credenciais inválidas quanto para limite de tentativas (status 429 do
-// Supabase Auth), conforme exigido pela tarefa.
+// Mensagens de erro são sempre genéricas (sem detalhe técnico) e distinguem
+// rede/servidor, limite de tentativas (429) e credencial (`@/lib/auth-errors`).
+// Após cadastrar o 1º fator, `POST /security/mfa/factor-added-notice` é chamado
+// em best-effort (falha ignorada).
 //
 // Apresentação (sem alterar o fluxo acima): formulário com entrada suave
 // (SlideIn — a 1ª carga SSR não anima, por design da fundação); troca
@@ -42,7 +56,7 @@ import { getSupabaseClient } from "@/lib/supabase-client";
 // (AuthGuidancePanel/InfoSlider), DEPOIS do formulário na ordem do DOM.
 // =============================================================================
 
-type Step = "credentials" | "mfa";
+type Step = "credentials" | "mfa" | "enroll";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -61,11 +75,13 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [code, setCode] = useState("");
   const [factorId, setFactorId] = useState<string | null>(null);
+  // Segredo TOTP/QR do cadastro do 1º fator: SÓ memória do componente.
+  const [enrollment, setEnrollment] = useState<TotpEnrollment | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (step === "mfa" && !loading) codeInputRef.current?.focus();
+    if ((step === "mfa" || step === "enroll") && !loading) codeInputRef.current?.focus();
   }, [step, loading]);
 
   useEffect(() => {
@@ -88,14 +104,15 @@ export default function LoginPage() {
       });
 
       if (signInError) {
-        setError(credentialsErrorMessage(signInError));
+        setError(signInErrorMessage(signInError));
         setLoading(false);
         return;
       }
 
       await proceedPastSignIn();
     } catch {
-      setError("Não foi possível entrar agora. Tente novamente em alguns instantes.");
+      // Exceção do SDK/fetch (rede fora do ar, CORS): mensagem de conexão.
+      setError(SIGN_IN_MESSAGES.network);
       setLoading(false);
     }
   }
@@ -103,9 +120,13 @@ export default function LoginPage() {
   /** Decide, a partir de `/me`, se segue para o desafio MFA ou libera a navegação. */
   async function proceedPastSignIn() {
     let me;
+    const supabase = getSupabaseClient();
     try {
       me = await fetchMe();
     } catch {
+      // F-5: sem `/me` válido (usuário inativo/sem registro local, rede) não
+      // deixa a sessão AAL1 parada no storage do navegador.
+      await supabase.auth.signOut({ scope: "local" }).catch(() => undefined);
       setError("Não foi possível confirmar sua sessão agora. Tente novamente.");
       setLoading(false);
       return;
@@ -117,7 +138,6 @@ export default function LoginPage() {
       return;
     }
 
-    const supabase = getSupabaseClient();
     const { data: factorsData, error: factorsError } = await supabase.auth.mfa.listFactors();
     if (factorsError) {
       setError("Não foi possível carregar a verificação em duas etapas. Tente novamente.");
@@ -127,9 +147,16 @@ export default function LoginPage() {
 
     const totpFactor = factorsData.totp[0];
     if (!totpFactor) {
-      setError(
-        "Sua conta exige verificação em duas etapas, mas nenhum fator está configurado. Contate um administrador.",
-      );
+      // Sem fator verificado: conduz ao cadastro do primeiro fator (bootstrap).
+      try {
+        setEnrollment(await startTotpEnrollment(supabase));
+      } catch {
+        setError("Não foi possível iniciar a verificação em duas etapas. Tente novamente.");
+        setLoading(false);
+        return;
+      }
+      setCode("");
+      setStep("enroll");
       setLoading(false);
       return;
     }
@@ -139,16 +166,34 @@ export default function LoginPage() {
     setLoading(false);
   }
 
+  /** Descarta fator pendente (se houver) e a sessão AAL1 parcial; volta ao e-mail. */
+  function handleBack() {
+    const pendingFactorId = step === "enroll" ? enrollment?.factorId : null;
+    const supabase = getSupabaseClient();
+    void (async () => {
+      if (pendingFactorId) await discardUnverifiedFactor(supabase, pendingFactorId);
+      await supabase.auth.signOut({ scope: "local" }).catch(() => undefined);
+    })();
+    setEnrollment(null);
+    setFactorId(null);
+    setStep("credentials");
+    setCode("");
+    setPassword("");
+    setError(null);
+    setReturnFocusToEmail(true);
+  }
+
   async function handleMfaSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!factorId) return;
+    const activeFactorId = step === "enroll" ? enrollment?.factorId : factorId;
+    if (!activeFactorId) return;
     setError(null);
     setLoading(true);
 
     try {
       const supabase = getSupabaseClient();
       const { error: verifyError } = await supabase.auth.mfa.challengeAndVerify({
-        factorId,
+        factorId: activeFactorId,
         code,
       });
 
@@ -159,6 +204,10 @@ export default function LoginPage() {
         return;
       }
 
+      // Cadastro do 1º fator concluído: aviso best-effort ao backend (falha
+      // ignorada; não bloqueia nem atrasa o login).
+      if (step === "enroll") void notifyMfaFactorAdded();
+
       // Re-confirma o AAL via backend antes de liberar a navegação para a
       // área administrativa (nunca confiar só no retorno do SDK Supabase).
       const me = await fetchMe();
@@ -168,6 +217,9 @@ export default function LoginPage() {
         return;
       }
 
+      // Confirmado: o segredo TOTP/QR não é mais necessário em memória.
+      setEnrollment(null);
+      setCode("");
       router.push("/");
       setRedirecting(true);
     } catch {
@@ -186,12 +238,18 @@ export default function LoginPage() {
           <FadeIn key={step} className="flex flex-col gap-6">
             <div className="flex flex-col gap-1">
               <h1 className="text-heading text-[28px] text-bone">
-                {step === "credentials" ? "Entrar" : "Verificação em duas etapas"}
+                {step === "credentials"
+                  ? "Entrar"
+                  : step === "enroll"
+                    ? "Ativar verificação em duas etapas"
+                    : "Verificação em duas etapas"}
               </h1>
               <p className="text-body-sm text-warm-granite">
                 {step === "credentials"
                   ? "Acesse com seu e-mail institucional e senha."
-                  : "Informe o código gerado pelo seu aplicativo autenticador."}
+                  : step === "enroll"
+                    ? "Sua conta exige verificação em duas etapas. Escaneie o QR code (ou digite a chave) em um aplicativo autenticador e informe o código de 6 dígitos."
+                    : "Informe o código gerado pelo seu aplicativo autenticador."}
               </p>
             </div>
 
@@ -229,15 +287,21 @@ export default function LoginPage() {
                   {loading ? "Entrando…" : "Entrar"}
                 </Button>
               </form>
-            ) : (
+            ) : step === "enroll" && !enrollment ? null : (
               <form className="flex flex-col gap-4" onSubmit={handleMfaSubmit}>
-                <AuthField label="Código de verificação">
+                {step === "enroll" && enrollment && (
+                  <TotpEnrollDetails
+                    qrCodeDataUri={enrollment.qrCodeDataUri}
+                    secret={enrollment.secret}
+                  />
+                )}
+                <AuthField label={step === "enroll" ? "Código de 6 dígitos" : "Código de verificação"}>
                   <Input
                     type="text"
                     inputMode="numeric"
                     autoComplete="one-time-code"
                     placeholder="000000"
-                    maxLength={10}
+                    maxLength={step === "enroll" ? 6 : 10}
                     required
                     value={code}
                     onChange={(e) => setCode(e.target.value)}
@@ -250,23 +314,24 @@ export default function LoginPage() {
 
                 <AnimatedFormMessage id="login-error" message={error} />
 
-                <Button type="submit" loading={loading} disabled={code.length === 0} className="w-full">
-                  {loading ? "Verificando…" : "Verificar"}
+                <Button
+                  type="submit"
+                  loading={loading}
+                  disabled={step === "enroll" ? code.length !== 6 : code.length === 0}
+                  className="w-full"
+                >
+                  {loading
+                    ? "Verificando…"
+                    : step === "enroll"
+                      ? "Verificar e ativar"
+                      : "Verificar"}
                 </Button>
                 <Button
                   type="button"
                   variant="ghost"
                   disabled={loading}
                   className="w-full"
-                  onClick={() => {
-                    // Segurança: abandonar o desafio MFA descarta a sessão AAL1
-                    // parcial (não deixa sessão "meio autenticada" no navegador).
-                    void getSupabaseClient().auth.signOut({ scope: "local" });
-                    setStep("credentials");
-                    setCode("");
-                    setError(null);
-                    setReturnFocusToEmail(true);
-                  }}
+                  onClick={handleBack}
                 >
                   Voltar
                 </Button>
@@ -289,12 +354,4 @@ export default function LoginPage() {
       </div>
     </div>
   );
-}
-
-/** Mapeia erros do Supabase Auth para mensagens genéricas, sem detalhe técnico. */
-function credentialsErrorMessage(error: { status?: number }): string {
-  if (error.status === 429) {
-    return "Muitas tentativas. Aguarde alguns minutos antes de tentar novamente.";
-  }
-  return "E-mail ou senha incorretos.";
 }

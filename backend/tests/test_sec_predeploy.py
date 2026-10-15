@@ -3,10 +3,11 @@
 Complementa `test_sec_route_inventory.py` (toda rota exige login) com o que NÃO
 depende só do código das rotas:
 
-1. PREDEPLOY-01 — a consulta de `require_auth` carrega colunas de `users`
-   criadas pela migração `0005_settings_ai_users`. Num banco sem a 0005, TODA
-   requisição autenticada vira 500 (provado com SQL REAL num SQLite com o
-   schema `users` da baseline 0001) e o healthcheck continua 200.
+1. PREDEPLOY-01 (resolvido em 2026-10-15: 0005 aplicada em produção) — a
+   consulta de `require_auth` carrega colunas de `users` criadas pela migração
+   `0005_settings_ai_users`. Num banco sem a 0005, TODA requisição autenticada
+   vira 500 (provado com SQL REAL num SQLite com o schema `users` da baseline
+   0001) e o healthcheck continua 200; mantido como regressão.
 2. AUD-14-08 — `users.sessions_revoked_at` está documentado no modelo como
    aplicado por `require_auth`, mas não é verificado: logout/revogação não
    invalidam um access token já emitido (vale até o `exp`).
@@ -46,17 +47,18 @@ REPO_DIR = BACKEND_DIR.parent
 JWT_SECRET = "test-jwt-secret-sintetico-com-32-bytes-ou-mais"  # = tests/conftest.py
 
 # Colunas de `users` na baseline 0001 (backend/migrations/sql/0001_initial_schema.sql).
-# Segundo README.md/docs/database/historico-migracoes.md, a produção está em
-# 0004 (que não altera `users`) e a 0005 NÃO foi aplicada. Atualize esta
-# constante SOMENTE depois de confirmar, no banco de produção, que a 0005 foi
-# aplicada (information_schema.columns) — então remova o xfail de
-# `test_autenticacao_compativel_com_schema_de_producao`.
-PRODUCTION_USERS_COLUMNS = frozenset(
+BASELINE_0001_USERS_COLUMNS = frozenset(
     {"id", "auth_user_id", "name", "email", "active", "created_at", "updated_at", "last_login_at"}
 )
 COLUMNS_FROM_0005 = frozenset(
     {"version", "sessions_revoked_at", "avatar_object_key", "deactivated_at", "deactivated_by"}
 )
+# Estado REAL de `users` em produção. A 0005 foi aplicada em produção
+# (verificação do coordenador em 2026-10-14, information_schema.columns;
+# registrado em docs/security/evidence/settings-module-etapa2.md). Se uma
+# migração futura adicionar colunas lidas por `require_auth`, atualize esta
+# constante SOMENTE depois de confirmar a aplicação em produção.
+PRODUCTION_USERS_COLUMNS = BASELINE_0001_USERS_COLUMNS | COLUMNS_FROM_0005
 
 
 def _token(**overrides: Any) -> str:
@@ -126,7 +128,7 @@ def _users_columns_in_0001_sql() -> set[str]:
 
 def test_baseline_de_producao_confere_com_a_0001():
     """Sanidade da constante: o schema `users` da 0001 é exatamente a baseline."""
-    assert _users_columns_in_0001_sql() == set(PRODUCTION_USERS_COLUMNS)
+    assert _users_columns_in_0001_sql() == set(BASELINE_0001_USERS_COLUMNS)
 
 
 def test_query_de_autenticacao_seleciona_colunas_criadas_pela_0005():
@@ -135,7 +137,7 @@ def test_query_de_autenticacao_seleciona_colunas_criadas_pela_0005():
     sql, columns = _auth_query_sql()
     assert "FROM users" in sql and "users.auth_user_id = %(auth_user_id_1)s" in sql
     assert COLUMNS_FROM_0005 <= columns, sorted(columns)
-    assert columns - set(PRODUCTION_USERS_COLUMNS) == set(COLUMNS_FROM_0005)
+    assert columns - set(BASELINE_0001_USERS_COLUMNS) == set(COLUMNS_FROM_0005)
 
 
 def test_0005_e_a_unica_migracao_que_cria_essas_colunas():
@@ -150,16 +152,9 @@ def test_0005_e_a_unica_migracao_que_cria_essas_colunas():
             assert not re.search(rf"users\b[^;]*ADD COLUMN[^;]*\b{column}\b", source, re.S | re.I)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "PREDEPLOY-01: require_auth seleciona colunas da 0005, ausentes no banco de "
-        "produção (0005 não aplicada). Remover quando a 0005 estiver aplicada em "
-        "produção (atualizar PRODUCTION_USERS_COLUMNS) ou quando o carregamento "
-        "de auth não depender dessas colunas."
-    ),
-)
 def test_autenticacao_compativel_com_schema_de_producao():
+    """PREDEPLOY-01 resolvido (2026-10-15): a 0005 está aplicada em produção;
+    toda coluna lida por `require_auth` existe no schema real."""
     _sql, columns = _auth_query_sql()
     assert columns <= set(PRODUCTION_USERS_COLUMNS), sorted(columns - set(PRODUCTION_USERS_COLUMNS))
 
@@ -264,8 +259,10 @@ def test_revogacao_de_papeis_corta_rotas_administrativas_na_requisicao_seguinte(
 
 
 def test_usuario_revogado_ainda_le_o_proprio_me_com_o_jwt_antigo(loader):
-    """Comportamento atual documentado: revoke não marca `active=false`; o JWT
-    antigo continua aceito em `/me` (dados do próprio usuário, sem papéis)."""
+    """Usuário ativo SEM papéis (ex.: convidado antes da ativação) lê só o
+    próprio `/me`. Desde a Etapa 2 o `revoke` também grava `active=false` e
+    `sessions_revoked_at` (ver test_user_admin_api), então o caso "revogado"
+    real recebe 401; aqui o carregador é simulado."""
     client = create_app().test_client()
     loader.return_value = (_user(), set(), set())
     response = client.get("/api/v1/me", headers=_bearer())
@@ -273,15 +270,8 @@ def test_usuario_revogado_ainda_le_o_proprio_me_com_o_jwt_antigo(loader):
     assert response.get_json()["roles"] == [] and response.get_json()["permissions"] == []
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "AUD-14-08: users.sessions_revoked_at é documentado (models/rbac.py) como "
-        "aplicado por require_auth, mas não é verificado; logout global/revogação "
-        "não invalidam o access token já emitido até o exp."
-    ),
-)
 def test_jwt_emitido_antes_de_sessions_revoked_at_e_rejeitado(loader):
+    """AUD-14-08 corrigido: require_auth compara `iat` com sessions_revoked_at."""
     client = create_app().test_client()
     revoked_at = datetime.now(timezone.utc)
     loader.return_value = (_user(sessions_revoked_at=revoked_at), {"USER"}, set())

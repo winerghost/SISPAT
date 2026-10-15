@@ -21,7 +21,8 @@ import {
 } from "@/components/ui/dialog";
 import { getSupabaseClient } from "@/lib/supabase-client";
 import { toSafeQrCodeDataUri } from "@/lib/mfa";
-import { ApiError, removeMfaFactor } from "@/lib/users-api";
+import { throttleOrForbiddenMessage } from "@/lib/api-errors";
+import { ApiError, notifyMfaFactorAdded, removeMfaFactor } from "@/lib/users-api";
 
 // =============================================================================
 // /configuracoes/seguranca — Verificação em duas etapas (MFA)
@@ -131,6 +132,8 @@ export default function SegurancaPage() {
         setCode("");
         return;
       }
+      // Fator verificado: aviso best-effort ao backend (falha ignorada).
+      void notifyMfaFactorAdded();
       setEnrollment(null);
       setCode("");
       setJustEnrolled(true);
@@ -368,6 +371,8 @@ function removeErrorMessage(cause: unknown): string {
     if (cause.status === 404) {
       return "Este fator já não existe mais.";
     }
+    const generic = throttleOrForbiddenMessage(cause);
+    if (generic) return generic;
   }
   return "Não foi possível remover o fator agora. Tente novamente.";
 }

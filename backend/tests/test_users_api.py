@@ -435,28 +435,33 @@ def test_list_users_sem_permissao_retorna_403(client):
 
 
 def test_list_users_sucesso_retorna_200(client):
+    """GET /users devolve o `UserSummary` do contrato da Etapa 2 (campo `role`
+    único, unidades, versão). Regra/consulta testadas em
+    `test_user_admin_service.py` (SQL real em SQLite)."""
     token = _make_token(aal="aal2")  # GET /users exige AAL2 (auditoria 2026-10-13)
-
-    fake_role = SimpleNamespace(code="ADM", active=True)
-    fake_role_link = SimpleNamespace(role=fake_role)
-    fake_user_row = SimpleNamespace(
-        id=uuid.uuid4(),
-        name="Administradora",
-        email="adm@exemplo.com",
-        active=True,
-        role_links=[fake_role_link],
-    )
-
-    fake_session = MagicMock()
-    fake_query = fake_session.query.return_value
-    fake_query.count.return_value = 1
-    fake_query.options.return_value.order_by.return_value.offset.return_value.limit.return_value.all.return_value = [
-        fake_user_row
-    ]
+    summary = {
+        "id": str(uuid.uuid4()),
+        "name": "Administradora",
+        "email": "adm@exemplo.com",
+        "active": True,
+        "role": "ADM",
+        "units": [],
+        "has_avatar": False,
+        "created_at": "2026-10-14T12:00:00Z",
+        "last_login_at": None,
+        "deactivated_at": None,
+        "version": 1,
+    }
+    service = MagicMock()
+    service.list_users.return_value = {"total": 1, "page": 1, "page_size": 25, "users": [summary]}
+    fake_redis = MagicMock()
+    fake_redis.incr.return_value = 1
 
     with _patch_authenticated(role_codes={"ADM"}, permission_codes={"users.manage"}):
         with patch(
-            "app.api.v1.users.get_db_session", lambda: _fake_get_db_session(fake_session)
+            "app.api.v1.users.get_db_session", lambda: _fake_get_db_session(MagicMock())
+        ), patch("app.api.v1.users.UserAdminService", MagicMock(return_value=service)), patch(
+            "redis.Redis.from_url", return_value=fake_redis
         ):
             response = client.get(LIST_USERS_URL, headers=_auth_headers(token))
 
@@ -464,7 +469,9 @@ def test_list_users_sucesso_retorna_200(client):
     body = response.get_json()
     assert body["total"] == 1
     assert body["users"][0]["email"] == "adm@exemplo.com"
-    assert body["users"][0]["roles"] == ["ADM"]
+    assert body["users"][0]["role"] == "ADM"
+    query = service.list_users.call_args.args[1]
+    assert (query.page, query.page_size, query.sort) == (1, 25, "name")
 
 
 # ---------------------------------------------------------------------------

@@ -57,6 +57,18 @@ EVENT_INVITE_ACTIVATION_FAILED = "INVITE_ACTIVATION_FAILED"
 EVENT_MFA_FACTOR_DELETED = "MFA_FACTOR_DELETED"
 EVENT_MFA_FACTOR_DELETE_BLOCKED = "MFA_FACTOR_DELETE_BLOCKED"
 EVENT_INVALID_IDENTIFIER = "INVALID_IDENTIFIER"
+# Gestão de usuários (Etapa 2).
+EVENT_USER_PRIVILEGE_CHANGED = "USER_PRIVILEGE_CHANGED"
+EVENT_USER_MFA_RESET = "USER_MFA_RESET"
+EVENT_REAUTH_REQUIRED = "REAUTH_REQUIRED"
+EVENT_USER_ADMIN_BLOCKED = "USER_ADMIN_BLOCKED"
+EVENT_USER_PROVIDER_SYNC_FAILED = "USER_PROVIDER_SYNC_FAILED"
+# E-mail (app.services.email): envio e teste administrativo.
+EVENT_EMAIL_SENT = "EMAIL_SENT"
+EVENT_EMAIL_FAILED = "EMAIL_FAILED"
+EVENT_EMAIL_TEST_REQUESTED = "EMAIL_TEST_REQUESTED"
+# Apoio ao achado B-3: ADM cadastrou fator TOTP com sessão AAL1 (só senha).
+EVENT_ADM_TOTP_ENROLL_AAL1 = "ADM_TOTP_ENROLL_AAL1"
 
 SEVERITY_LOW = "low"
 SEVERITY_MEDIUM = "medium"
@@ -228,9 +240,30 @@ class _BackgroundAuditWriter:
 _writer = _BackgroundAuditWriter()
 
 
+def _notify_admins(event: dict[str, Any]) -> None:
+    """Notifica ADMs ativos por e-mail quando `event["notify"]` (best effort).
+
+    Import local (evita ciclo: o módulo de e-mail importa este). O envio roda
+    em thread própria e NUNCA levanta; com EMAIL_ENABLED=false é no-op.
+    """
+    if not event.get("notify"):
+        return
+    try:
+        from app.services.security_notifications import notify_admins_of_event
+
+        notify_admins_of_event(event)
+    except Exception as exc:  # noqa: BLE001 - notificação nunca derruba a operação
+        logger.error(
+            "security_events: falha ao notificar evento %s (%s).",
+            event.get("event_type"),
+            exc.__class__.__name__,
+        )
+
+
 def _dispatch(event: dict[str, Any]) -> None:
     """Ponto único de envio (substituído por mocks nos testes)."""
     _writer.submit(event)
+    _notify_admins(event)
 
 
 def record_security_event(

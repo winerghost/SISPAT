@@ -17,6 +17,7 @@ import { PreviewReviewAlert } from "@/components/features/imports/preview-review
 import { PreviewItemsTable, type SelectionSummary } from "@/components/features/imports/preview-items-table";
 import { ConfirmImportDialog } from "@/components/features/imports/confirm-import-dialog";
 import { ApiError } from "@/lib/api-client";
+import { rateLimitMessage } from "@/lib/api-errors";
 import {
   confirmGoogleSheetsImport,
   createGoogleSheetsPreview,
@@ -31,11 +32,10 @@ import {
 // paginada → (3) confirmar importação dos itens elegíveis selecionados.
 //
 // Autenticação: todos os endpoints exigem usuário ADM com permissão
-// `imports.execute`. O `apiClient` ainda não anexa `Authorization` (ver
-// TODO em `@/lib/api-client`), então nesta fase qualquer chamada real
-// retorna 401 — tratado abaixo como "sessão não autenticada", com a mesma
-// superfície de mensagem amigável usada para 403 (sem permissão).
-// TODO: requer sessão autenticada real (ver frente de MFA/login).
+// `imports.execute` (+ AAL2). O `apiClient` anexa `Authorization` da sessão
+// Supabase automaticamente; 401 = sessão ausente/expirada e 403 = sem
+// permissão — ambos tratados abaixo com mensagens genéricas (a mensagem do
+// backend nunca é exibida).
 //
 // Motion / feedback (ver docs/ux/evidence/telas-dados.md):
 // - O indicador "Requisição" reflete SOMENTE o estado real das mutations
@@ -283,9 +283,9 @@ function requestStatus(input: RequestStatusInput): { state: StatusIndicatorState
 function previewErrorMessage(error: unknown): string {
   if (error instanceof ApiError) {
     if (error.status === 401) {
-      // TODO: requer sessão autenticada real (ver frente de MFA/login).
       return "Sessão não autenticada. Faça login novamente para gerar uma pré-visualização.";
     }
+    if (error.status === 429) return rateLimitMessage(error);
     if (error.status === 403) {
       return "Você não tem permissão para executar importações. Solicite ao administrador o papel ADM com a permissão de execução de importações.";
     }
@@ -299,9 +299,9 @@ function previewErrorMessage(error: unknown): string {
 function confirmErrorMessage(error: unknown): string {
   if (error instanceof ApiError) {
     if (error.status === 401) {
-      // TODO: requer sessão autenticada real (ver frente de MFA/login).
       return "Sessão não autenticada. Faça login novamente.";
     }
+    if (error.status === 429) return rateLimitMessage(error);
     if (error.status === 403) {
       return "Você não tem permissão para confirmar importações.";
     }

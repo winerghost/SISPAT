@@ -17,14 +17,15 @@ backend/
     models/                 # Modelos ORM (um arquivo por grupo de entidades)
   migrations/
     env.py, script.py.mako
-    versions/                         # Cadeia Alembic (0001 ... 0005, head)
+    versions/                         # Cadeia Alembic (0001 ... 0006, head)
     sql/                              # Espelhos SQL puros + seeds manuais
 ```
 
 ### Cadeia Alembic
 
 `0001_initial_schema` → `0002_import_previews` → `0003_invites` →
-`0004_db_security_hardening` → `0005_settings_ai_users` (**head**).
+`0004_db_security_hardening` → `0005_settings_ai_users` →
+`0006_email_settings_permission` (**head**).
 
 ### Alembic ↔ espelho SQL (`migrations/sql/`)
 
@@ -37,6 +38,9 @@ A numeração dos arquivos SQL é própria e **não** coincide com a do Alembic:
 | `0004` | `0003_invites` |
 | `0006` | `0004_db_security_hardening` |
 | `0007` | `0005_settings_ai_users` |
+| `0009` | `0006_email_settings_permission` (sem BEGIN/COMMIT) |
+
+(`0008_storage_avatars.sql` é script do Supabase Storage, sem migração Alembic.)
 
 Os seeds SQL `0002` (roles/permissions) e `0005` (8 permissões de gestão de
 usuários/segurança, atribuídas somente ao ADM) **não são migrações Alembic**:
@@ -138,6 +142,27 @@ Nenhuma migração deve ser aplicada em produção sem autorização.
   diretamente por clientes (hoje é acessado apenas pelo backend, via
   conexão de serviço).
 
+## E-mail (SMTP) — desligado por padrão
+
+Módulo `app/services/email/` (`address`, `templates`, `sender`, `dispatch`).
+Variáveis `EMAIL_*` (ver `.env.example`); só backend/worker as recebem.
+
+- `EMAIL_ENABLED=false` (padrão): `NullEmailSender` — não envia, não falha, sem rede.
+- Habilitado: exige HOST/PORT/USER/PASSWORD/FROM; porta 587 (`starttls`) ou 465 (`ssl`);
+  25/texto claro recusados; certificado e hostname sempre verificados
+  (`ssl.create_default_context()`); login só após TLS; timeout 1–60 s (padrão 10).
+- `EMAIL_PASSWORD` é `SecretStr` (fora de repr/dump/log); espaços são removidos.
+- `From` vem só das settings; destinatário = 1 endereço simples (sem CR/LF/NUL,
+  vírgula, display-name); `EMAIL_ALLOWED_RECIPIENT_DOMAINS` restringe domínios exatos.
+- Conteúdo: templates fixos Jinja2 com autoescape; links só da allowlist.
+- `send_email_safely(...)` nunca levanta: teto global `EMAIL_MAX_PER_HOUR` (Redis,
+  fail-closed), prazo total de execução, eventos `EMAIL_SENT`/`EMAIL_FAILED` em
+  `audit_logs` (sem corpo/senha; destinatário mascarado `m***@agu.gov.br`).
+- Gmail: exige verificação em duas etapas + senha de app; `EMAIL_FROM` deve ser a conta
+  autenticada (ou alias verificado), senão o Gmail reescreve o remetente; limite ~500
+  mensagens/dia. Convites/reset seguem pelo SMTP do Supabase Auth (fora deste módulo).
+- Testes: `tests/test_email_*.py` (SMTP mockado, zero rede).
+
 ## Testes
 
 ```bash
@@ -159,3 +184,17 @@ O projeto Supabase assina com ES256; o backend valida via JWKS
 | `SUPABASE_JWKS_URL` | `<SUPABASE_URL>/auth/v1/.well-known/jwks.json` | HTTPS obrigatório em produção; sem redirects. |
 | `SUPABASE_JWKS_CACHE_SECONDS` | `600` | TTL do cache; `kid` desconhecido => no máx. 1 refetch/30 s. |
 | `SUPABASE_JWKS_TIMEOUT_SECONDS` | `3` | Timeout da busca (JWKS indisponível sem cache => 401). |
+
+## E-mail administrativo e correcoes da auditoria de fronteira (2026-10-15)
+
+- `POST /api/v1/settings/email/test` (ADM + AAL2 + `settings.email.manage`, 3/h, fail-closed): corpo vazio
+  (`extra="forbid"`), envia SOMENTE ao e-mail do ADM autenticado, resposta generica
+  `{"result": "sent"|"disabled"|"failed"}`, auditoria `EMAIL_TEST_REQUESTED`. A permissao
+  `settings.email.manage` ainda precisa de seed (migracao a cargo do `sispat-backend-platform`).
+- `app/services/security_notifications.py`: eventos com `notify=true` (high/critical) avisam por e-mail os ADMs
+  ativos (resolvidos no banco), em thread propria, com throttle de 1 aviso/tipo/5 min e corpo sem dados
+  sensiveis. No-op com `EMAIL_ENABLED=false`. `EMAIL_SENT/FAILED` agora ficam em `security_events.py`.
+- B-1 rate limit 10/h em imports preview/confirm (600/h em items); B-2 `ImportItemsQuery` + `reject_any_body`
+  no preview; B-4 `Flask(static_folder=None)`; B-7 cliente Redis reutilizado por URL (`rate_limit.py`).
+- Apoio ao B-3: `POST /api/v1/security/mfa/factor-added-notice` (o frontend chama apos o enroll); ADM em AAL1
+  gera o evento HIGH `ADM_TOTP_ENROLL_AAL1`. Fluxo de enroll inalterado.

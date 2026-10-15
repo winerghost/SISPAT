@@ -43,12 +43,14 @@ from typing import Any
 
 from flask import Blueprint, abort, g, jsonify, request
 
-from app.api.v1.schemas import ConfirmImportRequest, parse_body
+from app.api.v1.schemas import ConfirmImportRequest, ImportItemsQuery, parse_body, parse_query
+from app.api.v1.user_admin_http import admin_rate_limit_key, reject_any_body
 from app.auth.supabase_auth import require_auth
 from app.authorization.rbac import require_aal2, require_permission, require_role
 from app.database.session import get_db_session
 from app.integrations.google_sheets_client import GoogleSheetsClient
 from app.models.imports import ImportPreviewItem
+from app.security.rate_limit import rate_limit
 from app.services.import_service import (
     ImportService,
     PreviewNotConfirmableError,
@@ -60,11 +62,11 @@ logger = logging.getLogger(__name__)
 
 imports_bp = Blueprint("imports", __name__, url_prefix="/imports")
 
-_MAX_PAGE_SIZE = 100
-_MAX_PAGE = 100_000
-_MAX_STATUS_LEN = 32
-_MAX_SEARCH_LEN = 200
-_DEFAULT_PAGE_SIZE = 25
+# B-1: limites por ADM (chave = id do usuário; Redis fora -> 503, fail-closed).
+_PREVIEW_LIMIT_PER_HOUR = 10  # consome cota do Google Sheets e grava prévia
+_CONFIRM_LIMIT_PER_HOUR = 10  # escrita em massa em `assets`
+_ITEMS_LIMIT_PER_HOUR = 600
+_WINDOW_SECONDS = 3600
 
 _UPSTREAM_ERROR_MESSAGE = (
     "Não foi possível ler a planilha de origem (Google Sheets) neste momento. "
@@ -90,14 +92,18 @@ def _serialize_item(item: ImportPreviewItem) -> dict[str, Any]:
 @require_role("ADM")
 @require_aal2
 @require_permission("imports.execute")
+@rate_limit(admin_rate_limit_key, limit=_PREVIEW_LIMIT_PER_HOUR, window_seconds=_WINDOW_SECONDS)
 def create_preview_endpoint():
     """`POST /api/v1/imports/google-sheets/preview` — gera uma nova prévia.
 
     Sem corpo (usa a planilha já configurada em `settings`). Retorna 201
     com o resumo da classificação. Se a leitura do Google Sheets falhar,
     retorna 502 com uma mensagem genérica (nunca o detalhe interno do
-    cliente).
+    cliente). Qualquer corpo é rejeitado (400, campos auditados).
     """
+    rejected = reject_any_body("imports.preview")
+    if rejected is not None:
+        return rejected
     user = g.current_user
 
     try:
@@ -129,6 +135,7 @@ def create_preview_endpoint():
 @require_role("ADM")
 @require_aal2
 @require_permission("imports.execute")
+@rate_limit(admin_rate_limit_key, limit=_ITEMS_LIMIT_PER_HOUR, window_seconds=_WINDOW_SECONDS)
 def list_preview_items_endpoint(preview_id: uuid.UUID):
     """`GET /api/v1/imports/google-sheets/preview/<preview_id>/items`.
 
@@ -136,26 +143,8 @@ def list_preview_items_endpoint(preview_id: uuid.UUID):
     em `patrimony_number`/`description`), `page` (default 1), `page_size`
     (default 25, máximo 100). Retorna 404 se a prévia não existir.
     """
-    status = request.args.get("status") or None
-    search = request.args.get("search") or None
-    if status is not None and len(status) > _MAX_STATUS_LEN:
-        abort(400, description="Parâmetro 'status' inválido.")
-    if search is not None and len(search) > _MAX_SEARCH_LEN:
-        abort(400, description="Parâmetro 'search' excede o tamanho máximo.")
-
-    try:
-        page = int(request.args.get("page", 1))
-    except (TypeError, ValueError):
-        abort(400, description="Parâmetro 'page' deve ser um número inteiro.")
-        raise AssertionError("inalcançável")  # pragma: no cover
-    try:
-        page_size = int(request.args.get("page_size", _DEFAULT_PAGE_SIZE))
-    except (TypeError, ValueError):
-        abort(400, description="Parâmetro 'page_size' deve ser um número inteiro.")
-        raise AssertionError("inalcançável")  # pragma: no cover
-
-    page = min(max(page, 1), _MAX_PAGE)
-    page_size = max(1, min(page_size, _MAX_PAGE_SIZE))
+    query = parse_query(ImportItemsQuery, request.args, context="imports.items")
+    status, search, page, page_size = query.status, query.search, query.page, query.page_size
 
     try:
         with get_db_session() as db:
@@ -181,6 +170,7 @@ def list_preview_items_endpoint(preview_id: uuid.UUID):
 @require_role("ADM")
 @require_aal2
 @require_permission("imports.execute")
+@rate_limit(admin_rate_limit_key, limit=_CONFIRM_LIMIT_PER_HOUR, window_seconds=_WINDOW_SECONDS)
 def confirm_preview_endpoint():
     """`POST /api/v1/imports/google-sheets/confirm`.
 

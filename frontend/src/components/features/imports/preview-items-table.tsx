@@ -6,6 +6,7 @@ import { type ColumnDef, flexRender, getCoreRowModel, useReactTable } from "@tan
 import { SearchX } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
+import { FilterPill } from "@/components/ui/filter-pill";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { FormMessage } from "@/components/ui/form-message";
@@ -21,7 +22,6 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { cn } from "@/lib/utils";
 import { ApiError } from "@/lib/api-client";
 import {
   getGoogleSheetsPreviewItems,
@@ -371,32 +371,5 @@ export function PreviewItemsTable({ previewId, onSelectionSummaryChange }: Previ
         </div>
       </div>
     </div>
-  );
-}
-
-function FilterPill({
-  label,
-  active,
-  onClick,
-}: {
-  label: string;
-  active: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-pressed={active}
-      className={cn(
-        // min-h-8 (32px): alvo de toque >= 24px (WCAG 2.5.8).
-        "inline-flex min-h-8 items-center rounded-buttons border px-3 py-1 text-caption uppercase tracking-tight transition-factory focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-bone focus-visible:ring-offset-2 focus-visible:ring-offset-obsidian-canvas",
-        active
-          ? "border-bone text-bone"
-          : "border-ash-stroke text-warm-granite hover:border-chalk hover:text-chalk",
-      )}
-    >
-      {label}
-    </button>
   );
 }

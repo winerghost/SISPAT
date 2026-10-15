@@ -45,7 +45,10 @@ class User(TimestampMixin, Base):
     # (comparação `version` do cliente x banco -> 409). Não é `version_id_col`
     # do mapper nesta etapa para não alterar fluxos existentes (invite_service).
     version: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("1"))
-    # JWTs com `iat` anterior a este instante são rejeitados por `require_auth`.
+    # Aplicado por `app.auth.supabase_auth.require_auth` (AUD-14-08): JWT com
+    # `iat` <= segundo truncado deste instante, com `amr` ausente/malformado, ou
+    # cujo MENOR instante do `amr` seja <= esse corte recebe 401. Ver
+    # `session_predates_revocation`.
     sessions_revoked_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

@@ -71,7 +71,9 @@ from flask import Blueprint, abort, g
 
 from app.auth.supabase_auth import require_auth
 from app.authorization.rbac import require_aal2
+from app.api.v1.user_admin_http import reject_any_body
 from app.authorization.security_events import (
+    EVENT_ADM_TOTP_ENROLL_AAL1,
     EVENT_MFA_FACTOR_DELETE_BLOCKED,
     EVENT_MFA_FACTOR_DELETED,
     SEVERITY_HIGH,
@@ -219,4 +221,57 @@ def delete_my_mfa_factor(factor_id: uuid.UUID):
         target_id=canonical_factor_id,
         result="SUCESSO",
     )
+    return "", 204
+
+
+# Aviso de cadastro de 1º fator por ADM em sessão AAL1 (apoio ao achado B-3).
+_ENROLL_NOTICE_LIMIT_PER_HOUR = 10
+
+
+@security_bp.route("/mfa/factor-added-notice", methods=["POST"])
+@require_auth
+@rate_limit(
+    _current_user_rate_limit_key,
+    limit=_ENROLL_NOTICE_LIMIT_PER_HOUR,
+    window_seconds=_MFA_DELETE_RATE_LIMIT_WINDOW_SECONDS,
+    fail_open=False,
+)
+def mfa_factor_added_notice():
+    """Aviso (best effort) de que o usuário acabou de cadastrar um fator TOTP.
+
+    NÃO altera o fluxo de cadastro (feito no Supabase Auth): o frontend pode
+    chamar esta rota depois do `enroll`. Se o usuário tem o papel `ADM` e a
+    sessão atual é `aal1` (só senha), registra o evento HIGH
+    `ADM_TOTP_ENROLL_AAL1` (alerta de segurança: quem tem só a senha pode
+    ter virado dono do 2º fator). Qualquer outro caso (não-ADM, `aal2`)
+    responde igual e não registra nada — a rota não vira oráculo de papel.
+    O alvo é sempre o usuário do JWT; sem corpo (400 se houver).
+    """
+    rejected = reject_any_body("security.mfa_factor_added_notice")
+    if rejected is not None:
+        return rejected
+    user = g.current_user
+    role_codes = getattr(g, "current_user_roles", set())
+    if _ADM_ROLE_CODE in role_codes and getattr(g, "current_session_aal", "aal1") != "aal2":
+        total: int | None = None
+        auth_user_id = getattr(user, "auth_user_id", None)
+        if auth_user_id:
+            try:
+                factors = SupabaseAdminClient().list_mfa_factors(auth_user_id)
+                total = sum(1 for f in factors if isinstance(f, dict))
+            except Exception as exc:  # noqa: BLE001 - o evento sai mesmo sem a checagem
+                logger.warning(
+                    "mfa_factor_added_notice: não foi possível listar fatores (%s).", type(exc).__name__
+                )
+        if total == 0:  # checado e sem fator: nada foi cadastrado, nada a alertar
+            return "", 204
+        record_security_event(
+            EVENT_ADM_TOTP_ENROLL_AAL1,
+            severity=SEVERITY_HIGH,
+            actor_user_id=getattr(user, "id", None),
+            target_type="user",
+            target_id=getattr(user, "id", None),
+            details={"session_aal": "aal1", "factors_total": total, "factors_checked": total is not None},
+            result="SUCESSO",
+        )
     return "", 204

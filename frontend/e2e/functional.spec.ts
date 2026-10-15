@@ -1,6 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 
 import {
+  ENROLL_SECRET,
   expectNoXss,
   installMocks,
   type MockOptions,
@@ -75,6 +76,22 @@ test.describe("login / logout", () => {
     await expect(page).toHaveURL(/\/login$/);
   });
 
+  test("F-5: /me falha após o login → sessão Supabase local encerrada, permanece no /login", async ({ page }) => {
+    await installMocks(page, { role: "USER", hasVerifiedFactor: false, meStatus: 401 });
+    await page.goto("/login");
+    await waitForHydration(page);
+    await page.getByLabel("E-mail").fill("inativo.sintetico@exemplo.invalid");
+    await page.getByLabel("Senha").fill("senha-sintetica-123");
+    await page.getByRole("button", { name: "Entrar" }).click();
+    await expect(page.locator("#login-error")).toHaveText(
+      "Não foi possível confirmar sua sessão agora. Tente novamente.",
+    );
+    await expect(page).toHaveURL(/\/login$/);
+    await expect
+      .poll(() => page.evaluate((k) => sessionStorage.getItem(k), SESSION_STORAGE_KEY))
+      .toBeNull();
+  });
+
   test("credenciais inválidas: mensagem genérica", async ({ page }) => {
     await installMocks(page);
     await page.goto("/login");
@@ -101,6 +118,110 @@ test.describe("login / logout", () => {
     await codigo.fill("123456");
     await page.getByRole("button", { name: "Verificar" }).click();
     await expect(page).toHaveURL(/\/$/);
+  });
+});
+
+test.describe("ADM sem fator TOTP: cadastro do primeiro fator no login (bootstrap)", () => {
+  async function loginAsAdmWithoutFactor(page: Page, opts: MockOptions = {}) {
+    const state = await installMocks(page, { role: "ADM", aal: "aal1", hasVerifiedFactor: false, ...opts });
+    await page.goto("/login");
+    await waitForHydration(page);
+    await page.getByLabel("E-mail").fill("adm.sintetico@exemplo.invalid");
+    await page.getByLabel("Senha").fill("senha-sintetica-123");
+    await page.getByRole("button", { name: "Entrar" }).click();
+    return state;
+  }
+  const enrollHeading = (page: Page) =>
+    page.getByRole("heading", { level: 1, name: "Ativar verificação em duas etapas" });
+
+  test("mostra QR + chave (sem 'Contate um administrador'), foco no código; código certo → aal2 → /", async ({
+    page,
+  }) => {
+    await loginAsAdmWithoutFactor(page);
+    await expect(enrollHeading(page)).toBeVisible();
+    await expect(page.getByText("Contate um administrador")).toHaveCount(0);
+    await expect(page.getByRole("img", { name: /QR code/ })).toBeVisible();
+    await expect(page.getByText(ENROLL_SECRET.slice(0, 4))).toBeVisible();
+    const codigo = page.getByLabel("Código de 6 dígitos");
+    await expect(codigo).toBeFocused();
+
+    // Segredo nunca em storage nem na URL.
+    const leak = await page.evaluate((secret) => {
+      const dump = JSON.stringify({ ...localStorage }) + JSON.stringify({ ...sessionStorage }) + location.href;
+      return dump.includes(secret) || dump.includes(secret.slice(0, 12));
+    }, ENROLL_SECRET);
+    expect(leak).toBe(false);
+
+    await codigo.fill("123456");
+    await page.getByRole("button", { name: "Verificar e ativar" }).click();
+    await expect(page).toHaveURL(/\/$/, { timeout: 45_000 });
+  });
+
+  test("enroll concluído avisa o backend (POST sem corpo, só uma vez)", async ({ page }) => {
+    const state = await loginAsAdmWithoutFactor(page);
+    await page.getByLabel("Código de 6 dígitos").fill("123456");
+    await page.getByRole("button", { name: "Verificar e ativar" }).click();
+    await expect(page).toHaveURL(/\/$/, { timeout: 45_000 });
+    const notices = state.calls.filter((c) => c.url.endsWith("/v1/security/mfa/factor-added-notice"));
+    expect(notices.filter((c) => c.method === "POST")).toHaveLength(1);
+    expect(notices[0]?.body).toBeUndefined();
+  });
+
+  test("aviso de fator falha (500): login segue normalmente (best-effort)", async ({ page }) => {
+    await loginAsAdmWithoutFactor(page, { factorNoticeStatus: 500 });
+    await page.getByLabel("Código de 6 dígitos").fill("123456");
+    await page.getByRole("button", { name: "Verificar e ativar" }).click();
+    await expect(page).toHaveURL(/\/$/, { timeout: 45_000 });
+    await expect(page.getByText("SISPAT_BACKEND_MSG")).toHaveCount(0);
+  });
+
+  test("código errado no enroll NÃO dispara o aviso", async ({ page }) => {
+    const state = await loginAsAdmWithoutFactor(page);
+    await page.getByLabel("Código de 6 dígitos").fill("000000");
+    await page.getByRole("button", { name: "Verificar e ativar" }).click();
+    await expect(page.locator("#login-error")).toBeVisible();
+    expect(state.calls.some((c) => c.url.endsWith("/factor-added-notice"))).toBe(false);
+  });
+
+  test("código errado → erro genérico; continua na etapa", async ({ page }) => {
+    await loginAsAdmWithoutFactor(page);
+    const codigo = page.getByLabel("Código de 6 dígitos");
+    await codigo.fill("000000");
+    await page.getByRole("button", { name: "Verificar e ativar" }).click();
+    await expect(page.locator("#login-error")).toHaveText("Código inválido ou expirado. Tente novamente.");
+    await expect(enrollHeading(page)).toBeVisible();
+    await expect(page).toHaveURL(/\/login$/);
+  });
+
+  test("Voltar remove o fator pendente (unenroll), encerra a sessão e volta ao e-mail", async ({ page }) => {
+    const state = await loginAsAdmWithoutFactor(page);
+    await expect(enrollHeading(page)).toBeVisible();
+    await page.getByRole("button", { name: "Voltar" }).click();
+    await expect(page.getByRole("heading", { level: 1, name: "Entrar" })).toBeVisible();
+    await expect(page.getByLabel("E-mail")).toBeFocused();
+    await expect
+      .poll(() => state.calls.some((c) => c.method === "DELETE" && c.url.endsWith("/factors/factor-novo-e2e")))
+      .toBe(true);
+    await expect.poll(() => state.calls.some((c) => c.url.includes("/logout"))).toBe(true);
+    // O segredo não sobrevive no DOM.
+    await expect(page.getByText(ENROLL_SECRET.slice(0, 4))).toHaveCount(0);
+  });
+
+  test("fator não verificado antigo é descartado antes de criar o novo", async ({ page }) => {
+    const state = await loginAsAdmWithoutFactor(page, { hasStaleUnverifiedFactor: true });
+    await expect(enrollHeading(page)).toBeVisible();
+    const del = state.calls.findIndex((c) => c.method === "DELETE" && c.url.endsWith("/factors/factor-stale-e2e"));
+    const post = state.calls.findIndex((c) => c.method === "POST" && c.url.endsWith("/factors"));
+    expect(del).toBeGreaterThanOrEqual(0);
+    expect(post).toBeGreaterThan(del);
+  });
+
+  test("QR ausente/não-SVG não vira <img>: só a chave manual (o auth-js só prefixa valor não vazio)", async ({ page }) => {
+    await loginAsAdmWithoutFactor(page, { enrollQrCode: "" });
+    await expect(enrollHeading(page)).toBeVisible();
+    await expect(page.getByRole("img", { name: /QR code/ })).toHaveCount(0);
+    await expect(page.getByText(ENROLL_SECRET.slice(0, 4))).toBeVisible();
+    expect((await expectNoXss(page)).executed).toBeUndefined();
   });
 });
 
@@ -187,12 +308,13 @@ test.describe("convite de usuário", () => {
     ).toBe(true);
 
     await dialog.getByLabel("E-mail institucional").fill("convidada@exemplo.invalid");
-    const units = dialog.getByLabel("Unidades (IDs separados por vírgula)");
-    await units.fill(" , , ");
+    // Unidades: checkboxes vindos de GET /units (sem UUID livre); nenhuma marcada.
+    const units = dialog.getByRole("group", { name: "Unidades" });
+    await expect(units.getByRole("checkbox")).toHaveCount(3);
     await dialog.getByRole("button", { name: "Enviar convite" }).click();
-    await expect(dialog.getByRole("alert")).toHaveText("Informe ao menos uma unidade (ID).");
-    await expect(units).toHaveAttribute("aria-invalid", "true");
-    await expect(units).toHaveAccessibleDescription("Informe ao menos uma unidade (ID).");
+    await expect(dialog.getByRole("alert")).toHaveText("Selecione ao menos uma unidade.");
+    await expect(units).toHaveAccessibleDescription("Selecione ao menos uma unidade.");
+    await expect(units.getByRole("checkbox").first()).toBeFocused();
     expect(posted).toBe(false);
   });
 
@@ -201,7 +323,7 @@ test.describe("convite de usuário", () => {
     await dialog.getByLabel("Nome").fill("Pessoa Sintética Convidada");
     await dialog.getByLabel("E-mail institucional").fill("duplicado@exemplo.invalid");
     await dialog.getByLabel("Perfil").selectOption("RH");
-    await dialog.getByLabel("Unidades (IDs separados por vírgula)").fill("60000000-0000-4000-8000-000000000001");
+    await dialog.getByRole("checkbox", { name: /PSU-TO/ }).check();
     await dialog.getByRole("button", { name: "Enviar convite" }).click();
     await expect(dialog.getByRole("alert")).toHaveText("Já existe um convite pendente para este e-mail.");
 
@@ -222,6 +344,19 @@ test.describe("convite de usuário", () => {
     await expect(page.getByText('Usuário <img src=x onerror="window.__xss=1">')).toBeVisible();
     expect(await expectNoXss(page)).toEqual({ executed: undefined, injectedImgs: 0 });
   });
+});
+
+test("segurança: ativar MFA avisa o backend; falha do aviso (500) não bloqueia", async ({ page }) => {
+  const state = await installMocks(page, { role: "USER", hasVerifiedFactor: false, factorNoticeStatus: 500 });
+  await seedSession(page, { role: "USER", hasVerifiedFactor: false });
+  await page.goto("/configuracoes/seguranca");
+  await waitForHydration(page);
+  await page.getByRole("button", { name: "Ativar MFA" }).click();
+  await page.getByLabel("Código do aplicativo").fill("123456");
+  await page.getByRole("button", { name: "Confirmar" }).click();
+  await expect(page.getByRole("status").filter({ hasText: "Verificação em duas etapas ativada." })).toBeVisible();
+  expect(state.calls.filter((c) => c.method === "POST" && c.url.endsWith("/factor-added-notice"))).toHaveLength(1);
+  await expect(page.getByText("SISPAT_BACKEND_MSG")).toHaveCount(0);
 });
 
 test("segurança: nome do fator com marcador XSS é texto; remover → modal → DELETE", async ({ page }) => {
@@ -430,6 +565,9 @@ test.describe("logomarca AGU no login", () => {
       expect(overflow).toBeLessThanOrEqual(0);
       const box = await logo.boundingBox();
       expect(box && box.x >= 0 && box.x + box.width <= width).toBe(true);
+      // Logo centralizada horizontalmente no viewport (±1px).
+      const viewportCenter = await page.evaluate(() => document.documentElement.clientWidth / 2);
+      expect(Math.abs(box!.x + box!.width / 2 - viewportCenter)).toBeLessThanOrEqual(1);
     });
   }
 });
@@ -506,5 +644,55 @@ test.describe("tela pública autônoma (/login e /ativar-conta, sem shell do app
     await waitForHydration(page);
     await expect(page.getByRole("navigation", { name: "Navegação principal", exact: true })).toBeVisible();
     await expect(page.getByRole("contentinfo")).toHaveCount(0);
+  });
+});
+
+test.describe("auditoria de fronteira (F-1/F-6/F-10)", () => {
+  test("F-6: sem sessão, Sidebar/Header do app não são renderizados antes do redirecionamento", async ({ page }) => {
+    await installMocks(page);
+    const seen: number[] = [];
+    await page.exposeFunction("__reportChrome", (n: number) => seen.push(n));
+    await page.addInitScript(() => {
+      const probe = () => {
+        const n = document.querySelectorAll('aside, nav[aria-label="Navegação principal"]').length;
+        (window as unknown as { __reportChrome?: (n: number) => void }).__reportChrome?.(n);
+      };
+      new MutationObserver(probe).observe(document, { childList: true, subtree: true });
+    });
+    await page.goto("/administracao/usuarios");
+    await expect(page).toHaveURL(/\/login$/);
+    await page.waitForTimeout(500);
+    expect(seen.filter((n) => n > 0)).toEqual([]);
+  });
+
+  test("F-10: 429 usa mensagem genérica com Retry-After (nunca a mensagem do backend)", async ({ page }) => {
+    await installMocks(page, { role: "ADM", usersRateLimitRetryAfter: 90 });
+    await seedSession(page, { role: "ADM" });
+    await page.goto("/administracao/usuarios");
+    await waitForHydration(page);
+    await expect(page.getByText("Aguarde 2 minutos e tente de novo.")).toBeVisible();
+    await expect(page.getByText("SISPAT_BACKEND_MSG")).toHaveCount(0);
+  });
+
+  test("F-10: 429 sem Retry-After legível cai em mensagem genérica", async ({ page }) => {
+    await installMocks(page, { role: "ADM", usersRateLimitRetryAfter: 0 });
+    await seedSession(page, { role: "ADM" });
+    await page.goto("/administracao/usuarios");
+    await waitForHydration(page);
+    await expect(page.getByText("Aguarde alguns minutos e tente de novo.")).toBeVisible();
+  });
+
+  test("F-1: Bearer só vai para a origem da API", async ({ page }) => {
+    await installMocks(page, { role: "ADM" });
+    await seedSession(page, { role: "ADM" });
+    const origins = new Set<string>();
+    page.on("request", (req) => {
+      if (req.headers()["authorization"]?.startsWith("Bearer ")) origins.add(new URL(req.url()).origin);
+    });
+    await page.goto("/administracao/usuarios");
+    await waitForHydration(page);
+    await expect(page.getByRole("heading", { level: 1 }).first()).toBeVisible();
+    expect([...origins].every((o) => o === "http://127.0.0.1:5000" || o === "http://127.0.0.1:54321")).toBe(true);
+    expect(origins.has("http://127.0.0.1:5000")).toBe(true);
   });
 });

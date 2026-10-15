@@ -581,8 +581,14 @@ class InviteService:
                por advisory lock transacional (corrida do último ADM).
             4. Se havia um `Invite` ainda `PENDENTE` para esse usuário,
                marca `REVOGADO`, `revoked_at`/`revoked_by`.
-            5. Cria `AuditLog` (`REVOKE_ACCESS`, incluindo `reason` se
+            5. Desativa a conta (Etapa 2, achado A4): `active=false`,
+               `deactivated_at/by` (se estava ativa), `sessions_revoked_at=now`
+               (JWTs já emitidos passam a receber 401 em `require_auth`) e
+               incrementa `users.version`.
+            6. Cria `AuditLog` (`REVOKE_ACCESS`, incluindo `reason` se
                fornecido) e confirma (`commit()`) tudo.
+            7. Depois do commit, bane o usuário no Supabase Auth (melhor
+               esforço: falha só é logada; o bloqueio da API já vale).
         """
         target_user = self._db.query(User).filter(User.id == target_user_id).first()
         if target_user is None:
@@ -641,16 +647,28 @@ class InviteService:
             .filter(Invite.status == _PENDING_STATUS, or_(*auth_or_email_filters))
             .first()
         )
+        now = datetime.now(timezone.utc)
         if pending_invite is not None:
-            now = datetime.now(timezone.utc)
             pending_invite.status = _REVOKED_STATUS
             pending_invite.revoked_at = now
             pending_invite.revoked_by = revoked_by_user_id
             self._db.add(pending_invite)
 
+        was_active = bool(target_user.active)
+        target_user.active = False
+        if was_active:
+            target_user.deactivated_at = now
+            target_user.deactivated_by = revoked_by_user_id
+        target_user.sessions_revoked_at = now
+        target_user.version = int(target_user.version or 1) + 1
+        self._db.add(target_user)
+
+        revoked_at_iso = now.isoformat(timespec="seconds").replace("+00:00", "Z")
         new_values: dict[str, Any] = {
             "previous_roles": previous_role_codes,
             "unit_access_removed": True,
+            "active": False,
+            "sessions_revoked_at": revoked_at_iso,
         }
         if reason:
             new_values["reason"] = reason
@@ -662,10 +680,20 @@ class InviteService:
                 entity_type="user",
                 entity_id=str(target_user_id),
                 operation="REVOKE_ACCESS",
-                previous_values={"roles": previous_role_codes},
+                previous_values={"roles": previous_role_codes, "active": was_active},
                 new_values=new_values,
                 result="SUCESSO",
             )
         )
 
         self._db.commit()
+
+        if target_user.auth_user_id:
+            try:
+                self._admin_client.deactivate_user(target_user.auth_user_id)
+            except SupabaseAdminClientError as exc:
+                logger.error(
+                    "invite_service.revoke_access: ban no Supabase falhou (%s); acesso já "
+                    "revogado e conta desativada localmente.",
+                    exc.__class__.__name__,
+                )

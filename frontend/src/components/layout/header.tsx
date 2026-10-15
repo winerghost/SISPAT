@@ -7,7 +7,9 @@ import { Search, ChevronRight, LogOut } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { useSignOut, useSupabaseSession } from "@/lib/session";
+import { Avatar, useSignedAvatarUrl } from "@/components/features/users/user-avatar";
+import { useMe, useSignOut, useSupabaseSession } from "@/lib/session";
+import { getMyAvatarUrl } from "@/lib/users-api";
 import { MobileNav } from "./mobile-nav";
 import { NAV_ITEMS } from "./nav-items";
 
@@ -108,9 +110,31 @@ export function Header() {
             // (debounce, chamada à API, resultados) entra em uma rodada futura.
           />
         </div>
+        <ProfileLink />
         <SignOutButton />
       </div>
     </header>
+  );
+}
+
+/**
+ * Atalho para "Meu perfil" com o avatar do usuário logado. A foto só é pedida
+ * se `/me` informar `has_avatar: true` (UA-FE-01); ausente ou `false` =
+ * iniciais (nada é inferido no cliente).
+ */
+function ProfileLink() {
+  const { data: me } = useMe();
+  const hasAvatar = me?.has_avatar === true;
+  const url = useSignedAvatarUrl(["me", "avatar-url"], getMyAvatarUrl, hasAvatar);
+  if (!me) return null;
+  return (
+    <Link
+      href="/configuracoes/perfil"
+      aria-label={`Meu perfil (${me.name})`}
+      className="inline-flex rounded-buttons transition-factory hover:opacity-80 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-bone focus-visible:ring-offset-2 focus-visible:ring-offset-obsidian-canvas"
+    >
+      <Avatar name={me.name} src={hasAvatar ? url.data?.url : null} size="sm" onImageError={() => void url.refetch()} />
+    </Link>
   );
 }
 

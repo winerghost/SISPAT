@@ -107,6 +107,16 @@ server {
     }
 
     # -------------------------------------------------------------------------
+    # Foto de perfil (multipart): o Flask limita o arquivo a 2 MiB; o envelope
+    # multipart passa disso, então só estas rotas aceitam 3m (UA-INFRA-01).
+    # -------------------------------------------------------------------------
+    location ~ ^/api/v1/(me|users/[0-9a-fA-F-]{36})/avatar$ {
+        client_max_body_size 3m;
+        limit_req zone=sispat_api burst=10 nodelay;
+        include /etc/nginx/snippets/sispat-api-proxy.conf;
+    }
+
+    # -------------------------------------------------------------------------
     # API do backend Flask — tudo sob /api/ vai para o backend.
     # -------------------------------------------------------------------------
     location /api/ {

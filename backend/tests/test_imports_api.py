@@ -34,6 +34,16 @@ from app.services.import_service import (
 JWT_SECRET = "test-jwt-secret-sintetico-com-32-bytes-ou-mais"  # igual ao default de backend/tests/conftest.py
 
 
+@pytest.fixture(autouse=True)
+def fake_redis():
+    """Redis em memória p/ o rate limit (B-1); o fail-closed é testado à parte."""
+    from test_ai_support import FakeRedis
+
+    fake = FakeRedis()
+    with patch("redis.Redis.from_url", return_value=fake):
+        yield fake
+
+
 @pytest.fixture()
 def app():
     return create_app()
@@ -343,3 +353,73 @@ def test_confirm_preview_expirada_ou_ja_confirmada_retorna_409(client):
             )
 
     assert response.status_code == 409
+
+
+# ---------------------------------------------------------------------------
+# B-1 / B-2 — rate limit, query estrita e corpo proibido no preview
+# ---------------------------------------------------------------------------
+
+
+def _adm():
+    return _patch_authenticated(role_codes={"ADM"}, permission_codes={"imports.execute"})
+
+
+def test_preview_excedido_retorna_429(client):
+    token = _make_token()
+    mock_service = MagicMock()
+    mock_service.create_preview.side_effect = UpstreamSourceError("x")
+    p = _patch_db_and_service(mock_service)
+    codes = []
+    with _adm(), p[0], p[1], p[2]:
+        for _ in range(12):
+            codes.append(client.post(PREVIEW_URL, headers=_auth_headers(token)).status_code)
+    assert codes[:10] == [502] * 10 and codes[10:] == [429, 429]
+
+
+def test_confirm_excedido_retorna_429(client):
+    token = _make_token()
+    p = _patch_db_and_service(MagicMock(side_effect=PreviewNotFoundError("x")))
+    codes = []
+    with _adm(), p[0], p[1], p[2]:
+        for _ in range(11):
+            codes.append(client.post(CONFIRM_URL, headers=_auth_headers(token), json={}).status_code)
+    assert codes[-1] == 429 and set(codes[:-1]) == {400}
+
+
+@pytest.mark.parametrize("url", [PREVIEW_URL, CONFIRM_URL, _items_url(uuid.UUID(int=1))])
+def test_imports_redis_fora_bloqueia_503(client, url):
+    import redis as redis_lib
+
+    broken = MagicMock()
+    broken.incr.side_effect = redis_lib.exceptions.ConnectionError("x")
+    mock_service = MagicMock()
+    p = _patch_db_and_service(mock_service)
+    method = client.get if "items" in url else client.post
+    with patch("redis.Redis.from_url", return_value=broken), _adm(), p[0], p[1], p[2]:
+        response = method(url, headers=_auth_headers(_make_token()))
+    assert response.status_code == 503
+    mock_service.assert_not_called()
+    assert not mock_service.method_calls
+
+
+def test_preview_rejeita_qualquer_corpo(client):
+    mock_service = MagicMock()
+    p = _patch_db_and_service(mock_service)
+    with _adm(), p[0], p[1], p[2]:
+        response = client.post(PREVIEW_URL, headers=_auth_headers(_make_token()), json={"role": "ADM"})
+    assert response.status_code == 400
+    mock_service.create_preview.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "query",
+    ["?foo=1", "?role=ADM", "?page=0", "?page=abc", "?page_size=101", "?status=" + "x" * 33,
+     "?search=" + "x" * 201, "?page=1&page=2"],
+)
+def test_items_query_invalida_ou_desconhecida_400(client, query):
+    mock_service = MagicMock()
+    p = _patch_db_and_service(mock_service)
+    with _adm(), p[0], p[1], p[2]:
+        response = client.get(_items_url(uuid.uuid4()) + query, headers=_auth_headers(_make_token()))
+    assert response.status_code == 400
+    mock_service.list_preview_items.assert_not_called()

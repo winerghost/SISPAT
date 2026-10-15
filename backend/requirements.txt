@@ -37,6 +37,9 @@ urllib3==2.8.0            # transitiva do requests; CVE-2026-97687/97688/97689 c
 google-api-python-client==2.201.0
 google-auth==2.62.0
 
+# --- Imagens (foto de perfil: validação + re-encode WebP sem metadados) ---
+pillow==12.3.0            # publicada 2026-07-01; única dep. nova da Etapa 2 (ver avatar_service)
+
 # --- Autenticação (Supabase Auth via JWT) ---
 PyJWT==2.15.1
 cryptography==50.0.2      # 7 advisories (CVE-2026-26007, -34073, -39892, -69247/8/9, GHSA-537c) corrigidos até 50.0.0

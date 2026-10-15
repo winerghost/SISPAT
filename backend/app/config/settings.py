@@ -64,6 +64,11 @@ Variáveis de ambiente suportadas:
                             `app.services.invite_service.InviteService.create_invite`
                             como a URL de ativação de convite configurada (ver
                             docstring daquele módulo).
+    PASSWORD_RESET_REDIRECT_URL  URL da tela do frontend que recebe o link de
+                            recuperação de senha enviado pelo Supabase
+                            (`POST /api/v1/users/<id>/password-reset`). Precisa
+                            estar TAMBÉM em INVITE_ALLOWED_REDIRECT_URLS (mesma
+                            allow-list); vazia => usa a PRIMEIRA URL daquela lista.
     INVITE_TTL_DAYS         Dias de validade do REGISTRO LOCAL de um convite
                             (`app.services.invite_service.InviteService.create_invite`)
                             antes de expirar e não poder mais ser aceito (default: 7).
@@ -84,6 +89,17 @@ Variáveis de ambiente suportadas:
                             o MENOR entre este valor e `ai_settings.monthly_token_cap`.
     AI_CIRCUIT_FAILURE_THRESHOLD  Falhas consecutivas que abrem o circuito (default: 3).
     AI_CIRCUIT_OPEN_SECONDS Tempo (s) com o circuito aberto -> NullProvider (default: 300).
+    EMAIL_ENABLED           Chave geral do envio de e-mail SMTP (default: false). Quando false,
+                            `app.services.email` usa NullEmailSender (nao envia, nao falha).
+    EMAIL_HOST / EMAIL_PORT Servidor SMTP e porta (587 STARTTLS ou 465 SSL; 25 recusada).
+    EMAIL_USER              Usuario SMTP.
+    EMAIL_PASSWORD          SEGREDO (SecretStr). Senha de app do Gmail: espacos removidos.
+    EMAIL_FROM              Remetente (endereco unico; nunca vem do cliente).
+    EMAIL_FROM_NAME         Nome de exibicao opcional do remetente.
+    EMAIL_SECURITY          "starttls" (default, porta 587) ou "ssl" (porta 465).
+    EMAIL_TIMEOUT_SECONDS   Timeout (s) das operacoes SMTP (default: 10; faixa 1-60).
+    EMAIL_ALLOWED_RECIPIENT_DOMAINS  Dominios de destinatario permitidos (CSV; vazio = todos).
+    EMAIL_MAX_PER_HOUR      Teto global de e-mails por hora (default: 30).
     WORKER_CPUS / WORKER_MEMORY  Limites do container worker (lidos só pelo
                             docker-compose; não usados por este módulo).
 """
@@ -92,13 +108,22 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import PurePosixPath, PureWindowsPath
 
-from pydantic import Field, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from app.services.email.address import (
+    InvalidAddressError,
+    has_control_chars,
+    is_valid_hostname,
+    parse_single_address,
+)
 
 # Tamanho mínimo de segredos simétricos exigido em produção (256 bits em
 # caracteres ASCII; o segredo JWT legado do Supabase tem 40+ caracteres).
 _MIN_SECRET_LENGTH = 32
 _ALLOWED_JWT_ALGORITHMS = frozenset({"HS256", "ES256"})
+_EMAIL_SECURITY_MODES = frozenset({"starttls", "ssl"})
+_EMAIL_ALLOWED_PORTS = frozenset({465, 587})
 
 
 class Settings(BaseSettings):
@@ -285,6 +310,14 @@ class Settings(BaseSettings):
         ),
     )
 
+    password_reset_redirect_url: str | None = Field(
+        default=None,
+        description=(
+            "URL de destino do e-mail de recuperação de senha; precisa estar em "
+            "INVITE_ALLOWED_REDIRECT_URLS (vazia => primeira URL daquela lista)."
+        ),
+    )
+
     invite_ttl_days: int = Field(
         default=7,
         ge=1,
@@ -322,6 +355,97 @@ class Settings(BaseSettings):
     ai_monthly_token_cap: int = Field(default=200_000, ge=0, le=50_000_000)
     ai_circuit_failure_threshold: int = Field(default=3, ge=1, le=100)
     ai_circuit_open_seconds: int = Field(default=300, ge=10, le=86_400)
+
+    # --- E-mail SMTP (app.services.email). DESLIGADO por padrao. A senha e
+    # SecretStr (fora de repr/dump/logs); o cliente NUNCA fornece o remetente. ---
+    email_enabled: bool = Field(default=False)
+    email_host: str | None = Field(default=None)
+    email_port: int = Field(default=587, ge=1, le=65535)
+    email_user: str | None = Field(default=None, repr=False)
+    email_password: SecretStr | None = Field(default=None, repr=False, exclude=True)
+    email_from: str | None = Field(default=None)
+    email_from_name: str | None = Field(default=None, max_length=100)
+    email_security: str = Field(default="starttls")
+    email_timeout_seconds: int = Field(default=10, ge=1, le=60)
+    email_allowed_recipient_domains: str = Field(default="")
+    email_max_per_hour: int = Field(default=30, ge=1, le=1000)
+
+    @field_validator(
+        "email_host", "email_user", "email_password", "email_from", "email_from_name",
+        mode="before",
+    )
+    @classmethod
+    def _email_blank_to_none(cls, value):
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+    @field_validator("email_port", "email_timeout_seconds", "email_max_per_hour", mode="before")
+    @classmethod
+    def _email_blank_int_to_default(cls, value, info):
+        if isinstance(value, str) and not value.strip():
+            return cls.model_fields[info.field_name].default
+        return value
+
+    @field_validator("email_password", mode="before")
+    @classmethod
+    def _email_password_strip_spaces(cls, value):
+        # O Gmail exibe a senha de app em 4 grupos separados por espaco.
+        if isinstance(value, SecretStr):
+            value = value.get_secret_value()
+        if isinstance(value, str):
+            value = "".join(value.split()) or None
+        return value
+
+    @field_validator("email_security", mode="before")
+    @classmethod
+    def _email_security_allowlist(cls, value):
+        normalized = str(value).strip().lower() if value is not None else "starttls"
+        if normalized not in _EMAIL_SECURITY_MODES:
+            raise ValueError("EMAIL_SECURITY deve ser 'starttls' ou 'ssl'.")
+        return normalized
+
+    @model_validator(mode="after")
+    def _validate_email(self) -> "Settings":
+        """Quando EMAIL_ENABLED=true exige configuracao completa e TLS verificado.
+
+        Desligado, nada e validado (o ambiente atual continua subindo).
+        """
+        if not self.email_enabled:
+            return self
+        missing = [
+            name for name, val in (
+                ("EMAIL_HOST", self.email_host), ("EMAIL_USER", self.email_user),
+                ("EMAIL_PASSWORD", self.email_password), ("EMAIL_FROM", self.email_from),
+            ) if not val
+        ]
+        if missing:
+            raise ValueError(f"EMAIL_ENABLED=true exige: {', '.join(missing)}.")
+        if not is_valid_hostname(self.email_host or ""):
+            raise ValueError("EMAIL_HOST invalido.")
+        if self.email_port not in _EMAIL_ALLOWED_PORTS:
+            raise ValueError("EMAIL_PORT deve ser 587 (STARTTLS) ou 465 (SSL); texto claro/25 recusado.")
+        expected = "ssl" if self.email_port == 465 else "starttls"
+        if self.email_security != expected:
+            raise ValueError(f"EMAIL_PORT={self.email_port} exige EMAIL_SECURITY={expected}.")
+        try:
+            self.email_from = parse_single_address(self.email_from)
+        except InvalidAddressError:
+            raise ValueError("EMAIL_FROM deve ser um unico endereco de e-mail valido.") from None
+        if self.email_from_name and has_control_chars(self.email_from_name):
+            raise ValueError("EMAIL_FROM_NAME contem caracteres de controle.")
+        for domain in self.email_allowed_recipient_domains_list:
+            if not is_valid_hostname(domain):
+                raise ValueError("EMAIL_ALLOWED_RECIPIENT_DOMAINS contem dominio invalido.")
+        # Producao: TLS (starttls/ssl) e certificado verificado sao incondicionais
+        # (o modulo usa ssl.create_default_context() e nao ha opcao de desativar).
+        return self
+
+    @property
+    def email_allowed_recipient_domains_list(self) -> list[str]:
+        return [
+            d.strip().lower() for d in self.email_allowed_recipient_domains.split(",") if d.strip()
+        ]
 
     @model_validator(mode="after")
     def _apply_celery_defaults(self) -> "Settings":
@@ -419,6 +543,15 @@ class Settings(BaseSettings):
         return [
             url.strip() for url in self.invite_allowed_redirect_urls.split(",") if url.strip()
         ]
+
+    @property
+    def password_reset_redirect_effective_url(self) -> str | None:
+        """URL de recuperação de senha SE estiver na allow-list; senão a 1ª da lista."""
+        allowed = self.invite_allowed_redirect_urls_list
+        configured = (self.password_reset_redirect_url or "").strip()
+        if configured:
+            return configured if configured in allowed else None
+        return allowed[0] if allowed else None
 
 
 @lru_cache

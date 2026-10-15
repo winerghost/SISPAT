@@ -10,18 +10,22 @@ from __future__ import annotations
 from flask import Blueprint
 
 from app.api.v1.ai_settings import ai_settings_bp
+from app.api.v1.email_settings import email_settings_bp
 from app.api.v1.health import health_bp
 from app.api.v1.imports import imports_bp
 from app.api.v1.me import me_bp
 from app.api.v1.security import security_bp
+from app.api.v1.units import units_bp
 from app.api.v1.users import users_bp
 
 api_v1_bp = Blueprint("api_v1", __name__, url_prefix="/api/v1")
 api_v1_bp.register_blueprint(ai_settings_bp)
+api_v1_bp.register_blueprint(email_settings_bp)
 api_v1_bp.register_blueprint(health_bp)
 api_v1_bp.register_blueprint(imports_bp)
 api_v1_bp.register_blueprint(me_bp)
 api_v1_bp.register_blueprint(security_bp)
+api_v1_bp.register_blueprint(units_bp)
 api_v1_bp.register_blueprint(users_bp)
 
 __all__ = ["api_v1_bp"]

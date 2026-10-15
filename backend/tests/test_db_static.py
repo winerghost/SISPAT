@@ -116,7 +116,7 @@ def test_db_alembic_revision_chain_is_linear() -> None:
     down_targets = [d for d in revisions.values() if d is not None]
     assert len(down_targets) == len(set(down_targets)), "ramificação (branch) de revisões"
     heads = set(revisions) - set(down_targets)
-    assert heads == {"0005_settings_ai_users"}, heads
+    assert heads == {"0006_email_settings_permission"}, heads
 
 
 # ---------------------------------------------------------------------------
@@ -326,6 +326,47 @@ def test_db_0005_sql_mirror_matches_alembic(settings_migration) -> None:
     for statement in settings_migration.UPGRADE_STATEMENTS:
         assert statement.strip("\n") in mirror
     assert "PENDENTE DE APLICAÇÃO" in mirror
+
+
+# ---------------------------------------------------------------------------
+# Migração 0006_email_settings_permission
+# ---------------------------------------------------------------------------
+
+EMAIL_PERM_PY = VERSIONS_DIR / "0006_email_settings_permission.py"
+EMAIL_PERM_SQL = SQL_DIR / "0009_email_settings_permission.sql"
+
+
+@pytest.fixture(scope="module")
+def email_perm_migration() -> ModuleType:
+    return _load_module(EMAIL_PERM_PY)
+
+
+def test_db_0006_revises_0005_and_seeds_only_adm(email_perm_migration) -> None:
+    assert email_perm_migration.down_revision == "0005_settings_ai_users"
+    assert email_perm_migration.NEW_PERMISSIONS == ("settings.email.manage",)
+    sql = email_perm_migration.SEED_PERMISSIONS_SQL
+    assert re.findall(r"WHERE r\.code = '(\w+)'", sql) == ["ADM"]
+    for stmt in re.findall(r"INSERT INTO[^;]*;", sql):
+        assert "ON CONFLICT" in stmt
+
+
+def test_db_0006_permission_matches_route() -> None:
+    route = (Path(__file__).resolve().parents[1] / "app" / "api" / "v1" / "email_settings.py")
+    assert '_PERMISSION = "settings.email.manage"' in route.read_text(encoding="utf-8")
+
+
+def test_db_0006_downgrade_only_removes_its_permission(email_perm_migration) -> None:
+    sql = email_perm_migration.DOWNGRADE_SQL
+    assert sql.count("settings.email.manage") == 2
+    assert "DROP" not in sql.upper() and "TRUNCATE" not in sql.upper()
+
+
+def test_db_0006_sql_mirror_matches_alembic(email_perm_migration) -> None:
+    mirror = EMAIL_PERM_SQL.read_text(encoding="utf-8")
+    for statement in email_perm_migration.UPGRADE_STATEMENTS:
+        assert statement.strip("\n") in mirror
+    assert "PENDENTE DE APLICAÇÃO" in mirror
+    assert not re.search(r"^\s*(BEGIN|COMMIT);", mirror, re.MULTILINE)
 
 
 def test_db_0005_models_match_migration_constraints() -> None:

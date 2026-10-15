@@ -10,3 +10,4 @@ export {
   type AuthPanelImage,
 } from "./login-guidance";
 export { useMediaQuery, LG_QUERY } from "./use-media-query";
+export { TotpEnrollDetails, type TotpEnrollDetailsProps } from "./totp-enroll-details";

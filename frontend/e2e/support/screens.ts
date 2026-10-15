@@ -38,6 +38,22 @@ async function generatePreview(page: Page): Promise<void> {
   await expect(page.getByText("Página 1 de 1")).toBeVisible();
 }
 
+/** Abre o painel lateral de detalhe do usuário e, se pedido, uma aba. */
+async function openUserSheet(page: Page, name: string, tab?: string): Promise<void> {
+  await expect(page.getByRole("table", { name: "Usuários" })).toBeVisible();
+  await page.getByRole("button", { name: `Gerenciar ${name}`, exact: true }).click();
+  const sheet = page.getByRole("dialog", { name });
+  await expect(sheet).toBeVisible();
+  await expect(sheet.getByRole("tablist", { name: "Seções do usuário" })).toBeVisible();
+  if (tab) {
+    await sheet.getByRole("tab", { name: tab }).click();
+    await expect(sheet.getByRole("tab", { name: tab })).toHaveAttribute("aria-selected", "true");
+  }
+}
+
+export const RH_NAME = "Pessoa Sintética RH";
+export const ADMIN_NAME = "Pessoa Sintética Administradora com Nome Bastante Longo para Teste";
+
 async function openMobileMenuIfPresent(page: Page): Promise<void> {
   const trigger = page.getByRole("button", { name: "Abrir menu de navegação" });
   if (await trigger.isVisible()) {
@@ -66,6 +82,21 @@ export const SCREENS: ScreenDef[] = [
       await page.getByLabel("Senha").fill("senha-sintetica-123");
       await page.getByRole("button", { name: "Entrar" }).click();
       await expect(page.getByRole("heading", { level: 1, name: "Verificação em duas etapas" })).toBeVisible();
+    },
+  },
+  {
+    id: "login-enroll",
+    title: "Login — cadastro do primeiro fator TOTP (ADM sem fator)",
+    path: "/login",
+    session: null,
+    prepare: async (page) => {
+      await page.getByLabel("E-mail").fill("adm.sintetico@exemplo.invalid");
+      await page.getByLabel("Senha").fill("senha-sintetica-123");
+      await page.getByRole("button", { name: "Entrar" }).click();
+      await expect(
+        page.getByRole("heading", { level: 1, name: "Ativar verificação em duas etapas" }),
+      ).toBeVisible();
+      await expect(page.getByRole("img", { name: /QR code/ })).toBeVisible();
     },
   },
   {
@@ -182,7 +213,96 @@ export const SCREENS: ScreenDef[] = [
     prepare: async (page) => {
       await expect(page.getByRole("table")).toBeVisible();
       await page.getByRole("button", { name: "Convidar Usuário" }).click();
-      await expect(page.getByRole("dialog", { name: "Convidar Usuário" })).toBeVisible();
+      const dialog = page.getByRole("dialog", { name: "Convidar Usuário" });
+      await expect(dialog).toBeVisible();
+      await expect(dialog.getByRole("checkbox", { name: /PSU-TO/ })).toBeVisible();
+    },
+  },
+  {
+    id: "usuarios-filtros",
+    title: "Usuários — busca e filtros aplicados (inativos)",
+    path: "/administracao/usuarios",
+    session: { role: "ADM" },
+    prepare: async (page) => {
+      await expect(page.getByRole("table")).toBeVisible();
+      await page.getByRole("group", { name: "Filtrar por situação" }).getByRole("button", { name: "Inativos" }).click();
+      await expect(page.getByText("Página 1 de 1 · 1 usuário(s)")).toBeVisible();
+      await expect(page.getByRole("button", { name: "Limpar filtros" })).toBeVisible();
+    },
+  },
+  {
+    id: "usuarios-detalhe-perfil",
+    title: "Usuários — detalhe: perfil e unidades",
+    path: "/administracao/usuarios",
+    session: { role: "ADM" },
+    prepare: async (page) => {
+      await openUserSheet(page, RH_NAME);
+      const sheet = page.getByRole("dialog", { name: RH_NAME });
+      await expect(sheet.getByRole("radio", { name: /RH — Recursos Humanos/ })).toBeChecked();
+      await expect(sheet.getByText("FORA-09 — Unidade Sintética Fora do Escopo")).toBeVisible();
+    },
+  },
+  {
+    id: "usuarios-detalhe-conta",
+    title: "Usuários — detalhe: conta (ações)",
+    path: "/administracao/usuarios",
+    session: { role: "ADM" },
+    prepare: async (page) => {
+      await openUserSheet(page, RH_NAME, "Conta");
+      await expect(page.getByRole("button", { name: "Reativar conta" })).toBeVisible();
+    },
+  },
+  {
+    id: "usuarios-detalhe-foto",
+    title: "Usuários — detalhe: foto (URL assinada)",
+    path: "/administracao/usuarios",
+    session: { role: "ADM" },
+    prepare: async (page) => {
+      await openUserSheet(page, ADMIN_NAME, "Foto");
+      await expect(page.getByRole("button", { name: "Remover foto" })).toBeVisible();
+    },
+  },
+  {
+    id: "usuarios-detalhe-historico",
+    title: "Usuários — detalhe: histórico paginado",
+    path: "/administracao/usuarios",
+    session: { role: "ADM" },
+    prepare: async (page) => {
+      await openUserSheet(page, ADMIN_NAME, "Histórico");
+      await expect(page.getByText("Página 1 de 2 · 12 evento(s)")).toBeVisible();
+    },
+  },
+  {
+    id: "usuarios-confirmar-adm",
+    title: "Usuários — confirmação de promoção a ADM",
+    path: "/administracao/usuarios",
+    session: { role: "ADM" },
+    prepare: async (page) => {
+      await openUserSheet(page, RH_NAME);
+      await page.getByRole("radio", { name: /ADM — Administração/ }).check();
+      await page.getByRole("button", { name: "Salvar perfil e unidades" }).click();
+      await expect(page.getByRole("dialog", { name: "Promover a administrador" })).toBeVisible();
+    },
+  },
+  {
+    id: "usuarios-confirmar-desativar",
+    title: "Usuários — confirmação de desativação (motivo)",
+    path: "/administracao/usuarios",
+    session: { role: "ADM" },
+    prepare: async (page) => {
+      await openUserSheet(page, ADMIN_NAME, "Conta");
+      await page.getByRole("button", { name: "Desativar conta" }).click();
+      await expect(page.getByRole("dialog", { name: "Desativar conta" })).toBeVisible();
+    },
+  },
+  {
+    id: "perfil",
+    title: "Configurações / Meu perfil (foto)",
+    path: "/configuracoes/perfil",
+    session: { role: "USER" },
+    prepare: async (page) => {
+      await expect(page.getByRole("heading", { level: 1, name: "Meu perfil" })).toBeVisible();
+      await expect(page.getByText("Sem foto — as iniciais são exibidas no lugar.")).toBeVisible();
     },
   },
   {
@@ -211,7 +331,15 @@ export const SCREENS: ScreenDef[] = [
 export async function openScreen(page: Page, screen: ScreenDef): Promise<void> {
   // ADM entra pelo login com aal1 para exercitar o desafio MFA.
   const loginAsAdmMfa = screen.id === "login-mfa";
-  await installMocks(page, loginAsAdmMfa ? { role: "ADM", aal: "aal1" } : (screen.session ?? {}));
+  const loginAsAdmEnroll = screen.id === "login-enroll";
+  await installMocks(
+    page,
+    loginAsAdmEnroll
+      ? { role: "ADM", aal: "aal1", hasVerifiedFactor: false }
+      : loginAsAdmMfa
+        ? { role: "ADM", aal: "aal1" }
+        : (screen.session ?? {}),
+  );
   if (screen.session) await seedSession(page, screen.session);
   await page.goto(screen.path);
   await waitForHydration(page);

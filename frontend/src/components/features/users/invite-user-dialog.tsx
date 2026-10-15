@@ -25,13 +25,14 @@ import { FormMessage } from "@/components/ui/form-message";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { ApiError, inviteUser, type IntendedRoleCode } from "@/lib/users-api";
+import { rateLimitMessage } from "@/lib/api-errors";
+import { UnitCheckboxList } from "./unit-checkbox-list";
 
 // =============================================================================
 // InviteUserDialog — convite de usuário (POST /api/v1/users/invite).
 // =============================================================================
-// Unidades: NÃO HÁ, ainda, endpoint de listagem de unidades para um seletor
-// real — o campo é texto livre com UUIDs separados por vírgula.
-// TODO: substituir por um seletor real quando o endpoint existir.
+// Unidades: checkboxes com as unidades do escopo do ADM (`GET /api/v1/units`,
+// ver `unit-checkbox-list.tsx`) — sem UUID digitado à mão.
 //
 // Validação no cliente é só UX (o backend valida de fato e decide permissão:
 // ADM + AAL2 + `users.invite`). `noValidate`: as mensagens nativas do
@@ -60,7 +61,7 @@ export function InviteUserDialog({
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [role, setRole] = useState<IntendedRoleCode>("USER");
-  const [unitIdsRaw, setUnitIdsRaw] = useState("");
+  const [unitIds, setUnitIds] = useState<string[]>([]);
   const [justification, setJustification] = useState("");
   const [showJustification, setShowJustification] = useState(false);
   const [errors, setErrors] = useState<FieldErrors>({});
@@ -84,7 +85,7 @@ export function InviteUserDialog({
     setName("");
     setEmail("");
     setRole("USER");
-    setUnitIdsRaw("");
+    setUnitIds([]);
     setJustification("");
     setShowJustification(false);
     setErrors({});
@@ -102,21 +103,19 @@ export function InviteUserDialog({
 
     const form = event.currentTarget;
     const emailInput = form.elements.namedItem("email") as HTMLInputElement | null;
-    const unit_ids = unitIdsRaw
-      .split(",")
-      .map((id) => id.trim())
-      .filter((id) => id.length > 0);
+    const unit_ids = unitIds;
 
     const next: FieldErrors = {};
     if (!name.trim()) next.name = "Informe o nome.";
     if (!email.trim()) next.email = "Informe o e-mail institucional.";
     else if (emailInput?.validity.typeMismatch) next.email = "Informe um e-mail válido.";
-    if (unit_ids.length === 0) next.units = "Informe ao menos uma unidade (ID).";
+    if (unit_ids.length === 0) next.units = "Selecione ao menos uma unidade.";
 
     setErrors(next);
     const firstInvalid = (["name", "email", "units"] as const).find((field) => next[field]);
     if (firstInvalid) {
-      document.getElementById(FIELD_IDS[firstInvalid])?.focus();
+      const target = document.getElementById(FIELD_IDS[firstInvalid]);
+      (firstInvalid === "units" ? target?.querySelector<HTMLInputElement>("input") : target)?.focus();
       return;
     }
 
@@ -198,27 +197,19 @@ export function InviteUserDialog({
             )}
           </FormField>
 
-          <FormField
+          <UnitCheckboxList
             id={FIELD_IDS.units}
-            label="Unidades (IDs separados por vírgula)"
+            legend="Unidades"
             required
-            error={errors.units}
             surface="light"
-          >
-            {(field) => (
-              <Input
-                {...field}
-                name="unit_ids"
-                placeholder="ex.: 11111111-1111-1111-1111-111111111111"
-                value={unitIdsRaw}
-                onChange={(e) => {
-                  setUnitIdsRaw(e.target.value);
-                  clearError("units");
-                }}
-                disabled={pending}
-              />
-            )}
-          </FormField>
+            selected={unitIds}
+            error={errors.units}
+            disabled={pending}
+            onChange={(next) => {
+              setUnitIds(next);
+              clearError("units");
+            }}
+          />
 
           {/* Seção expansível: campo opcional fora do caminho principal. */}
           <div className="flex flex-col gap-2">
@@ -287,6 +278,7 @@ function inviteErrorMessage(error: unknown): string {
     if (error.status === 403) {
       return "Você não tem permissão para convidar usuários, ou sua sessão ainda não confirmou a verificação em duas etapas (AAL2).";
     }
+    if (error.status === 429) return rateLimitMessage(error);
     if (error.status === 409) {
       return "Já existe um convite pendente para este e-mail.";
     }

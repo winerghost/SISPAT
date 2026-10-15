@@ -145,10 +145,16 @@ def test_erro_no_servico_de_usuarios_vira_500_generico(client):
     user = SimpleNamespace(id=uuid.uuid4(), active=True)
     session = MagicMock()
     session.query.side_effect = RuntimeError("psycopg2.errors.UndefinedTable: relation users")
+    # GET /users passou a ter rate limit fail-closed (Etapa 2): Redis falso
+    # para que a exceção do serviço (e não o 503 do limitador) seja exercitada.
+    fake_redis = MagicMock()
+    fake_redis.incr.return_value = 1
     with patch(
         "app.auth.supabase_auth._load_user_with_roles_and_permissions",
         return_value=(user, {"ADM"}, {"users.manage"}),
-    ), patch("app.api.v1.users.get_db_session", lambda: _fake_session_cm(session)):
+    ), patch("app.api.v1.users.get_db_session", lambda: _fake_session_cm(session)), patch(
+        "redis.Redis.from_url", return_value=fake_redis
+    ):
         response = client.get("/api/v1/users", headers={"Authorization": f"Bearer {token}"})
     assert response.status_code == 500
     assert "psycopg2" not in response.get_data(as_text=True)

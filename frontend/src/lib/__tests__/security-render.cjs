@@ -64,8 +64,12 @@ function check(name, html) {
 {
   const Page = require(path.join(FE, "src/app/(app)/administracao/usuarios/page.tsx")).default;
   const qc = new QueryClient();
-  qc.setQueryData(["users", 1], { total: 4, page: 1, page_size: 20,
-    users: P.map((p, i) => ({ id: `u${i}`, name: p, email: p, active: true, roles: [p] })) });
+  // Chave/forma atuais (gestão de usuários, Etapa 2): lista + unidades do filtro.
+  qc.setQueryData(["users", "list", { sort: "name", page: 1, page_size: 25 }], { total: 4, page: 1, page_size: 25,
+    users: P.map((p, i) => ({ id: `u${i}`, name: p, email: p, active: true, role: "USER", has_avatar: false,
+      units: [{ id: `un${i}`, code: p, name: p }], created_at: "2026-01-01T00:00:00Z", last_login_at: null,
+      deactivated_at: null, version: 1 })) });
+  qc.setQueryData(["units"], { units: P.map((p, i) => ({ id: `un${i}`, code: p, name: p })) });
   const html = renderToString(React.createElement(QueryClientProvider, { client: qc }, React.createElement(Page)));
   check("AdministracaoUsuariosPage", html);
 }
@@ -105,5 +109,78 @@ function check(name, html) {
   for (const [p, e] of Object.entries(exp)) if (isPublicRoute(p) !== e) { fail++; console.log("FAIL isPublicRoute", p); }
   console.log("OK   isPublicRoute (6 casos)");
 }
+// 7) api-client: origem (F-1), Retry-After (F-10), mensagens (F-10), chave de /me (F-3), timeout (F-2)
+const asyncTests = [];
+{
+  const { buildApiUrl, assertApiOrigin, parseRetryAfter, ApiError, apiClient } = require(path.join(FE, "src/lib/api-client.ts"));
+  const { rateLimitMessage, formatRetryAfter, throttleOrForbiddenMessage } = require(path.join(FE, "src/lib/api-errors.ts"));
+  const { meQueryKey } = require(path.join(FE, "src/lib/session.ts"));
+  const throws = (fn) => { try { fn(); return false; } catch (e) { return e instanceof ApiError; } };
+  const t = (name, ok) => { if (!ok) { fail++; console.log("FAIL", name); } };
+  const API = "https://api.exemplo.invalid/api";
+  t("buildApiUrl absoluta", buildApiUrl("/v1/me", { a: 1 }, API) === "https://api.exemplo.invalid/api/v1/me?a=1");
+  t("buildApiUrl relativa", buildApiUrl("/v1/me", undefined, "/api") === "/api/v1/me");
+  t("buildApiUrl //host rejeitado (relativa)", throws(() => buildApiUrl("//evil.invalid/x", undefined, "")));
+  t("buildApiUrl @host fica no path da API (barra inicial impede userinfo)", buildApiUrl("@evil.invalid/x", undefined, "https://api.exemplo.invalid") === "https://api.exemplo.invalid/@evil.invalid/x");
+  t("assert mesma origem", !throws(() => assertApiOrigin(API + "/v1/me", API, "https://app.exemplo.invalid", true)));
+  t("assert origem alheia", throws(() => assertApiOrigin("https://evil.invalid/api/v1/me", API, "https://app.exemplo.invalid", true)));
+  t("assert relativa = origem da página", !throws(() => assertApiOrigin("/api/v1/me", "/api", "https://app.exemplo.invalid", true)));
+  t("assert relativa rejeita host alheio", throws(() => assertApiOrigin("https://evil.invalid/x", "/api", "https://app.exemplo.invalid", true)));
+  t("assert http em produção rejeitado", throws(() => assertApiOrigin("http://api.exemplo.invalid/api/v1/me", "http://api.exemplo.invalid/api", "http://app.exemplo.invalid", true)));
+  t("assert http loopback em produção permitido", !throws(() => assertApiOrigin("http://127.0.0.1:5000/api/v1/me", "http://127.0.0.1:5000/api", "http://localhost:3100", true)));
+  t("assert http em dev permitido", !throws(() => assertApiOrigin("http://api.exemplo.invalid/api/v1/me", "http://api.exemplo.invalid/api", "http://app.exemplo.invalid", false)));
+  t("Retry-After inteiro", parseRetryAfter("90") === 90);
+  t("Retry-After ausente/inválido", parseRetryAfter(null) === undefined && parseRetryAfter("abc") === undefined && parseRetryAfter("-5") === undefined);
+  t("Retry-After data HTTP", parseRetryAfter("Wed, 21 Oct 2026 07:28:30 GMT", Date.parse("Wed, 21 Oct 2026 07:28:00 GMT")) === 30);
+  t("Retry-After limitado a 24h", parseRetryAfter("999999999") === 86400);
+  t("formatRetryAfter", formatRetryAfter(undefined) === "alguns instantes" && formatRetryAfter(1) === "1 segundo" && formatRetryAfter(90) === "2 minutos" && formatRetryAfter(3600) === "1 hora");
+  t("429 com Retry-After", rateLimitMessage(new ApiError("SISPAT_BACKEND_MSG", 429, undefined, undefined, 30)).includes("30 segundos"));
+  t("429 sem Retry-After", rateLimitMessage(new ApiError("SISPAT_BACKEND_MSG", 429)).includes("alguns minutos"));
+  t("403/429 nunca exibem message do backend", [403, 429].every((c) => !throttleOrForbiddenMessage(new ApiError("SISPAT_BACKEND_MSG", c)).includes("SISPAT_BACKEND_MSG")));
+  t("outros status => undefined", throttleOrForbiddenMessage(new ApiError("x", 500)) === undefined);
+  t("meQueryKey sem token", JSON.stringify(meQueryKey("uid-1")) === '["me","uid-1"]' && JSON.stringify(meQueryKey(null)) === '["me",null]');
+  const { classifySignInError, signInErrorMessage } = require(path.join(FE, "src/lib/auth-errors.ts"));
+  t("signIn 400 invalid_credentials => credencial", classifySignInError({ status: 400, code: "invalid_credentials" }) === "credentials");
+  t("signIn 429 => limite", classifySignInError({ status: 429 }) === "rate_limit" && classifySignInError({ code: "over_request_rate_limit" }) === "rate_limit");
+  t("signIn rede (AuthRetryableFetchError/status 0/ausente/5xx) => rede",
+    ["AuthRetryableFetchError"].every((n) => classifySignInError({ name: n, status: 0 }) === "network")
+    && classifySignInError({ status: 0 }) === "network" && classifySignInError(new TypeError("Failed to fetch")) === "network" && classifySignInError({ status: 503 }) === "network");
+  t("signIn 4xx desconhecido não enumera (credencial)", classifySignInError({ status: 422 }) === "credentials" && classifySignInError({ status: 403 }) === "credentials");
+  t("signIn mensagens genéricas", signInErrorMessage({ status: 0 }) === "Não foi possível conectar. Tente novamente." && signInErrorMessage({ status: 400 }) === "E-mail ou senha incorretos.");
+  console.log("OK   api-client/api-errors/session (origem, https, Retry-After, mensagens, chave /me)");
+
+  // F-2: o timeout cobre a leitura do corpo (fetch devolve headers; text() pendura).
+  const realFetch = global.fetch;
+  global.fetch = (_url, init) => Promise.resolve({
+    ok: true, status: 200, headers: new Headers(),
+    text: () => new Promise((_res, rej) => init.signal.addEventListener("abort", () => rej(new Error("aborted")))),
+  });
+  asyncTests.push(
+    apiClient.get("/v1/me", { auth: false, timeoutMs: 80 }).then(
+      () => { fail++; console.log("FAIL timeout corpo: não rejeitou"); },
+      (e) => {
+        if (e instanceof ApiError && e.status === 0) console.log("OK   timeout cobre a leitura do corpo (F-2)");
+        else { fail++; console.log("FAIL timeout corpo", e); }
+      },
+    ).finally(() => { global.fetch = realFetch; }),
+  );
+}
+// F-notice: aviso de fator é best-effort (500 e rede ignorados), POST sem corpo para o caminho certo.
+asyncTests.push((async () => {
+  const { notifyMfaFactorAdded } = require(path.join(FE, "src/lib/users-api.ts"));
+  const realFetch = global.fetch;
+  const seen = [];
+  try {
+    global.fetch = (url, init) => { seen.push({ url: String(url), method: init.method, body: init.body }); return Promise.resolve(new Response('{"error":{"code":"X","message":"m"}}', { status: 500 })); };
+    await notifyMfaFactorAdded();
+    global.fetch = () => Promise.reject(new TypeError("Failed to fetch"));
+    await notifyMfaFactorAdded();
+    const ok = seen.length === 1 && seen[0].method === "POST" && seen[0].body === undefined && seen[0].url.endsWith("/v1/security/mfa/factor-added-notice");
+    if (!ok) { fail++; console.log("FAIL notifyMfaFactorAdded", seen); } else console.log("OK   notifyMfaFactorAdded best-effort (500/rede ignorados, POST sem corpo)");
+  } catch (e) { fail++; console.log("FAIL notifyMfaFactorAdded lançou", e); }
+  finally { global.fetch = realFetch; }
+})());
+Promise.all(asyncTests).then(() => {
 console.log(fail ? `\n${fail} FALHA(S)` : "\nTODOS OS TESTES PASSARAM");
 process.exit(fail ? 1 : 0);
+});

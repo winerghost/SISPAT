@@ -55,3 +55,13 @@ def _sem_escritor_de_auditoria_em_segundo_plano(monkeypatch):
     `_dispatch` (que prevalece sobre este).
     """
     monkeypatch.setattr("app.authorization.security_events._dispatch", lambda event: None)
+
+
+@pytest.fixture(autouse=True)
+def _cliente_redis_sem_cache_entre_testes():
+    """O cliente Redis do rate limit é reutilizado (B-7); isola cada teste."""
+    from app.security.rate_limit import reset_redis_client_cache
+
+    reset_redis_client_cache()
+    yield
+    reset_redis_client_cache()

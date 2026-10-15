@@ -20,6 +20,7 @@ import {
   SlidersHorizontal,
   Lock,
   Sparkles,
+  CircleUserRound,
 } from "lucide-react";
 
 // =============================================================================
@@ -118,6 +119,12 @@ export const NAV_ITEMS: NavGroup[] = [
     href: SETTINGS_HREF,
     icon: Settings,
     children: [
+      {
+        label: "Perfil",
+        href: "/configuracoes/perfil",
+        icon: CircleUserRound,
+        description: "Seu nome, e-mail e foto de perfil.",
+      },
       {
         label: "Segurança",
         href: "/configuracoes/seguranca",

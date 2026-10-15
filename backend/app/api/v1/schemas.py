@@ -72,6 +72,12 @@ PRIVILEGED_FIELD_NAMES = frozenset(
         "deepseek_api_key",
         "deepseek_acknowledged_at",
         "deepseek_acknowledged_by",
+        # Gestão de usuários: estado de conta/sessão/foto só muda pelo servidor.
+        "sessions_revoked_at",
+        "avatar_object_key",
+        "deactivated_at",
+        "deactivated_by",
+        "last_login_at",
     }
 )
 
@@ -154,7 +160,131 @@ class AISettingsUpdate(_StrictModel):
         return data
 
 
-def reject_unexpected_fields(field_names: list[str] | set[str], *, context: str) -> None:
+class EmptyBody(_StrictModel):
+    """Corpo vazio: rotas de ação sem parâmetros (qualquer campo -> 400 auditado)."""
+
+
+class _NoExplicitNullsModel(_StrictModel):
+    """`null` explícito não tem significado (omitir = manter) -> 400."""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_explicit_nulls(cls, data: Any) -> Any:
+        if isinstance(data, dict) and not (set(data) - set(cls.model_fields)):
+            for name in cls.model_fields:
+                if name in data and data[name] is None:
+                    raise ValueError(f"{name} não pode ser nulo")
+        return data
+
+
+_VERSION_FIELD = Field(ge=1, le=2_147_483_647)
+UserRoleCode = Literal["ADM", "USER", "RH"]
+
+
+class UserUpdateRequest(_NoExplicitNullsModel):
+    """Corpo de `PATCH /api/v1/users/<id>` (Etapa 2).
+
+    Só `role` e `unit_ids` são editáveis; `active`, `email`, `auth_user_id`,
+    `deleted_at`, `sessions_revoked_at`, `avatar_object_key` etc. são
+    rejeitados (400 + evento). Ao menos um de `role`/`unit_ids` é exigido.
+    """
+
+    version: StrictInt = _VERSION_FIELD
+    role: UserRoleCode | None = None
+    unit_ids: list[uuid.UUID] | None = Field(default=None, min_length=1, max_length=50)
+    confirm_privilege_change: StrictBool | None = None
+
+    @model_validator(mode="after")
+    def _require_change(self) -> "UserUpdateRequest":
+        if self.role is None and self.unit_ids is None:
+            raise ValueError("informe role e/ou unit_ids")
+        return self
+
+
+class VersionRequest(_NoExplicitNullsModel):
+    """Corpo `{"version": n}` das ações de conta (ex.: `activate`)."""
+
+    version: StrictInt = _VERSION_FIELD
+
+
+class DeactivateRequest(VersionRequest):
+    """Corpo de `POST /api/v1/users/<id>/deactivate`."""
+
+    reason: str | None = Field(default=None, max_length=1000)
+
+
+UserSortKey = Literal[
+    "name", "-name", "email", "-email", "created_at", "-created_at", "last_login_at", "-last_login_at"
+]
+
+
+class UserListQuery(_StrictModel):
+    """Query string de `GET /api/v1/users` (allowlist; desconhecido -> 400)."""
+
+    q: str | None = Field(default=None, max_length=100)
+    role: UserRoleCode | None = None
+    unit_id: uuid.UUID | None = None
+    active: Literal["true", "false"] | None = None
+    sort: UserSortKey = "name"
+    page: int = Field(default=1, ge=1, le=100_000)
+    page_size: int = Field(default=25, ge=1, le=100)
+
+
+class ImportItemsQuery(_StrictModel):
+    """Query string de `GET /imports/google-sheets/preview/<id>/items` (B-2).
+
+    `status` é filtrado pelo serviço contra a allowlist de classificações
+    (valor desconhecido -> lista vazia); aqui só limites de tamanho/forma.
+    Parâmetro desconhecido/repetido ou fora dos limites -> 400.
+    """
+
+    status: str | None = Field(default=None, max_length=32)
+    search: str | None = Field(default=None, max_length=200)
+    page: int = Field(default=1, ge=1, le=100_000)
+    page_size: int = Field(default=25, ge=1, le=100)
+
+    @field_validator("status", "search", mode="after")
+    @classmethod
+    def _blank_to_none(cls, value: str | None) -> str | None:
+        return value or None
+
+
+class PageQuery(_StrictModel):
+    """Query string paginada simples (ex.: histórico de auditoria)."""
+
+    page: int = Field(default=1, ge=1, le=100_000)
+    page_size: int = Field(default=25, ge=1, le=100)
+
+
+def parse_query(model: type[ModelT], args: Any, *, context: str) -> ModelT:
+    """Valida a query string (MultiDict) contra `model` — mesma política de `parse_body`.
+
+    Parâmetro repetido -> 400; desconhecido -> 400 auditado; valores nunca
+    ecoados na mensagem.
+    """
+    raw = args.to_dict(flat=False) if hasattr(args, "to_dict") else dict(args or {})
+    if any(len(values) != 1 for values in raw.values() if isinstance(values, list)):
+        abort(400, description="Parâmetro de consulta repetido.")
+    flat = {key: (values[0] if isinstance(values, list) else values) for key, values in raw.items()}
+    unknown = set(flat) - set(model.model_fields)
+    if unknown:
+        reject_unexpected_fields(unknown, context=context, location="na consulta")
+    try:
+        return model.model_validate(flat)
+    except ValidationError as exc:
+        errors = exc.errors(include_input=False, include_url=False)
+        invalid = sorted({str(err["loc"][0]) for err in errors if err.get("loc")})
+        shown = ", ".join(invalid[:_MAX_FIELD_NAMES_IN_MESSAGE]) or "consulta"
+        abort(400, description=f"Parâmetro(s) inválido(s): {shown}.")
+    raise AssertionError("inalcançável")  # pragma: no cover
+
+
+def reject_unexpected_fields(
+    field_names: list[str] | set[str],
+    *,
+    context: str,
+    location: str = "no corpo da requisição",
+) -> None:
     """Registra evento de segurança e aborta com 400 por campos não permitidos."""
     names = sorted(str(name)[:64] for name in field_names)
     privileged = sorted(set(names) & PRIVILEGED_FIELD_NAMES)
@@ -171,7 +301,7 @@ def reject_unexpected_fields(field_names: list[str] | set[str], *, context: str)
             details={"context": context, "fields": names},
         )
     shown = ", ".join(names[:_MAX_FIELD_NAMES_IN_MESSAGE])
-    abort(400, description=f"Campo(s) não permitido(s) no corpo da requisição: {shown}.")
+    abort(400, description=f"Campo(s) não permitido(s) {location}: {shown}.")
 
 
 def parse_body(model: type[ModelT], body: Any, *, context: str) -> ModelT:

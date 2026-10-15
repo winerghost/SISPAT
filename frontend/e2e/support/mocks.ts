@@ -33,8 +33,24 @@ export interface MockOptions {
   aal?: "aal1" | "aal2";
   /** Se o usuário tem fator TOTP verificado (Supabase `user.factors`). */
   hasVerifiedFactor?: boolean;
+  /** Fator TOTP NÃO verificado deixado por uma tentativa anterior de cadastro. */
+  hasStaleUnverifiedFactor?: boolean;
+  /** Valor de `totp.qr_code` devolvido pelo `mfa.enroll` (padrão: SVG cru válido). */
+  enrollQrCode?: string;
   /** Sobrescreve o estado inicial de `GET /api/v1/settings/ai`. */
   ai?: Partial<AiSettingsMock>;
+  /** Resultado de `POST /users/<id>/password-reset` (padrão "sent"). */
+  passwordReset?: "sent" | "unavailable";
+  /** Supabase Storage fora do ar: rotas de foto → 503 `storage_unavailable`. */
+  storageUnavailable?: boolean;
+  /** Se o próprio usuário já tem foto (`/me/avatar-url`). */
+  meHasAvatar?: boolean;
+  /** Status HTTP forçado em `GET /api/v1/me` (ex.: 401 = usuário inativo/sem registro local). */
+  meStatus?: number;
+  /** `GET /api/v1/users` responde 429 com este `Retry-After` (segundos; 0 = sem o cabeçalho). */
+  usersRateLimitRetryAfter?: number;
+  /** Status de `POST /security/mfa/factor-added-notice` (padrão 204; ex.: 500 testa o best-effort). */
+  factorNoticeStatus?: number;
 }
 
 /** Espelho sintético do contrato `/api/v1/settings/ai` (docs/architecture/modulo-configuracoes.md). */
@@ -57,9 +73,55 @@ export interface MockState {
   role: Role;
   aal: "aal1" | "aal2";
   hasVerifiedFactor: boolean;
+  /** Fator não verificado existente (tentativa anterior ou enroll em andamento). */
+  unverifiedFactorId: string | null;
+  enrollQrCode: string;
   /** Estado mutável das configurações de IA (testes podem simular edição concorrente). */
   ai: AiSettingsMock;
+  /** Usuários administráveis (contrato `UserSummary`); testes podem mutar. */
+  users: UserMock[];
+  /** Unidades do escopo do ADM (`GET /api/v1/units`). */
+  units: UnitMock[];
+  /** Histórico por usuário (`GET /users/<id>/audit`). */
+  audit: Record<string, AuditEventMock[]>;
+  passwordReset: "sent" | "unavailable";
+  storageUnavailable: boolean;
+  meHasAvatar: boolean;
+  meStatus: number | null;
+  usersRateLimitRetryAfter: number | null;
+  factorNoticeStatus: number;
+  /** `true` após um desafio TOTP verificado nesta aba (step-up do MFA reset). */
+  reauthVerified: boolean;
   calls: { method: string; url: string; body: unknown }[];
+}
+
+export interface UnitMock {
+  id: string;
+  code: string;
+  name: string;
+}
+
+export interface UserMock {
+  id: string;
+  name: string;
+  email: string;
+  active: boolean;
+  role: Role | null;
+  units: UnitMock[];
+  has_avatar: boolean;
+  created_at: string;
+  last_login_at: string | null;
+  deactivated_at: string | null;
+  version: number;
+}
+
+export interface AuditEventMock {
+  id: string;
+  occurred_at: string;
+  operation: string;
+  result: string;
+  actor: { id: string; name: string } | null;
+  changes: Record<string, unknown>;
 }
 
 export function defaultAiSettings(): AiSettingsMock {
@@ -99,7 +161,7 @@ function aiStatus(ai: AiSettingsMock): AiSettingsMock["status"] {
   return "active";
 }
 
-const USER_ID = "00000000-0000-4000-8000-0000000000e2";
+export const USER_ID = "00000000-0000-4000-8000-0000000000e2";
 
 function b64url(value: object): string {
   return Buffer.from(JSON.stringify(value)).toString("base64url");
@@ -122,8 +184,12 @@ export function fakeJwt(aal: "aal1" | "aal2" = "aal2"): string {
   ].join(".");
 }
 
-function fakeUser(state: Pick<MockState, "hasVerifiedFactor">) {
-  return {
+export const DEFAULT_ENROLL_QR_CODE =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10"/></svg>';
+export const ENROLL_SECRET = "E2EFICTICIOSECRETAAAAAAAAAAAAAAAA";
+
+function fakeUser(state: Pick<MockState, "hasVerifiedFactor"> & { unverifiedFactorId?: string | null }) {
+  const user = {
     id: USER_ID,
     aud: "authenticated",
     role: "authenticated",
@@ -144,9 +210,20 @@ function fakeUser(state: Pick<MockState, "hasVerifiedFactor">) {
         ]
       : [],
   };
+  if (state.unverifiedFactorId) {
+    user.factors.push({
+      id: state.unverifiedFactorId,
+      friendly_name: "",
+      factor_type: "totp",
+      status: "unverified",
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-01T00:00:00Z",
+    });
+  }
+  return user;
 }
 
-export function fakeSession(aal: "aal1" | "aal2" = "aal2", hasVerifiedFactor = true) {
+export function fakeSession(aal: "aal1" | "aal2" = "aal2", hasVerifiedFactor = true, unverifiedFactorId: string | null = null) {
   const now = Math.floor(Date.now() / 1000);
   return {
     access_token: fakeJwt(aal),
@@ -154,7 +231,7 @@ export function fakeSession(aal: "aal1" | "aal2" = "aal2", hasVerifiedFactor = t
     token_type: "bearer",
     expires_in: 86_400,
     expires_at: now + 86_400,
-    user: fakeUser({ hasVerifiedFactor }),
+    user: fakeUser({ hasVerifiedFactor, unverifiedFactorId }),
   };
 }
 
@@ -243,32 +320,388 @@ export const PREVIEW_ITEMS: {
     classification === "INVALIDO" ? ["numero_patrimonial ausente", `campo ${XSS_IMG} inválido`] : null,
 }));
 
-export const USERS = [
-  {
-    id: "20000000-0000-4000-8000-000000000001",
-    name: "Pessoa Sintética Administradora com Nome Bastante Longo para Teste",
-    email: "administradora.sintetica.com.email.extremamente.longo@exemplo.invalid",
-    active: true,
-    roles: ["ADM"],
-  },
-  {
-    id: "20000000-0000-4000-8000-000000000002",
-    name: `Usuário ${XSS_IMG}`,
-    email: "usuario.sintetico@exemplo.invalid",
-    active: true,
-    roles: ["USER"],
-  },
-  {
-    id: "20000000-0000-4000-8000-000000000003",
-    name: "Pessoa Sintética RH",
-    email: "rh.sintetico@exemplo.invalid",
-    active: false,
-    roles: ["RH"],
-  },
+// ---------------------------------------------------------------------------
+// Gestão de usuários (contrato docs/architecture/modulo-configuracoes.md, Etapa 2)
+// ---------------------------------------------------------------------------
+
+export const UNITS: UnitMock[] = [
+  { id: "60000000-0000-4000-8000-000000000001", code: "PSU-TO", name: "Procuradoria Seccional Sintética de Palmas" },
+  { id: "60000000-0000-4000-8000-000000000002", code: "ESC-02", name: "Escritório Sintético Avançado" },
+  { id: "60000000-0000-4000-8000-000000000003", code: "NUC-03", name: `Núcleo Sintético ${XSS_IMG}` },
 ];
 
+/** Unidade vinculada a um usuário mas FORA do escopo do ADM (não vem em /units). */
+export const OUT_OF_SCOPE_UNIT: UnitMock = {
+  id: "60000000-0000-4000-8000-000000000009",
+  code: "FORA-09",
+  name: "Unidade Sintética Fora do Escopo",
+};
+
+export const ADMIN_ID = "20000000-0000-4000-8000-000000000001";
+export const COMMON_USER_ID = "20000000-0000-4000-8000-000000000002";
+export const RH_USER_ID = "20000000-0000-4000-8000-000000000003";
+
+export function defaultUsers(): UserMock[] {
+  const [u1, u2] = UNITS as [UnitMock, UnitMock, UnitMock];
+  return [
+    {
+      id: ADMIN_ID,
+      name: "Pessoa Sintética Administradora com Nome Bastante Longo para Teste",
+      email: "administradora.sintetica.com.email.extremamente.longo@exemplo.invalid",
+      active: true,
+      role: "ADM",
+      units: [u1],
+      has_avatar: true,
+      created_at: "2026-01-10T12:00:00Z",
+      last_login_at: "2026-10-13T18:30:00Z",
+      deactivated_at: null,
+      version: 3,
+    },
+    {
+      id: COMMON_USER_ID,
+      name: `Usuário ${XSS_IMG}`,
+      email: "usuario.sintetico@exemplo.invalid",
+      active: true,
+      role: "USER",
+      units: [u1, u2],
+      has_avatar: false,
+      created_at: "2026-02-01T12:00:00Z",
+      last_login_at: null,
+      deactivated_at: null,
+      version: 1,
+    },
+    {
+      id: RH_USER_ID,
+      name: "Pessoa Sintética RH",
+      email: "rh.sintetico@exemplo.invalid",
+      active: false,
+      role: "RH",
+      units: [u2, OUT_OF_SCOPE_UNIT],
+      has_avatar: false,
+      created_at: "2026-03-01T12:00:00Z",
+      last_login_at: "2026-08-30T13:00:00Z",
+      deactivated_at: "2026-09-01T10:00:00Z",
+      version: 2,
+    },
+    {
+      id: USER_ID,
+      name: "Pessoa Sintética",
+      email: "pessoa.sintetica@exemplo.invalid",
+      active: true,
+      role: "ADM",
+      units: [u1],
+      has_avatar: false,
+      created_at: "2026-01-01T12:00:00Z",
+      last_login_at: "2026-10-14T11:00:00Z",
+      deactivated_at: null,
+      version: 5,
+    },
+  ];
+}
+
+export function defaultAudit(): Record<string, AuditEventMock[]> {
+  const actor = { id: USER_ID, name: "Pessoa Sintética" };
+  const adminEvents: AuditEventMock[] = Array.from({ length: 12 }, (_, i) => ({
+    id: `70000000-0000-4000-8000-${String(i + 1).padStart(12, "0")}`,
+    occurred_at: new Date(Date.UTC(2026, 9, 13, 18, 0) - i * 3_600_000).toISOString(),
+    operation: i % 2 === 0 ? "USER_SESSIONS_REVOKED" : "USER_ACTIVATED",
+    result: "SUCESSO",
+    actor,
+    changes: i % 2 === 0 ? { sessions_revoked_at: "2026-10-13T18:00:00Z" } : { active: { from: false, to: true } },
+  }));
+  return {
+    [ADMIN_ID]: adminEvents,
+    [COMMON_USER_ID]: [
+      {
+        id: "70000000-0000-4000-8000-000000000101",
+        occurred_at: "2026-10-10T15:00:00Z",
+        operation: "USER_UNITS_CHANGED",
+        result: "SUCESSO",
+        actor,
+        changes: { units: { from: [UNITS[0]], to: [UNITS[0], UNITS[1]] } },
+      },
+      {
+        id: "70000000-0000-4000-8000-000000000102",
+        occurred_at: "2026-10-09T12:00:00Z",
+        operation: "USER_ROLE_CHANGED",
+        result: "SUCESSO",
+        actor: null,
+        changes: { role: { from: XSS_SCRIPT, to: "USER" } },
+      },
+    ],
+    [RH_USER_ID]: [],
+  };
+}
+
+/** PNG 1x1 válido (servido como "foto" pela URL assinada sintética). */
+export const TINY_PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=",
+  "base64",
+);
+
+const AVATAR_MAX_BYTES = 2 * 1024 * 1024;
+
+/** Imita a checagem de "magic bytes" do backend (JPEG/PNG/WebP). */
+function looksLikeImage(buffer: Buffer): boolean {
+  const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  const jpeg = Buffer.from([0xff, 0xd8, 0xff]);
+  return buffer.includes(png) || buffer.includes(jpeg) || /RIFF[\s\S]{4}WEBP/.test(buffer.toString("latin1"));
+}
+
+const USER_PATCH_FIELDS = new Set(["version", "role", "unit_ids", "confirm_privilege_change"]);
+const USER_LIST_PARAMS = new Set(["q", "role", "unit_id", "active", "sort", "page", "page_size"]);
+const USER_SORTS = new Set(["name", "email", "created_at", "last_login_at"]);
+
+async function apiError(route: Route, status: number, code: string, message = "erro sintético"): Promise<true> {
+  await json(route, status, { error: { code, message } });
+  return true;
+}
+
+function serializeUser(user: UserMock): UserMock {
+  return { ...user, units: user.units.map((u) => ({ ...u })) };
+}
+
+function signedUrl(name: string): { url: string; expires_in: number } {
+  return { url: `${SUPABASE_URL}/storage/v1/object/sign/avatars/${name}.webp?token=e2e`, expires_in: 300 };
+}
+
+/** Foto do próprio usuário (`/me/avatar*`, qualquer perfil). `true` = tratada. */
+async function handleMyAvatar(route: Route, state: MockState, method: string, path: string): Promise<boolean> {
+  if (path === "/v1/me/avatar-url" && method === "GET") {
+    if (state.storageUnavailable) return apiError(route, 503, "storage_unavailable");
+    if (!state.meHasAvatar) return apiError(route, 404, "not_found");
+    await json(route, 200, signedUrl("me"));
+    return true;
+  }
+  if (path !== "/v1/me/avatar" || (method !== "PUT" && method !== "DELETE")) return false;
+  if (state.storageUnavailable) return apiError(route, 503, "storage_unavailable");
+  if (method === "DELETE") {
+    state.meHasAvatar = false;
+    await json(route, 204);
+    return true;
+  }
+  const buffer = route.request().postDataBuffer() ?? Buffer.alloc(0);
+  if (buffer.length > AVATAR_MAX_BYTES) return apiError(route, 413, "file_too_large");
+  if (!looksLikeImage(buffer)) return apiError(route, 400, "unsupported_image");
+  state.meHasAvatar = true;
+  await json(route, 200, { has_avatar: true });
+  return true;
+}
+
+/** Rotas administrativas de usuários/unidades (ADM + AAL2). `true` = tratada. */
+async function handleUserAdmin(
+  route: Route,
+  state: MockState,
+  method: string,
+  path: string,
+  url: URL,
+  body: unknown,
+): Promise<boolean> {
+  const isAdminRoute = path === "/v1/units" || /^\/v1\/users(\/[^/]+(\/[a-z-]+)?)?$/.test(path);
+  if (!isAdminRoute) return false;
+  // Convite, ativação e a revogação legada seguem nos handlers antigos.
+  if (path === "/v1/users/invite" || path === "/v1/users/activate-invite" || /\/revoke$/.test(path)) return false;
+
+  // Como o backend: USER/RH → 403; ADM em aal1 → 403 AAL2_REQUIRED.
+  if (state.role !== "ADM") return apiError(route, 403, "FORBIDDEN", "Proibido");
+  if (state.aal !== "aal2") return apiError(route, 403, "AAL2_REQUIRED", "MFA obrigatório");
+
+  if (path === "/v1/units" && method === "GET") {
+    await json(route, 200, { units: state.units });
+    return true;
+  }
+
+  if (path === "/v1/users" && method === "GET") {
+    for (const key of url.searchParams.keys()) {
+      if (!USER_LIST_PARAMS.has(key)) return apiError(route, 400, "validation_error");
+    }
+    const q = (url.searchParams.get("q") ?? "").toLowerCase();
+    const role = url.searchParams.get("role");
+    const unitId = url.searchParams.get("unit_id");
+    const active = url.searchParams.get("active");
+    const sort = url.searchParams.get("sort") ?? "name";
+    const page = Number(url.searchParams.get("page") ?? 1);
+    const pageSize = Number(url.searchParams.get("page_size") ?? 25);
+    const field = sort.replace(/^-/, "");
+    if (!USER_SORTS.has(field) || q.length > 100) return apiError(route, 400, "validation_error");
+    const dir = sort.startsWith("-") ? -1 : 1;
+    const list = state.users
+      .filter(
+        (u) =>
+          (!q || u.name.toLowerCase().includes(q) || u.email.toLowerCase().includes(q)) &&
+          (!role || u.role === role) &&
+          (!unitId || u.units.some((unit) => unit.id === unitId)) &&
+          (active === null || String(u.active) === active),
+      )
+      .sort((a, b) => {
+        const va = (a as unknown as Record<string, string | null>)[field] ?? null;
+        const vb = (b as unknown as Record<string, string | null>)[field] ?? null;
+        if (va === vb) return 0;
+        if (va === null) return 1;
+        if (vb === null) return -1;
+        return va.localeCompare(vb, "pt-BR") * dir;
+      });
+    await json(route, 200, {
+      total: list.length,
+      page,
+      page_size: pageSize,
+      users: list.slice((page - 1) * pageSize, page * pageSize).map(serializeUser),
+    });
+    return true;
+  }
+
+  const match = path.match(/^\/v1\/users\/([^/]+)(?:\/([a-z-]+))?$/);
+  if (!match) return false;
+  const [, id, action] = match;
+  const user = state.users.find((u) => u.id === id);
+  // Inexistente, fora do escopo ou malformado: o MESMO 404.
+  if (!user) return apiError(route, 404, "not_found", "Não encontrado");
+  const payload = (body ?? {}) as Record<string, unknown>;
+  const now = new Date().toISOString();
+  const log = (operation: string, changes: Record<string, unknown>) => {
+    const list = (state.audit[user.id] ??= []);
+    list.unshift({
+      id: `7f000000-0000-4000-8000-${String(list.length + 1).padStart(12, "0")}`,
+      occurred_at: now,
+      operation,
+      result: "SUCESSO",
+      actor: { id: USER_ID, name: "Pessoa Sintética" },
+      changes,
+    });
+  };
+  const activeAdmins = () => state.users.filter((u) => u.role === "ADM" && u.active);
+
+  if (!action && method === "GET") {
+    await json(route, 200, serializeUser(user));
+    return true;
+  }
+
+  if (!action && method === "PATCH") {
+    if (Object.keys(payload).some((key) => !USER_PATCH_FIELDS.has(key))) {
+      return apiError(route, 400, "validation_error");
+    }
+    if (payload.version !== user.version) return apiError(route, 409, "version_conflict");
+    if (user.id === USER_ID) return apiError(route, 409, "self_change_forbidden");
+    const nextRole = (payload.role as Role | undefined) ?? user.role;
+    const privilege = nextRole !== user.role && (nextRole === "ADM" || user.role === "ADM");
+    if (privilege && payload.confirm_privilege_change !== true) return apiError(route, 400, "confirmation_required");
+    if (user.role === "ADM" && nextRole !== "ADM" && user.active && activeAdmins().length <= 1) {
+      return apiError(route, 409, "last_admin");
+    }
+    const unitIds = payload.unit_ids as string[] | undefined;
+    if (unitIds !== undefined) {
+      if (unitIds.length < 1 || unitIds.length > 50) return apiError(route, 400, "validation_error");
+      if (unitIds.some((uid) => !state.units.some((u) => u.id === uid))) {
+        return apiError(route, 403, "unit_out_of_scope");
+      }
+    }
+    if (nextRole !== user.role) {
+      log("USER_ROLE_CHANGED", { role: { from: user.role, to: nextRole } });
+      user.role = nextRole;
+    }
+    if (unitIds !== undefined) {
+      const kept = user.units.filter((u) => !state.units.some((s) => s.id === u.id));
+      const next = [...state.units.filter((u) => unitIds.includes(u.id)), ...kept];
+      log("USER_UNITS_CHANGED", { units: { from: user.units, to: next } });
+      user.units = next;
+    }
+    user.version += 1;
+    await json(route, 200, serializeUser(user));
+    return true;
+  }
+
+  if (method === "POST" && (action === "deactivate" || action === "activate")) {
+    if (payload.version !== user.version) return apiError(route, 409, "version_conflict");
+    if (user.id === USER_ID) return apiError(route, 409, "self_change_forbidden");
+    if (action === "deactivate") {
+      if (user.role === "ADM" && user.active && activeAdmins().length <= 1) return apiError(route, 409, "last_admin");
+      user.active = false;
+      user.deactivated_at = now;
+      log("USER_DEACTIVATED", { active: { from: true, to: false } });
+    } else {
+      user.active = true;
+      user.deactivated_at = null;
+      log("USER_ACTIVATED", { active: { from: false, to: true } });
+    }
+    user.version += 1;
+    await json(route, 200, serializeUser(user));
+    return true;
+  }
+
+  if (method === "POST" && action === "revoke-sessions") {
+    log("USER_SESSIONS_REVOKED", { sessions_revoked_at: now });
+    await json(route, 200, { sessions_revoked_at: now });
+    return true;
+  }
+
+  if (method === "POST" && action === "password-reset") {
+    await json(route, 200, { result: state.passwordReset });
+    return true;
+  }
+
+  if (method === "POST" && action === "mfa-reset") {
+    if (user.id === USER_ID) return apiError(route, 409, "self_change_forbidden");
+    if (!state.reauthVerified) return apiError(route, 403, "REAUTH_REQUIRED", "Reautenticação necessária");
+    log("USER_MFA_RESET", {});
+    await json(route, 200, { removed_factors: 1 });
+    return true;
+  }
+
+  if (method === "GET" && action === "audit") {
+    const page = Number(url.searchParams.get("page") ?? 1);
+    const pageSize = Number(url.searchParams.get("page_size") ?? 25);
+    const events = state.audit[user.id] ?? [];
+    await json(route, 200, {
+      total: events.length,
+      page,
+      page_size: pageSize,
+      events: events.slice((page - 1) * pageSize, page * pageSize),
+    });
+    return true;
+  }
+
+  if (action === "avatar-url" && method === "GET") {
+    if (state.storageUnavailable) return apiError(route, 503, "storage_unavailable");
+    if (!user.has_avatar) return apiError(route, 404, "not_found");
+    await json(route, 200, signedUrl(user.id));
+    return true;
+  }
+
+  if (action === "avatar" && (method === "PUT" || method === "DELETE")) {
+    if (state.storageUnavailable) return apiError(route, 503, "storage_unavailable");
+    if (method === "DELETE") {
+      user.has_avatar = false;
+      log("USER_AVATAR_REMOVED", { avatar: { from: true, to: false } });
+      await json(route, 204);
+      return true;
+    }
+    const buffer = route.request().postDataBuffer() ?? Buffer.alloc(0);
+    if (buffer.length > AVATAR_MAX_BYTES) return apiError(route, 413, "file_too_large");
+    if (!looksLikeImage(buffer)) return apiError(route, 400, "unsupported_image");
+    user.has_avatar = true;
+    log("USER_AVATAR_UPDATED", { avatar: { from: false, to: true } });
+    await json(route, 200, { has_avatar: true });
+    return true;
+  }
+
+  return false;
+}
+
 const PERMISSIONS: Record<Role, string[]> = {
-  ADM: ["users.manage", "users.invite", "imports.execute"],
+  ADM: [
+    "users.manage",
+    "users.invite",
+    "users.assign_role",
+    "users.assign_unit",
+    "users.deactivate",
+    "users.activate",
+    "users.revoke_sessions",
+    "users.reset_password",
+    "users.reset_mfa",
+    "users.avatar.manage",
+    "audit.read",
+    "imports.execute",
+  ],
   USER: ["assets.read"],
   RH: ["assets.read"],
 };
@@ -282,7 +715,19 @@ export async function installMocks(page: Page, opts: MockOptions = {}): Promise<
     role: opts.role ?? "ADM",
     aal: opts.aal ?? "aal2",
     hasVerifiedFactor: opts.hasVerifiedFactor ?? (opts.role ?? "ADM") === "ADM",
+    unverifiedFactorId: opts.hasStaleUnverifiedFactor ? "factor-stale-e2e" : null,
+    enrollQrCode: opts.enrollQrCode ?? DEFAULT_ENROLL_QR_CODE,
     ai: { ...defaultAiSettings(), ...opts.ai },
+    users: defaultUsers(),
+    units: UNITS.map((u) => ({ ...u })),
+    audit: defaultAudit(),
+    passwordReset: opts.passwordReset ?? "sent",
+    storageUnavailable: opts.storageUnavailable ?? false,
+    meHasAvatar: opts.meHasAvatar ?? false,
+    meStatus: opts.meStatus ?? null,
+    usersRateLimitRetryAfter: opts.usersRateLimitRetryAfter ?? null,
+    factorNoticeStatus: opts.factorNoticeStatus ?? 204,
+    reauthVerified: false,
     calls: [],
   };
 
@@ -302,9 +747,19 @@ export async function installMocks(page: Page, opts: MockOptions = {}): Promise<
 
     if (method === "OPTIONS") return route.fulfill({ status: 204, headers: corsHeaders(request) });
 
+    // URL assinada sintética do bucket privado `avatars` (Supabase Storage).
+    if (url.pathname.startsWith("/storage/v1/object/sign/avatars/")) {
+      return route.fulfill({ status: 200, headers: { "content-type": "image/png" }, body: TINY_PNG });
+    }
+
     const path = url.pathname.replace(/^\/auth\/v1/, "");
     if (path === "/token" && url.searchParams.get("grant_type") === "password") {
       const email = (body as { email?: string } | undefined)?.email ?? "";
+      // Login: "rede..." = conexão derrubada; "limite..." = 429 do Supabase Auth.
+      if (email.startsWith("rede")) return route.abort("failed");
+      if (email.startsWith("limite")) {
+        return json(route, 429, { code: "over_request_rate_limit", msg: "Too many requests" });
+      }
       if (email.startsWith("invalido")) {
         return json(route, 400, {
           code: "invalid_credentials",
@@ -313,23 +768,28 @@ export async function installMocks(page: Page, opts: MockOptions = {}): Promise<
           msg: "Invalid login credentials",
         });
       }
-      return json(route, 200, fakeSession(state.aal, state.hasVerifiedFactor));
+      return json(route, 200, fakeSession(state.aal, state.hasVerifiedFactor, state.unverifiedFactorId));
     }
     if (path === "/user" && method === "GET") return json(route, 200, fakeUser(state));
     if (path === "/user" && method === "PUT") return json(route, 200, fakeUser(state));
     if (path === "/logout") return json(route, 204);
     if (path === "/factors" && method === "POST") {
+      state.unverifiedFactorId = "factor-novo-e2e";
       return json(route, 200, {
         id: "factor-novo-e2e",
         type: "totp",
         friendly_name: "",
         totp: {
-          qr_code:
-            '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10"/></svg>',
-          secret: "E2EFICTICIOSECRETAAAAAAAAAAAAAAAA",
+          qr_code: state.enrollQrCode,
+          secret: ENROLL_SECRET,
           uri: "otpauth://totp/SISPAT-E2E:sintetico?secret=E2EFICTICIO",
         },
       });
+    }
+    const removal = path.match(/^\/factors\/([^/]+)$/);
+    if (removal && method === "DELETE") {
+      if (state.unverifiedFactorId === removal[1]) state.unverifiedFactorId = null;
+      return json(route, 200, { id: removal[1] });
     }
     const challenge = path.match(/^\/factors\/([^/]+)\/challenge$/);
     if (challenge) {
@@ -346,6 +806,10 @@ export async function installMocks(page: Page, opts: MockOptions = {}): Promise<
         return json(route, 422, { code: "mfa_verification_failed", msg: "Invalid TOTP code" });
       }
       state.aal = "aal2";
+      state.hasVerifiedFactor = true;
+      state.unverifiedFactorId = null;
+      // Step-up: uma verificação TOTP recente libera o `mfa-reset` (REAUTH_REQUIRED).
+      state.reauthVerified = true;
       return json(route, 200, fakeSession("aal2", true));
     }
     return json(route, 404, { msg: `rota Supabase não mockada: ${method} ${path}` });
@@ -356,7 +820,10 @@ export async function installMocks(page: Page, opts: MockOptions = {}): Promise<
     const request = route.request();
     const url = new URL(request.url());
     const method = request.method();
-    const body = parseBody(request);
+    const multipart = (request.headers()["content-type"] ?? "").startsWith("multipart/form-data");
+    const body = multipart
+      ? { multipart: true, bytes: request.postDataBuffer()?.length ?? 0 }
+      : parseBody(request);
     state.calls.push({ method, url: url.pathname + url.search, body });
 
     if (method === "OPTIONS") return route.fulfill({ status: 204, headers: corsHeaders(request) });
@@ -369,6 +836,24 @@ export async function installMocks(page: Page, opts: MockOptions = {}): Promise<
 
     const path = url.pathname.replace(/^\/api/, "");
 
+    if (path === "/v1/me" && state.meStatus && state.meStatus >= 400) {
+      return json(route, state.meStatus, { error: { code: "UNAUTHENTICATED", message: "Não autenticado" } });
+    }
+
+    if (path === "/v1/users" && method === "GET" && state.usersRateLimitRetryAfter !== null) {
+      const seconds = state.usersRateLimitRetryAfter;
+      return route.fulfill({
+        status: 429,
+        headers: {
+          ...corsHeaders(request),
+          "content-type": "application/json",
+          "access-control-expose-headers": "Retry-After",
+          ...(seconds > 0 ? { "retry-after": String(seconds) } : {}),
+        },
+        body: JSON.stringify({ error: { code: "RATE_LIMITED", message: "SISPAT_BACKEND_MSG" } }),
+      });
+    }
+
     if (path === "/v1/me") {
       return json(route, 200, {
         id: USER_ID,
@@ -378,13 +863,12 @@ export async function installMocks(page: Page, opts: MockOptions = {}): Promise<
         permissions: PERMISSIONS[state.role],
         current_aal: state.aal,
         mfa_required: state.role === "ADM",
+        has_avatar: state.meHasAvatar,
       });
     }
 
-    if (path === "/v1/users" && method === "GET") {
-      if (state.role !== "ADM") return json(route, 403, { error: { code: "FORBIDDEN", message: "Proibido" } });
-      return json(route, 200, { total: USERS.length, page: 1, page_size: 20, users: USERS });
-    }
+    if (await handleMyAvatar(route, state, method, path)) return;
+    if (await handleUserAdmin(route, state, method, path, url, body)) return;
 
     if (path === "/v1/users/invite" && method === "POST") {
       const email = (body as { email?: string } | undefined)?.email ?? "";
@@ -455,6 +939,12 @@ export async function installMocks(page: Page, opts: MockOptions = {}): Promise<
 
     if (/^\/v1\/users\/[^/]+\/revoke$/.test(path)) return json(route, 204);
     if (/^\/v1\/security\/mfa\/factors\/[^/]+$/.test(path)) return json(route, 204);
+    if (path === "/v1/security/mfa/factor-added-notice" && method === "POST") {
+      if (state.factorNoticeStatus >= 400) {
+        return json(route, state.factorNoticeStatus, { error: { code: "INTERNAL", message: "SISPAT_BACKEND_MSG" } });
+      }
+      return json(route, 204);
+    }
 
     if (path === "/v1/imports/google-sheets/preview" && method === "POST") {
       const count = (c: Classification) => PREVIEW_ITEMS.filter((i) => i.classification === c).length;

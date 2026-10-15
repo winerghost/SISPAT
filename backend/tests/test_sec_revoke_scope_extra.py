@@ -2,7 +2,7 @@
 
 Cobre propriedades que `test_sec_revoke_scope.py` nao prova: cabecalhos
 identicos, fail-closed, erro de banco, papeis nao-ADM, eventos equivalentes e
-o residual de oraculo de tempo (xfail strict documentando o gap).
+o oraculo de tempo (AUD-14-07, corrigido: mesmo numero de consultas).
 Reutiliza a sessao falsa do arquivo original (sem banco/Redis reais).
 """
 from __future__ import annotations
@@ -107,9 +107,8 @@ def test_papeis_nao_adm_negados_antes_de_tocar_o_banco(role):
 
 
 def test_alvo_ghost_e_alheio_executam_mesmo_numero_de_consultas(env):
-    """RESIDUAL AUD-14-07 (Baixa): alvo existente-alheio faz 1 consulta a mais
-    (convites pendentes) que o inexistente => oraculo de tempo teorico.
-    Corrigir executando a consulta de convites tambem para alvo inexistente."""
+    """AUD-14-07 corrigido: a consulta de convites pendentes roda tambem para
+    alvo inexistente => mesmo numero de consultas (sem oraculo de tempo)."""
     counts: dict[str, int] = {}
 
     def run(target):
@@ -136,7 +135,3 @@ def test_alvo_ghost_e_alheio_executam_mesmo_numero_de_consultas(env):
     run(TARGET_GHOST)
     assert counts[str(TARGET_B)] == counts[str(TARGET_GHOST)]
 
-
-test_alvo_ghost_e_alheio_executam_mesmo_numero_de_consultas = pytest.mark.xfail(
-    strict=True, reason="AUD-14-07: consulta extra so em alvo existente (oraculo de tempo)"
-)(test_alvo_ghost_e_alheio_executam_mesmo_numero_de_consultas)

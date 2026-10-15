@@ -123,7 +123,8 @@ def create_app() -> Flask:
     """
     settings = get_settings()
 
-    app = Flask(__name__)
+    # B-4 / PREDEPLOY-07: API JSON pura; sem a rota implícita `/static/<path>`.
+    app = Flask(__name__, static_folder=None)
     app.config["SECRET_KEY"] = settings.secret_key
     # Limite de tamanho do corpo (413 padronizado em `app.errors`).
     app.config["MAX_CONTENT_LENGTH"] = settings.max_content_length_bytes
