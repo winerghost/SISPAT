@@ -21,7 +21,8 @@ autorização é do backend.
 | `/importacoes` | todos | ADM → `/administracao/importacao/cadastros`; demais: acesso restrito | — |
 | `/administracao` (pai) | ADM | ADM → `/administracao/usuarios`; demais: acesso restrito | — |
 | `/administracao/usuarios`, `unidades`, `salas`, `responsaveis`, `importacao/*` | ADM | real | ver docs anteriores |
-| `/administracao/perfis-permissoes`, `vinculos-unidades`, `auditoria`, `integracoes`, `configuracoes-sistema` | ADM | em preparação (adminOnly) | — |
+| `/administracao/perfis-permissoes` | ADM | **consulta** (só leitura; abas Perfis e Matriz) | `GET /api/v1/admin/roles`, `GET /api/v1/admin/permissions` — ver `docs/ux/PERFIS_PERMISSOES.md` |
+| `/administracao/vinculos-unidades`, `auditoria`, `integracoes`, `configuracoes-sistema` | ADM | em preparação (adminOnly) | — |
 | `/configuracoes/*` | todos (IA: ADM) | real | ver `docs/architecture/modulo-configuracoes.md` |
 
 ## Telas de consulta

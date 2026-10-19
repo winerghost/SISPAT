@@ -35,7 +35,6 @@ _NESTED = b"[" * 20000 + b"]" * 20000  # ~40 KB, muito abaixo de MAX_CONTENT_LEN
 _NESTED_OBJ = b'{"name": ' + _NESTED + b"}"
 
 
-@pytest.mark.xfail(strict=True, reason="SEC-REV-01 aberto: get_json(silent=True) nao captura RecursionError")
 @pytest.mark.parametrize("raw", [_NESTED, _NESTED_OBJ], ids=["array", "campo"])
 def test_json_aninhado_nas_rotas_de_cadastro_e_400_e_nao_500(cat, raw):  # noqa: F811
     rid = cat.w.room(cat.a, "Sala 1")
@@ -51,7 +50,6 @@ def test_json_aninhado_nas_rotas_de_cadastro_e_400_e_nao_500(cat, raw):  # noqa:
         assert "Traceback" not in r.get_data(as_text=True)
 
 
-@pytest.mark.xfail(strict=True, reason="SEC-REV-01 aberto: get_json(silent=True) nao captura RecursionError")
 @pytest.mark.parametrize("raw", [_NESTED, _NESTED_OBJ], ids=["array", "campo"])
 def test_json_aninhado_em_patrimonios_e_movimentacoes_e_400(ast, raw):  # noqa: F811
     asset_id = ast.w.asset(ast.a, "N-1")
@@ -81,7 +79,6 @@ def test_nome_de_campo_rejeitado_nao_forja_linha_de_log(cat, caplog):  # noqa: F
         assert "\n" not in text and "\r" not in text, text
 
 
-@pytest.mark.xfail(strict=True, reason="SEC-REV-02 aberto: BadRequest sem tratamento loga nomes de parametro com CR/LF")
 def test_consulta_de_itens_da_previa_com_parametro_forjado_nao_forja_log(env, caplog):  # noqa: F811
     """`GET /catalog-imports/<id>/items` deixa o BadRequest chegar ao handler global, que
     loga a descrição (nomes de parâmetro vindos do cliente) -- sem neutralizar CR/LF."""
@@ -99,7 +96,6 @@ def test_consulta_de_itens_da_previa_com_parametro_forjado_nao_forja_log(env, ca
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(strict=True, reason="SEC-REV-03 aberto: historico do bem expoe reason (texto livre) ao RH")
 def test_rh_nao_recebe_motivo_de_texto_livre_no_historico_do_bem(ast):  # noqa: F811
     asset_id = ast.w.asset(ast.a, "R-1", description="Mesa")
     version = ast.w.row(asset_id).version
@@ -363,7 +359,6 @@ def test_conflito_de_numero_patrimonial_de_outra_unidade_e_generico(ast):  # noq
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(strict=True, reason="SEC-REV-04 aberto (defesa em profundidade): safe_scalar deixa passar CPF")
 @pytest.mark.parametrize("value", ["123.456.789-09", "12345678909"])
 def test_projecao_da_trilha_admin_redige_valor_com_formato_de_cpf(value):
     from app.services.admin_audit_service import REDACTED, safe_scalar
@@ -391,3 +386,21 @@ def test_criacao_de_sala_invalida_e_sempre_400_sob_repeticao(cat):  # noqa: F811
             r = cat.client.post("/api/v1/rooms", json=body, headers=tc.adm())
             assert r.status_code == 400, (round_, index, r.status_code, r.get_data(as_text=True))
     assert cat.w.all_audits("room") == []
+
+
+def test_rh_historico_preserva_reason_para_adm(ast):  # noqa: F811
+    asset_id = ast.w.asset(ast.a, "R-2", description="Mesa")
+    version = ast.w.row(asset_id).version
+    ast.client.post(f"/api/v1/assets/{asset_id}/delete", json={"version": version, "reason": "motivo-adm"},
+                    headers=ta.h(ta.ADM))
+    adm = ast.client.get(f"/api/v1/assets/{asset_id}/history?include_deleted=true", headers=ta.h(ta.ADM))
+    assert adm.status_code == 200 and "motivo-adm" in adm.get_data(as_text=True)
+
+
+def test_nomes_de_campo_rejeitados_sem_controles_na_mensagem():
+    from app.api.v1.schemas import reject_unexpected_fields
+    from werkzeug.exceptions import BadRequest
+
+    with pytest.raises(BadRequest) as exc:
+        reject_unexpected_fields({"a\nERROR x\r"}, context="t")
+    assert "\n" not in exc.value.description and "\r" not in exc.value.description

@@ -84,6 +84,7 @@ PRIVILEGED_FIELD_NAMES = frozenset(
 _EMAIL_RE = re.compile(r"^[^@\s]{1,64}@[^@\s]+\.[^@\s]+$")
 _MAX_EMAIL_LEN = 254
 _MAX_FIELD_NAMES_IN_MESSAGE = 10
+_CONTROL_CHARS_RE = re.compile(r"[\x00-\x1f\x7f-\x9f  ]")
 
 ModelT = TypeVar("ModelT", bound=BaseModel)
 
@@ -304,7 +305,8 @@ def reject_unexpected_fields(
     location: str = "no corpo da requisição",
 ) -> None:
     """Registra evento de segurança e aborta com 400 por campos não permitidos."""
-    names = sorted(str(name)[:64] for name in field_names)
+    # SEC-REV-02: nomes vêm do cliente; neutraliza controles (CR/LF) antes de log/mensagem.
+    names = sorted(_CONTROL_CHARS_RE.sub("?", str(name)[:64]) for name in field_names)
     privileged = sorted(set(names) & PRIVILEGED_FIELD_NAMES)
     if privileged:
         record_security_event(

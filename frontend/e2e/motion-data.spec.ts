@@ -210,16 +210,52 @@ test.describe("importação — estados e contadores", () => {
     await expect(criados).toHaveText(String(ELIGIBLE));
   });
 
-  test("erro de API na prévia: mensagem genérica, sem detalhes internos", async ({ page }) => {
+  const PREVIEW_ERRORS: Array<[number, RegExp]> = [
+    [500, /O servidor não conseguiu concluir a leitura da planilha/],
+    [503, /A leitura demorou mais que o esperado/],
+    [504, /A leitura demorou mais que o esperado/],
+  ];
+  for (const [code, message] of PREVIEW_ERRORS) {
+    test(`erro ${code} na prévia: mensagem acionável, sem detalhes internos`, async ({ page }) => {
+      await openAs(page, IMPORT_PATH);
+      await holdRequest(page, /\/imports\/google-sheets\/preview$/, "POST", (route) => jsonError(route, code)).then(
+        (h) => h.release(),
+      );
+      await page.getByRole("button", { name: "Pré-visualizar Importação" }).click();
+      await expect(page.locator("main").getByRole("alert")).toHaveText(message);
+      await expect(status(page)).toContainText("Falha na leitura");
+      await expect(page.getByText("detalhe interno")).toHaveCount(0);
+      await expect(page.getByRole("button", { name: "Tentar novamente" })).toBeVisible();
+    });
+  }
+
+  test("erro de rede na prévia: mensagem própria", async ({ page }) => {
     await openAs(page, IMPORT_PATH);
-    await holdRequest(page, /\/imports\/google-sheets\/preview$/, "POST", (route) => jsonError(route, 500)).then(
-      (h) => h.release(),
+    await page.route(
+      (url) => url.href.startsWith(API_URL) && /\/imports\/google-sheets\/preview$/.test(url.pathname),
+      (route) => (route.request().method() === "POST" ? route.abort("failed") : route.fallback()),
     );
     await page.getByRole("button", { name: "Pré-visualizar Importação" }).click();
-    await expect(page.locator("main").getByRole("alert")).toHaveText("Não foi possível gerar a pré-visualização. Tente novamente.");
-    await expect(status(page)).toContainText("Falha na leitura");
-    await expect(page.getByText("detalhe interno")).toHaveCount(0);
-    await expect(page.getByRole("button", { name: "Tentar novamente" })).toBeVisible();
+    await expect(page.locator("main").getByRole("alert")).toContainText("Sem resposta do servidor");
+  });
+
+  test("duplo clique na prévia dispara uma única requisição", async ({ page }) => {
+    await openAs(page, IMPORT_PATH);
+    let posts = 0;
+    page.on("request", (r) => {
+      if (r.method() === "POST" && /\/imports\/google-sheets\/preview$/.test(new URL(r.url()).pathname)) posts++;
+    });
+    const hold = await holdRequest(page, /\/imports\/google-sheets\/preview$/, "POST");
+    const button = page.getByRole("button", { name: "Pré-visualizar Importação" });
+    await button.dblclick();
+    await hold.hit;
+    const busy = page.getByRole("button", { name: "Gerando pré-visualização…" });
+    await expect(busy).toBeDisabled();
+    await expect(busy).toHaveAttribute("aria-busy", "true");
+    await expect(status(page)).toContainText("Lendo planilha…");
+    hold.release();
+    await expect(page.getByRole("group", { name: "Resumo quantitativo da pré-visualização" })).toBeVisible();
+    expect(posts).toBe(1);
   });
 });
 

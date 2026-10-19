@@ -72,7 +72,9 @@ _TEMPLATES: dict[str, dict[str, str]] = {
 }
 
 _html_env = Environment(autoescape=True, undefined=StrictUndefined)
-_text_env = Environment(autoescape=False, undefined=StrictUndefined)  # nosec B701 - texto puro
+# Falso positivo de XSS: _text_env so renderiza a parte text/plain do e-mail,
+# nunca HTML; o corpo HTML usa _html_env (autoescape=True).
+_text_env = Environment(autoescape=False, undefined=StrictUndefined)  # nosec B701  # nosemgrep
 
 
 def clean_text(value: Any, *, limit: int = MAX_FIELD_LENGTH) -> str:

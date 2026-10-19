@@ -82,6 +82,7 @@ def test_n8n_localhost_http_permitido_so_fora_de_producao() -> None:
     prod_settings = _settings(
         n8n_webhook_url="http://localhost:5678/webhook",
         flask_env="production",
+        cors_allowed_origins="https://app.example.test",
         secret_key="x" * 64,
         supabase_jwt_secret="y" * 64,
     )

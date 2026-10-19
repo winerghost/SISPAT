@@ -88,7 +88,11 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=5 \
 # --worker-tmp-dir /dev/shm: compatível com read_only: true no compose.
 # --forwarded-allow-ips padrão (127.0.0.1); o ProxyFix do Flask usa
 # TRUSTED_PROXY_IPS. Limites de linha/cabeçalho mitigam abusos de parsing.
-CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--workers", "3", "--timeout", "60", \
+# --timeout 180 / --graceful-timeout 30: importações pesadas (preview do Google
+# Sheets) precisam de margem; o app falha de forma controlada ANTES (statement
+# timeout 120 s -> 504 JSON). Ver docs/deployment/timeouts-gunicorn.md.
+CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--workers", "3", "--timeout", "180", \
+     "--graceful-timeout", "30", "--keep-alive", "5", \
      "--worker-tmp-dir", "/dev/shm", "--limit-request-line", "8190", \
      "--limit-request-fields", "100", "--limit-request-field_size", "8190", \
      "--access-logfile", "-", "app:create_app()"]

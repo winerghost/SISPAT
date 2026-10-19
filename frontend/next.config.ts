@@ -45,10 +45,23 @@ const nextConfig: NextConfig = {
     ignoreDuringBuilds: false,
   },
   async headers() {
+    // /ativar-conta recebe token_hash na URL: Referrer-Policy "no-referrer" só
+    // nessa rota (sem cabeçalhos duplicados: a regra geral a exclui).
+    const strictHeaders = securityHeaders.map((h) =>
+      h.key === "Referrer-Policy" ? { ...h, value: "no-referrer" } : h,
+    );
     return [
       {
-        source: "/:path*",
+        source: "/((?!ativar-conta(?:/|$)).*)",
         headers: securityHeaders,
+      },
+      {
+        source: "/ativar-conta",
+        headers: strictHeaders,
+      },
+      {
+        source: "/ativar-conta/:path*",
+        headers: strictHeaders,
       },
     ];
   },

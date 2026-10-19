@@ -50,7 +50,7 @@ def _db():
 
 def _settings():
     s = MagicMock()
-    s.invite_allowed_redirect_urls_list = ["https://app.exemplo.com/convite"]
+    s.invite_allowed_redirect_urls_list = ["https://app.exemplo.com/ativar-conta"]
     s.invite_ttl_days = 7
     return s
 

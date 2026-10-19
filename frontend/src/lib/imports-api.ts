@@ -19,6 +19,8 @@
 import { apiClient, ApiError } from "@/lib/api-client";
 
 const BASE_PATH = "/v1/imports/google-sheets";
+/** Timeout do cliente para a prévia: acima do teto do backend (~120 s). */
+const PREVIEW_TIMEOUT_MS = 150_000;
 
 export type ImportItemClassification =
   | "NOVO"
@@ -92,7 +94,11 @@ export interface ImportConfirmResponse {
 
 /** `POST /api/v1/imports/google-sheets/preview` — gera uma nova prévia. */
 export function createGoogleSheetsPreview(): Promise<ImportPreviewResponse> {
-  return apiClient.post<ImportPreviewResponse>(`${BASE_PATH}/preview`);
+  // Prévia grande (~1000 linhas) lê o Sheets no backend (até ~120 s): o
+  // timeout do cliente precisa ser maior para não abortar antes dele.
+  return apiClient.post<ImportPreviewResponse>(`${BASE_PATH}/preview`, undefined, {
+    timeoutMs: PREVIEW_TIMEOUT_MS,
+  });
 }
 
 /** `GET /api/v1/imports/google-sheets/preview/{preview_id}/items` — lista paginada/filtrada. */

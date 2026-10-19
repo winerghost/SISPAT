@@ -183,3 +183,24 @@ para identidade sem chave.
   trivy, rodar `scripts/security-audit.sh` de novo.
 - Resolvido: siglas PF/PU/CJU/UEA; leitura de RESPONSAVEL (1ª = vínculo,
   2ª = pessoa) e QT como texto bruto; salas e pessoas com coluna UNIDADE.
+
+## Desempenho da pré-visualização (correção N+1)
+
+Problema: `POST /imports/google-sheets/preview` consultava `assets` uma vez
+por linha (≈1069 idas ao Postgres remoto), levando ~55-60s e estourando o
+`--timeout 60` do gunicorn.
+
+Correção em `ImportService.create_preview`:
+
+- Os assets ativos de todos os patrimônios lidos são pré-carregados em lote
+  (`_prefetch_active_assets`, `IN` sobre `lower(trim(patrimony_number))`, lotes
+  de 500) e consultados por dicionário em memória; o cache vale só durante a
+  operação. A semântica de classificação não mudou.
+- Mapas de unidade/alias/sala/pessoa (`ImportReferences`) são carregados uma
+  vez por operação (lazy).
+- Persistência dos itens em lote (`add_all` + um `flush`; insertmanyvalues).
+- Log INFO por etapa (leitura, prefetch, classificação, persistência, total),
+  sem dados de planilha ou pessoais.
+
+Testes: `backend/tests/test_import_preview_performance.py` (limite de
+queries e equivalência com a busca unitária por linha).

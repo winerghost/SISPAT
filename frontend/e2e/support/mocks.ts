@@ -1,5 +1,6 @@
 import type { Page, Request, Route } from "@playwright/test";
 
+import { defaultAdminAccess, type AdminAccessMock } from "./admin-access-mocks";
 import {
   defaultDashboard,
   handleDashboard,
@@ -27,6 +28,8 @@ import {
 // reais) é ABORTADA — ver `installMocks`.
 // =============================================================================
 
+/** token_hash sintético aceito pelo mock de /auth/v1/verify (qualquer outro => otp_expired). */
+export const VALID_INVITE_TOKEN_HASH = "hash-valido-e2e";
 export const SUPABASE_URL = "http://127.0.0.1:54321";
 export const API_URL = "http://127.0.0.1:5000/api";
 /**
@@ -55,6 +58,12 @@ export interface MockOptions {
   hasStaleUnverifiedFactor?: boolean;
   /** Valor de `totp.qr_code` devolvido pelo `mfa.enroll` (padrão: SVG cru válido). */
   enrollQrCode?: string;
+  /** Perfis/permissões de `GET /api/v1/admin/{roles,permissions}` (padrão: ADM 40, USER 11, RH 6). */
+  adminAccess?: AdminAccessMock;
+  /** Status HTTP forçado em `GET /api/v1/admin/{roles,permissions}` (ex.: 500, 403). */
+  adminAccessStatus?: number;
+  /** Atraso (ms) das respostas de `/admin/{roles,permissions}` — testa o estado "carregando". */
+  adminAccessDelayMs?: number;
   /** Sobrescreve o estado inicial de `GET /api/v1/settings/ai`. */
   ai?: Partial<AiSettingsMock>;
   /** Sobrescreve o estado inicial de `GET /api/v1/me/preferences` (Aparência). */
@@ -221,6 +230,9 @@ export interface MockState extends CatalogMockState, AssetMockState, MovementMoc
   /** Fator não verificado existente (tentativa anterior ou enroll em andamento). */
   unverifiedFactorId: string | null;
   enrollQrCode: string;
+  adminAccess: AdminAccessMock;
+  adminAccessStatus: number | null;
+  adminAccessDelayMs: number;
   /** Estado mutável das configurações de IA (testes podem simular edição concorrente). */
   ai: AiSettingsMock;
   /** Preferências de aparência do próprio usuário (testes podem simular edição concorrente). */
@@ -894,6 +906,9 @@ export async function installMocks(page: Page, opts: MockOptions = {}): Promise<
     hasVerifiedFactor: opts.hasVerifiedFactor ?? (opts.role ?? "ADM") === "ADM",
     unverifiedFactorId: opts.hasStaleUnverifiedFactor ? "factor-stale-e2e" : null,
     enrollQrCode: opts.enrollQrCode ?? DEFAULT_ENROLL_QR_CODE,
+    adminAccess: opts.adminAccess ?? defaultAdminAccess(),
+    adminAccessStatus: opts.adminAccessStatus ?? null,
+    adminAccessDelayMs: opts.adminAccessDelayMs ?? 0,
     ai: { ...defaultAiSettings(), ...opts.ai },
     prefs: { ...defaultPreferences(), ...opts.prefs },
     prefsGetStatus: opts.prefsGetStatus ?? null,
@@ -967,6 +982,16 @@ export async function installMocks(page: Page, opts: MockOptions = {}): Promise<
         });
       }
       return json(route, 200, fakeSession(state.aal, state.hasVerifiedFactor, state.unverifiedFactorId));
+    }
+    // verifyOtp({ token_hash, type: "invite" }): só o hash válido sintético cria sessão.
+    if (path === "/verify" && method === "POST") {
+      const hash = (body as { token_hash?: string } | undefined)?.token_hash;
+      if (hash === VALID_INVITE_TOKEN_HASH) return json(route, 200, fakeSession("aal1", false));
+      return json(route, 403, {
+        code: "otp_expired",
+        error_code: "otp_expired",
+        msg: "Email link is invalid or has expired",
+      });
     }
     if (path === "/user" && method === "GET") return json(route, 200, fakeUser(state));
     if (path === "/user" && method === "PUT") return json(route, 200, fakeUser(state));
@@ -1203,6 +1228,22 @@ export async function installMocks(page: Page, opts: MockOptions = {}): Promise<
 
     if (path === "/v1/users/activate-invite" && method === "POST") {
       return json(route, 200, { role: "USER", units: [] });
+    }
+
+    // Perfis e permissões (somente leitura): ADM + AAL2 (USER/RH → 403; ADM aal1 → AAL2_REQUIRED).
+    if ((path === "/v1/admin/roles" || path === "/v1/admin/permissions") && method === "GET") {
+      if (state.adminAccessDelayMs > 0) await new Promise((r) => setTimeout(r, state.adminAccessDelayMs));
+      if (state.adminAccessStatus) {
+        return json(route, state.adminAccessStatus, { error: { code: "ERRO", message: "detalhe interno sintético" } });
+      }
+      if (state.role !== "ADM") return json(route, 403, { error: { code: "FORBIDDEN", message: "Proibido" } });
+      if (state.aal !== "aal2") {
+        return json(route, 403, { error: { code: "AAL2_REQUIRED", message: "MFA obrigatório" } });
+      }
+      if (path === "/v1/admin/roles") {
+        return json(route, 200, { roles: state.adminAccess.roles, users_count_scope: "actor_units" });
+      }
+      return json(route, 200, { permissions: state.adminAccess.permissions });
     }
 
     // Configurações de IA: ADM + AAL2 (como o backend: USER/RH → 403; ADM aal1 → AAL2_REQUIRED).

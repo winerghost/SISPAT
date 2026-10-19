@@ -77,6 +77,7 @@ import logging
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
+from urllib.parse import urlsplit
 from uuid import uuid4
 
 from sqlalchemy import delete, func, or_, select, text
@@ -90,6 +91,9 @@ from app.models.rbac import Role, User, UserRole
 from app.models.units import Unit, UserUnitAccess
 
 logger = logging.getLogger(__name__)
+
+# Caminho obrigatório do 1º item de INVITE_ALLOWED_REDIRECT_URLS.
+_ACTIVATION_PATH = "/ativar-conta"
 
 # Únicos papéis atribuíveis pelo fluxo de convite direto. 'ADM' é
 # DELIBERADAMENTE excluído -- ver docstring do módulo `app.models.invites`
@@ -290,6 +294,26 @@ class InviteService:
                 "Não foi possível enviar o convite: nenhuma URL de ativação configurada."
             )
         activation_redirect_to = allowed_redirect_urls[0]
+        # M2: defesa em profundidade (o Settings já recusa no startup).
+        if getattr(self._settings, "is_production", False) is True and not (
+            activation_redirect_to.lower().startswith("https://")
+        ):
+            logger.error("invite_service.create_invite: URL de ativação não-https em produção.")
+            raise InviteServiceError(
+                "Não foi possível enviar o convite: URL de ativação mal configurada."
+            )
+        # O template do e-mail usa `{{ .RedirectTo }}?token_hash=...`: se o
+        # 1º item não for a tela /ativar-conta o convidado cai em outra página
+        # e o convite é inútil. Falha cedo, sem chamar o Supabase.
+        if urlsplit(activation_redirect_to).path.rstrip("/") != _ACTIVATION_PATH:
+            logger.error(
+                "invite_service.create_invite: o 1º item de "
+                "INVITE_ALLOWED_REDIRECT_URLS não aponta para %s.",
+                _ACTIVATION_PATH,
+            )
+            raise InviteServiceError(
+                "Não foi possível enviar o convite: URL de ativação mal configurada."
+            )
 
         email_clean = email.strip()
         name_clean = name.strip()

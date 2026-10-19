@@ -255,6 +255,7 @@ def test_producao_so_es256_nao_exige_segredo_hs256():
         database_url="postgresql+psycopg2://u:p@localhost/db",
         _env_file=None,
         flask_env="production",
+        cors_allowed_origins="https://app.example.test",
         secret_key="s" * 40,
         supabase_jwt_secret="curto",
         supabase_jwt_algorithms="ES256",

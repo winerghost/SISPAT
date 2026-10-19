@@ -526,6 +526,14 @@ class Settings(BaseSettings):
                 raise ValueError(
                     f"SUPABASE_JWT_SECRET deve ter ao menos {_MIN_SECRET_LENGTH} caracteres em produção."
                 )
+            # M1/M2: origens CORS e redirects de convite só em HTTPS em produção
+            # (localhost/http continuam válidos fora de produção).
+            for name, items in (
+                ("CORS_ALLOWED_ORIGINS", self.cors_allowed_origins_list),
+                ("INVITE_ALLOWED_REDIRECT_URLS", self.invite_allowed_redirect_urls_list),
+            ):
+                if any(not item.lower().startswith("https://") for item in items):
+                    raise ValueError(f"{name} deve conter apenas URLs https:// em produção.")
         return self
 
     @model_validator(mode="after")

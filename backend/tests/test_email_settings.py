@@ -54,7 +54,7 @@ def test_sem_tls_recusado_inclusive_em_producao(modo):
 
 
 def test_producao_com_tls_ok():
-    assert make_settings(flask_env="production").is_production
+    assert make_settings(flask_env="production", cors_allowed_origins="https://app.example.test").is_production
 
 
 @pytest.mark.parametrize(

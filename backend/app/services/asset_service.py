@@ -405,6 +405,12 @@ class AssetService:
         asset = self._load(actor_id, asset_id, include_deleted=include_deleted)
         return self._serialize_many([asset])[0]
 
+    def _without_reason(self, values: Any) -> Any:
+        """SEC-REV-03: `reason` é texto livre; RH (sem acesso a notas) não o recebe."""
+        if self._can_view_notes or not isinstance(values, dict):
+            return values
+        return {k: v for k, v in values.items() if k != "reason"}
+
     def history(self, actor_id: Any, asset_id: uuid.UUID, query: Any) -> dict[str, Any]:
         """Trilha do bem (somente leitura); exige poder LER o bem (escopo)."""
         self._load(actor_id, asset_id, include_deleted=query.include_deleted == "true")
@@ -426,8 +432,8 @@ class AssetService:
                 "operation": r.operation,
                 "occurred_at": _iso(r.occurred_at),
                 "result": r.result,
-                "previous_values": r.previous_values,
-                "new_values": r.new_values,
+                "previous_values": self._without_reason(r.previous_values),
+                "new_values": self._without_reason(r.new_values),
             }
             if self._can_view_notes:  # SEC-AST-02: RH não recebe autoria (como created_by/updated_by)
                 entry["actor_user_id"] = str(r.actor_user_id) if r.actor_user_id else None

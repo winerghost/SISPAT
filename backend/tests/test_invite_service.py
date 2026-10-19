@@ -36,6 +36,7 @@ from app.services.invite_service import (
     InviteExpiredError,
     InviteNotFoundError,
     InviteService,
+    InviteServiceError,
     InviteValidationError,
     LastAdminError,
     UserNotFoundError,
@@ -77,7 +78,7 @@ def _make_settings(
 ) -> MagicMock:
     settings = MagicMock()
     settings.invite_allowed_redirect_urls_list = redirect_urls or [
-        "https://app.exemplo.com/convite/ativar"
+        "https://app.exemplo.com/ativar-conta"
     ]
     settings.invite_ttl_days = ttl_days
     return settings
@@ -227,6 +228,40 @@ def test_create_invite_rejeita_unidade_inativa():
             unit_ids=[unit.id],
         )
     admin_client.invite_user_by_email.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "urls",
+    [
+        [],
+        ["http://localhost:3000"],
+        ["http://localhost:3000/"],
+        ["https://app.exemplo.com/convite"],
+        ["https://app.exemplo.com/x/ativar-conta/y"],
+        ["https://app.exemplo.com/ativar-conta-falso"],
+    ],
+)
+def test_create_invite_falha_se_primeira_url_nao_e_ativar_conta(urls):
+    unit = _make_unit()
+    db, router = _make_db_mock()
+    router.register(Unit).filter.return_value.all.return_value = [unit]
+    router.register(Invite).filter.return_value.first.return_value = None
+
+    admin_client = MagicMock()
+    settings = _make_settings()
+    settings.invite_allowed_redirect_urls_list = urls
+    service = InviteService(db, admin_client, settings=settings)
+
+    with pytest.raises(InviteServiceError):
+        service.create_invite(
+            invited_by_user_id=uuid.uuid4(),
+            email="novo@exemplo.com",
+            name="Novo Usuário",
+            intended_role_code="USER",
+            unit_ids=[unit.id],
+        )
+    admin_client.invite_user_by_email.assert_not_called()
+    db.commit.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

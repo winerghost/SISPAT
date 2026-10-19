@@ -94,6 +94,7 @@ CHANGE_KEYS = (
 
 _MAX_LIST_ITEMS = 50
 _MAX_SAFE_STR = 64
+_CPF_LIKE_RE = re.compile(r"^(\d{3}\.?\d{3}\.?\d{3}-?\d{2})$")
 _SAFE_STR_RE = re.compile(r"^[A-Za-z0-9_.:+\-/]{1,%d}$" % _MAX_SAFE_STR)
 _UUID_RE = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
@@ -123,6 +124,8 @@ def safe_scalar(value: Any) -> Any:
     if isinstance(value, int):
         return value
     if isinstance(value, str):
+        if _CPF_LIKE_RE.match(value):  # SEC-REV-04: formato de CPF (11 dígitos)
+            return REDACTED
         token = safe_token(value)
         # UUID tem 36 caracteres e passa; demais strings longas parecem segredo.
         if token is not None and (len(token) <= 40 or _UUID_RE.match(token)):

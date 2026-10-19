@@ -49,7 +49,6 @@ const ADMIN_LEAVES = [
   "/administracao/configuracoes-sistema",
 ];
 const ADMIN_MODULES = [
-  "/administracao/perfis-permissoes",
   "/administracao/vinculos-unidades",
   "/administracao/auditoria",
   "/administracao/integracoes",

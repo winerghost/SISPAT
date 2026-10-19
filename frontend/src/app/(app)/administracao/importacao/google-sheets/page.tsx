@@ -113,6 +113,8 @@ export default function ImportacaoGoogleSheetsPage() {
   const canConfirm = !!preview && !isExpired && selection.selectedIds.length > 0;
 
   function handlePreview() {
+    // Sem duplo disparo: ignora cliques enquanto há leitura em andamento.
+    if (previewMutation.isPending || confirmMutation.isPending) return;
     setLastAction("preview");
     previewMutation.mutate();
   }
@@ -149,7 +151,11 @@ export default function ImportacaoGoogleSheetsPage() {
 
       <div className="flex flex-col gap-3">
         <div className="flex flex-wrap items-center gap-4">
-          <Button onClick={handlePreview} loading={previewMutation.isPending}>
+          <Button
+            onClick={handlePreview}
+            loading={previewMutation.isPending}
+            disabled={confirmMutation.isPending}
+          >
             {previewMutation.isPending ? "Gerando pré-visualização…" : "Pré-visualizar Importação"}
           </Button>
 
@@ -180,7 +186,7 @@ export default function ImportacaoGoogleSheetsPage() {
         <SlideIn distance="sm">
           <div className="flex flex-col gap-3 rounded-cards border border-signal-orange/40 bg-carbon-lift p-card-padding">
             <FormMessage>{previewError}</FormMessage>
-            <Button variant="outline" size="sm" className="self-start" onClick={handlePreview}>
+            <Button variant="outline" size="sm" className="self-start" onClick={handlePreview} disabled={previewMutation.isPending}>
               Tentar novamente
             </Button>
           </div>
@@ -293,8 +299,17 @@ function previewErrorMessage(error: unknown): string {
     if (error.status === 403) {
       return "Você não tem permissão para executar importações. Solicite ao administrador o papel ADM com a permissão de execução de importações.";
     }
+    if (error.status === 0) {
+      return "Sem resposta do servidor. Verifique sua conexão ou aguarde um instante e tente novamente; planilhas grandes podem demorar mais.";
+    }
     if (error.status === 502) {
       return "Não foi possível ler a planilha do Google Sheets agora. Tente novamente em alguns instantes.";
+    }
+    if (error.status === 503 || error.status === 504) {
+      return "A leitura demorou mais que o esperado ou o serviço está indisponível; aguarde um instante e tente novamente.";
+    }
+    if (error.status >= 500) {
+      return "O servidor não conseguiu concluir a leitura da planilha. Aguarde um instante e tente novamente; se persistir, contate o suporte.";
     }
   }
   return "Não foi possível gerar a pré-visualização. Tente novamente.";

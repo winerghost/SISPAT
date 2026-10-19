@@ -129,7 +129,6 @@ async function openMobileMenuIfPresent(page: Page): Promise<void> {
 const MODULE_SCREENS: ScreenDef[] = (
   [
     ["relatorios", "/relatorios", "Relatórios", "RH"],
-    ["perfis-permissoes", "/administracao/perfis-permissoes", "Perfis e Permissões", "ADM"],
     ["vinculos-unidades", "/administracao/vinculos-unidades", "Vínculos de Unidades", "ADM"],
     ["auditoria", "/administracao/auditoria", "Auditoria", "ADM"],
     ["integracoes", "/administracao/integracoes", "Integrações", "ADM"],
@@ -204,6 +203,15 @@ export const SCREENS: ScreenDef[] = [
     session: { role: "USER" },
     prepare: async (page) => {
       await expect(page.getByRole("button", { name: "Ativar conta" })).toBeVisible();
+    },
+  },
+  {
+    id: "ativar-conta-confirmar",
+    title: "Ativar conta — confirmação do convite (token_hash)",
+    path: "/ativar-conta?token_hash=hash-valido-e2e&type=invite",
+    session: null,
+    prepare: async (page) => {
+      await expect(page.getByRole("button", { name: "Continuar" })).toBeVisible();
     },
   },
   {
@@ -387,6 +395,45 @@ export const SCREENS: ScreenDef[] = [
     prepare: async (page) => {
       await page.getByLabel("Provedor", { exact: true }).selectOption("deepseek");
       await expect(page.getByRole("dialog", { name: "Transferência internacional de dados" })).toBeVisible();
+    },
+  },
+  {
+    id: "perfis-permissoes",
+    title: "Perfis e Permissões — aba Perfis (ADM)",
+    path: "/administracao/perfis-permissoes",
+    session: { role: "ADM" },
+    prepare: async (page) => {
+      await expect(page.getByRole("heading", { level: 1, name: "Perfis e Permissões" })).toBeVisible();
+      await expect(page.getByTestId("role-card-ADM")).toBeVisible();
+      await expect(page.getByTestId("role-card-RH")).toBeVisible();
+    },
+  },
+  {
+    id: "perfis-permissoes-matriz",
+    title: "Perfis e Permissões — aba Matriz (ADM)",
+    path: "/administracao/perfis-permissoes",
+    session: { role: "ADM" },
+    prepare: async (page) => {
+      await page.getByRole("tab", { name: "Matriz" }).click();
+      await expect(page.getByRole("table", { name: "Matriz de permissões por perfil" })).toBeVisible();
+    },
+  },
+  {
+    id: "perfis-permissoes-erro",
+    title: "Perfis e Permissões — erro com nova tentativa",
+    path: "/administracao/perfis-permissoes",
+    session: { role: "ADM", adminAccessStatus: 500 },
+    prepare: async (page) => {
+      await expect(page.getByRole("button", { name: "Tentar novamente" })).toBeVisible({ timeout: 15_000 });
+    },
+  },
+  {
+    id: "perfis-permissoes-negado",
+    title: "Perfis e Permissões — acesso restrito (USER)",
+    path: "/administracao/perfis-permissoes",
+    session: { role: "USER" },
+    prepare: async (page) => {
+      await expect(page.getByTestId("access-restricted")).toBeVisible();
     },
   },
   {

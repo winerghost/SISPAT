@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import Link from "next/link";
 import { CheckCircle2 } from "lucide-react";
 
@@ -16,28 +16,31 @@ import { activateInvite, ApiError } from "@/lib/users-api";
 // =============================================================================
 // /ativar-conta — destino do link de convite enviado pelo Supabase Auth
 // =============================================================================
-// Como a sessão chega a esta página (mecanismo usado pela versão instalada
-// do SDK, @supabase/supabase-js 2.117.3):
+// Como a sessão chega a esta página — DOIS caminhos:
 //
-//   O cliente criado em `supabase-client.ts` usa `detectSessionInUrl: true`
-//   (o padrão do SDK). Ao ser instanciado — o que acontece de forma lazy,
-//   na primeira chamada a `getSupabaseClient()` abaixo —, o GoTrueClient
-//   dispara internamente `_initialize()`, que INSPECIONA A URL ATUAL
-//   (`window.location.href`) e detecta automaticamente, sem nenhuma chamada
-//   explícita nossa:
-//     - formato implícito: `#access_token=...&refresh_token=...&type=invite`
-//       no hash (fluxo padrão do SDK, `flowType: 'implicit'`);
-//     - formato PKCE: `?code=...` na query string (caso o projeto Supabase
-//       esteja configurado para `flowType: 'pkce'` nos links de e-mail).
-//   Em ambos os casos o SDK troca o token/código por uma sessão válida,
-//   limpa a URL e notifica os assinantes de `onAuthStateChange`.
+//   1) Fluxo atual (token_hash). O e-mail traz
+//      `/ativar-conta?token_hash=<hash>&type=invite`. Scanners de e-mail fazem
+//      GET automático em todo link e consumiriam um link de uso único
+//      (`otp_expired` para o usuário), por isso esta página NÃO consome o
+//      token ao carregar: lê `token_hash`/`type` de `window.location.search`,
+//      remove-os da URL (history.replaceState), guarda o hash só em memória
+//      (ref/estado; nunca localStorage/sessionStorage, nunca logado) e mostra a
+//      fase "confirm". Só o clique em "Continuar" chama
+//      `supabase.auth.verifyOtp({ token_hash, type: "invite" })`, que cria a
+//      sessão. No cliente só se valida o FORMATO; a autoridade é do
+//      Supabase/backend. Falha (expirado/usado) -> fase "invalid", sem
+//      detalhes do erro.
 //
-//   Por isso este componente NÃO chama `exchangeCodeForSession`/
-//   `getSessionFromUrl` manualmente: basta `await supabase.auth.getSession()`
-//   (que aguarda essa inicialização internamente) para obter o resultado, e
-//   assinar `onAuthStateChange` para cobrir o caso em que o evento chega
-//   depois da primeira leitura. Se nenhuma sessão aparecer, o link é
-//   tratado como inválido/expirado.
+//   2) Fluxo legado (convites já enviados). O cliente de `supabase-client.ts`
+//      usa `detectSessionInUrl: true`: ao ser instanciado, o SDK detecta
+//      `#access_token=...&type=invite` (implícito) ou `?code=...` (PKCE),
+//      troca por sessão e limpa a URL. Basta `getSession()` + assinar
+//      `onAuthStateChange`. Sem sessão -> "invalid".
+//
+//   Também: `#error=access_denied&error_code=otp_expired` (hash) -> "invalid".
+//   A rota "/" NÃO redireciona esse hash para cá: "/" é protegida (AuthGuard
+//   leva ao /login) e interpretar hash na raiz aumenta superfície (redirect
+//   com dado da URL) por pouco ganho; os e-mails novos apontam direto para cá.
 //
 // Fluxo após a sessão existir:
 //   1. Usuário define a senha (`supabase.auth.updateUser({ password })`).
@@ -47,12 +50,47 @@ import { activateInvite, ApiError } from "@/lib/users-api";
 //      orientando a solicitar um novo convite ao administrador.
 // =============================================================================
 
-type Phase = "checking" | "ready" | "invalid" | "activated";
+type Phase = "checking" | "confirm" | "ready" | "invalid" | "activated";
 
 // Apresentação: indicador de etapas (reflete só a fase REAL), skeleton enquanto
 // o link é validado, troca de fase com fade (FadeIn), erro com entrada
 // discreta (AnimatedFormMessage, role="alert") e `<Button loading>`.
 const ACTIVATION_STEPS = ["Validar convite", "Definir senha", "Conta ativada"];
+
+const TOKEN_HASH_MAX_LENGTH = 512;
+
+/** Valida só o FORMATO (type=invite, hash não vazio, tamanho e charset razoáveis). */
+function isPlausibleTokenHash(value: string | null, type: string | null): value is string {
+  return (
+    type === "invite" &&
+    !!value &&
+    value.length <= TOKEN_HASH_MAX_LENGTH &&
+    /^[A-Za-z0-9._~+/=-]+$/.test(value)
+  );
+}
+
+type UrlIntent =
+  | { kind: "token"; tokenHash: string }
+  | { kind: "invalid" }
+  | { kind: "legacy" };
+
+/** Lê a URL uma única vez e já a limpa (token_hash e erros nunca ficam no histórico). */
+function readAndCleanUrl(): UrlIntent {
+  const url = new URL(window.location.href);
+  const query = url.searchParams;
+  const hashParams = new URLSearchParams(url.hash.replace(/^#/, ""));
+
+  const hasToken = query.has("token_hash") || query.has("type");
+  const hasHashError = hashParams.has("error") || hashParams.has("error_code");
+  if (!hasToken && !hasHashError) return { kind: "legacy" };
+
+  const tokenHash = query.get("token_hash");
+  const type = query.get("type");
+  window.history.replaceState(window.history.state, "", url.pathname);
+
+  if (hasToken && isPlausibleTokenHash(tokenHash, type)) return { kind: "token", tokenHash };
+  return { kind: "invalid" };
+}
 
 export default function AtivarContaPage() {
   const [phase, setPhase] = useState<Phase>("checking");
@@ -60,17 +98,32 @@ export default function AtivarContaPage() {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [confirming, setConfirming] = useState(false);
   const [activatedRole, setActivatedRole] = useState<string | null>(null);
 
+  const tokenHashRef = useRef<string | null>(null);
+  const intentRef = useRef<UrlIntent["kind"] | null>(null);
+  const verifyingRef = useRef(false);
+  const focusRef = useRef<HTMLHeadingElement>(null);
+
   useEffect(() => {
+    // Ler/limpar a URL só uma vez (StrictMode executa o efeito duas vezes).
+    if (intentRef.current === null) {
+      const intent = readAndCleanUrl();
+      intentRef.current = intent.kind;
+      if (intent.kind === "token") tokenHashRef.current = intent.tokenHash;
+      if (intent.kind === "token") setPhase("confirm");
+      else if (intent.kind === "invalid") setPhase("invalid");
+    }
+    if (intentRef.current !== "legacy") return;
+
+    // Fluxo legado: o SDK processa #access_token / ?code na instanciação.
     let active = true;
     const supabase = getSupabaseClient();
-
     supabase.auth.getSession().then(({ data }) => {
       if (!active) return;
       setPhase(data.session ? "ready" : "invalid");
     });
-
     const { data: subscription } = supabase.auth.onAuthStateChange((_event, session) => {
       if (!active) return;
       if (session) setPhase((current) => (current === "activated" ? current : "ready"));
@@ -81,6 +134,31 @@ export default function AtivarContaPage() {
       subscription.subscription.unsubscribe();
     };
   }, []);
+
+  // Foco no título da fase ao trocar de fase (não na carga inicial).
+  useEffect(() => {
+    if (phase !== "checking") focusRef.current?.focus();
+  }, [phase]);
+
+  async function handleConfirm() {
+    const tokenHash = tokenHashRef.current;
+    if (!tokenHash || verifyingRef.current) return;
+    verifyingRef.current = true;
+    setConfirming(true);
+    tokenHashRef.current = null; // uso único: nunca reenvia o mesmo hash
+    try {
+      const { data, error: verifyError } = await getSupabaseClient().auth.verifyOtp({
+        token_hash: tokenHash,
+        type: "invite",
+      });
+      setPhase(verifyError || !data.session ? "invalid" : "ready");
+    } catch {
+      setPhase("invalid");
+    } finally {
+      verifyingRef.current = false;
+      setConfirming(false);
+    }
+  }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -115,7 +193,7 @@ export default function AtivarContaPage() {
     }
   }
 
-  const stepIndex = phase === "checking" ? 0 : phase === "ready" ? 1 : ACTIVATION_STEPS.length;
+  const stepIndex = phase === "checking" || phase === "confirm" ? 0 : phase === "ready" ? 1 : ACTIVATION_STEPS.length;
 
   return (
     <div className="flex flex-1 flex-col items-center justify-center p-4 sm:p-8">
@@ -141,8 +219,26 @@ export default function AtivarContaPage() {
           </div>
         )}
 
+        {phase === "confirm" && (
+          <FadeIn className="flex flex-col gap-4">
+            <h2 ref={focusRef} tabIndex={-1} className="text-body text-bone focus:outline-none">
+              Confirme a ativação
+            </h2>
+            <p className="text-body-sm text-warm-granite">
+              Recebemos o seu convite para o SISPAT-AGU. Selecione “Continuar” para validá-lo e
+              definir a sua senha.
+            </p>
+            <Button type="button" loading={confirming} onClick={handleConfirm} className="w-full">
+              {confirming ? "Validando…" : "Continuar"}
+            </Button>
+          </FadeIn>
+        )}
+
         {phase === "invalid" && (
           <FadeIn className="flex flex-col gap-3">
+            <h2 ref={focusRef} tabIndex={-1} className="text-body text-bone focus:outline-none">
+              Link de convite inválido
+            </h2>
             <FormMessage>
               Este link de convite é inválido ou já expirou. Solicite um novo convite a um
               administrador.
@@ -159,6 +255,9 @@ export default function AtivarContaPage() {
         {phase === "ready" && (
           <FadeIn>
             <form className="flex flex-col gap-4" onSubmit={handleSubmit}>
+              <h2 ref={focusRef} tabIndex={-1} className="text-body text-bone focus:outline-none">
+                Defina sua senha
+              </h2>
               <p className="text-body-sm text-warm-granite">
                 Defina uma senha (mínimo de 8 caracteres) para concluir a ativação da sua conta.
               </p>
@@ -203,6 +302,9 @@ export default function AtivarContaPage() {
         {/* Sucesso: só após a resposta real do backend (phase "activated"). */}
         {phase === "activated" && (
           <FadeIn className="flex flex-col gap-3">
+            <h2 ref={focusRef} tabIndex={-1} className="text-body text-bone focus:outline-none">
+              Ativação concluída
+            </h2>
             <p role="status" className="flex items-start gap-2 text-body-sm text-metric-green">
               <CheckCircle2 className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
               <span>

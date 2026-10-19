@@ -81,7 +81,11 @@ def catalog_error_response(
 def read_body(model: type, context: str):
     """Corpo JSON obrigatório; devolve `(instância, None)` ou `(None, resposta 400)`."""
     try:
-        return parse_body(model, request.get_json(silent=True), context=context), None
+        try:
+            payload = request.get_json(silent=True)
+        except RecursionError:  # SEC-REV-01: JSON profundamente aninhado
+            payload = None
+        return parse_body(model, payload, context=context), None
     except BadRequest as exc:
         return None, validation_error(exc)
 

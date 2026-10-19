@@ -24,9 +24,32 @@ from __future__ import annotations
 import logging
 
 from flask import Flask, jsonify
+from sqlalchemy.exc import (
+    DBAPIError,
+    InterfaceError,
+    OperationalError,
+    SQLAlchemyError,
+)
+from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 from werkzeug.exceptions import HTTPException, default_exceptions
 
 logger = logging.getLogger(__name__)
+
+# SQLSTATE 57014 = query_canceled (statement_timeout do PostgreSQL).
+_QUERY_CANCELED_SQLSTATE = "57014"
+
+
+def _is_pg_driver_error(exc: DBAPIError) -> bool:
+    """Só erros operacionais do driver PostgreSQL (rede/conexão) viram 503;
+    erros de esquema/SQL continuam 500 (bug, não indisponibilidade)."""
+    module = type(getattr(exc, "orig", None)).__module__ or ""
+    return module.startswith(("psycopg2", "psycopg"))
+
+
+def _is_query_canceled(exc: DBAPIError) -> bool:
+    orig = getattr(exc, "orig", None)
+    code = getattr(orig, "pgcode", None) or getattr(orig, "sqlstate", None)
+    return code == _QUERY_CANCELED_SQLSTATE
 
 # Códigos de status explicitamente suportados por esta fase, com seu
 # slug (`code`) e mensagem padrão (em português) quando nenhuma mensagem
@@ -45,6 +68,7 @@ _DEFAULT_ERROR_INFO: dict[int, tuple[str, str]] = {
     500: ("internal_error", "Erro interno do servidor."),
     502: ("bad_gateway", "Falha ao comunicar com um serviço externo."),
     503: ("service_unavailable", "Serviço temporariamente indisponível."),
+    504: ("gateway_timeout", "A operação excedeu o tempo limite. Tente novamente."),
 }
 
 _FALLBACK_ERROR_INFO = ("error", "Ocorreu um erro ao processar a requisição.")
@@ -113,6 +137,26 @@ def register_error_handlers(app: Flask) -> None:
         logger.exception("Erro não tratado na aplicação (%s).", exc.__class__.__name__)
         return _build_error_payload(500, message=None, code=None)
 
+    def handle_db_exception(exc: SQLAlchemyError):
+        # Falhas de infraestrutura do banco viram resposta JSON controlada
+        # (antes de o gunicorn abortar o worker e devolver 500 sem corpo).
+        # Nunca expõe SQL, parâmetros ou mensagem do driver.
+        if isinstance(exc, DBAPIError) and _is_query_canceled(exc):
+            logger.error("Consulta cancelada por statement_timeout (%s).", type(exc).__name__)
+            return _build_error_payload(504, message=None, code="request_timeout")
+        if isinstance(exc, (PoolTimeoutError, InterfaceError)) or (
+            isinstance(exc, OperationalError) and _is_pg_driver_error(exc)
+        ):
+            logger.error("Banco indisponível (%s).", type(exc).__name__)
+            response, status = _build_error_payload(503, message=None, code="database_unavailable")
+            response.headers["Retry-After"] = "5"
+            return response, status
+        return handle_unexpected_exception(exc)
+
+    def handle_timeout(exc: TimeoutError):
+        logger.error("Tempo limite excedido (%s).", type(exc).__name__)
+        return _build_error_payload(504, message=None, code="request_timeout")
+
     for status_code in _DEFAULT_ERROR_INFO:
         app.register_error_handler(status_code, handle_known_http_exception)
 
@@ -124,3 +168,6 @@ def register_error_handlers(app: Flask) -> None:
 
     # Qualquer exceção Python não tratada (não é um HTTPException) vira 500.
     app.register_error_handler(Exception, handle_unexpected_exception)
+    # Mais específicos (resolvidos pela MRO do Flask antes de Exception).
+    app.register_error_handler(SQLAlchemyError, handle_db_exception)
+    app.register_error_handler(TimeoutError, handle_timeout)

@@ -108,6 +108,7 @@ Decisões de design assumidas (documentadas para revisão futura):
 from __future__ import annotations
 
 import logging
+import time
 import uuid
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
@@ -144,6 +145,9 @@ from app.security.sanitize import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Tamanho do lote do IN ao pré-carregar assets por patrimônio.
+_PREFETCH_CHUNK = 500
 
 # Chave usada dentro de `ImportPreviewItem.normalized_values` (JSONB) para
 # guardar a versão do asset correspondente no momento da pré-visualização,
@@ -295,6 +299,8 @@ class ImportService:
     suposições pendentes de confirmação institucional.
     """
 
+    _asset_cache: dict[str, list[Asset]] | None = None  # padrão de classe
+
     def __init__(
         self,
         db_session: Session,
@@ -305,10 +311,15 @@ class ImportService:
         self._sheets_client = sheets_client
         self._settings = settings or get_settings()
         self._refs: ImportReferences | None = None
+        # Cache em memória (somente durante `create_preview`): patrimônio
+        # normalizado -> assets ATIVOS. Evita 1 query por linha (N+1).
+        self._asset_cache: dict[str, list[Asset]] | None = None
 
     # ------------------------------------------------------------------
     # Consultas auxiliares a `assets`/`units`
     # ------------------------------------------------------------------
+
+    _asset_cache: dict[str, list[Asset]] | None = None  # padrão de classe
 
     def _active_assets_by_patrimony(self, patrimony_number: str | None) -> list[Asset]:
         """Retorna todos os `assets` ATIVOS (`deleted_at IS NULL`) com este
@@ -316,6 +327,8 @@ class ImportService:
         SEC-AST-01). Nunca grava em `assets` — apenas leitura."""
         if patrimony_number is None:
             return []
+        if self._asset_cache is not None:
+            return list(self._asset_cache.get(normalize_patrimony_number(patrimony_number), []))
         return (
             self._db.query(Asset)
             .filter(
@@ -325,6 +338,22 @@ class ImportService:
             )
             .all()
         )
+
+    def _prefetch_active_assets(self, patrimony_numbers: set[str]) -> None:
+        """Carrega em lote os assets ATIVOS dos patrimônios informados (mesma
+        comparação `lower(trim)` da consulta unitária) e ativa o cache."""
+        cache: dict[str, list[Asset]] = {}
+        keys = sorted({normalize_patrimony_number(n) for n in patrimony_numbers})
+        for start in range(0, len(keys), _PREFETCH_CHUNK):
+            chunk = keys[start : start + _PREFETCH_CHUNK]
+            found = (
+                self._db.query(Asset)
+                .filter(normalized_column(Asset.patrimony_number).in_(chunk), Asset.deleted_at.is_(None))
+                .all()
+            )
+            for asset in found:
+                cache.setdefault(normalize_patrimony_number(asset.patrimony_number), []).append(asset)
+        self._asset_cache = cache
 
     def _references(self) -> ImportReferences:
         """Mapas de unidades/aliases/salas/pessoas (carga única por operação)."""
@@ -479,6 +508,7 @@ class ImportService:
         Levanta `UpstreamSourceError` se a leitura do Google Sheets falhar
         (`GoogleSheetsClientError`), sem expor o detalhe interno do cliente.
         """
+        t0 = time.perf_counter()
         try:
             read_result = self._sheets_client.read_patrimony_rows()
         except GoogleSheetsClientError as exc:
@@ -500,7 +530,32 @@ class ImportService:
         items: list[ImportPreviewItem] = []
         pending_counts: dict[str, int] = {}
         self._refs = None  # sempre recarrega os mapas de apoio nesta operação
+        t_read = time.perf_counter()
 
+        # Pré-carga em lote (1 query por 500 patrimônios) dos assets ativos e
+        # dos mapas de vínculo, em vez de consultas por linha.
+        wanted: set[str] = set()
+        for r in read_result.rows:
+            nv = r.get("normalized_values") or {}
+            pn = _normalize_patrimony(_extract_field(nv, _HEADER_PATRIMONIO))
+            if pn is not None:
+                wanted.add(pn)
+        self._prefetch_active_assets(wanted)
+        t_prefetch = time.perf_counter()
+        try:
+            return self._classify_and_persist(
+                read_result, requested_by_user_id, now, expires_at, preview_id,
+                seen_patrimony, seen_source_ids, counts, items, pending_counts,
+                t0, t_read, t_prefetch,
+            )
+        finally:
+            self._asset_cache = None
+
+    def _classify_and_persist(
+        self, read_result, requested_by_user_id, now, expires_at, preview_id,
+        seen_patrimony, seen_source_ids, counts, items, pending_counts,
+        t0, t_read, t_prefetch,
+    ) -> ImportPreview:
         for row in read_result.rows:
             raw_values: dict[str, Any] = dict(row.get("raw_values") or {})
             normalized_values: dict[str, Any] = dict(row.get("normalized_values") or {})
@@ -604,6 +659,7 @@ class ImportService:
                 )
             )
 
+        t_classify = time.perf_counter()
         preview = ImportPreview(
             id=preview_id,
             requested_by=requested_by_user_id,
@@ -623,6 +679,13 @@ class ImportService:
         if items:
             self._db.add_all(items)
         self._db.flush()
+        t_end = time.perf_counter()
+        logger.info(
+            "import_service.create_preview: linhas=%d leitura=%.2fs prefetch=%.2fs "
+            "classificacao=%.2fs persistencia=%.2fs total=%.2fs",
+            len(read_result.rows), t_read - t0, t_prefetch - t_read,
+            t_classify - t_prefetch, t_end - t_classify, t_end - t0,
+        )
 
         # Atributo transitório (não persistido): contadores de pendências de
         # vínculo, para a prévia exibir sem bloquear a confirmação.

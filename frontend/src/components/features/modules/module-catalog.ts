@@ -7,7 +7,6 @@
 
 export type ModuleKey =
   | "relatorios"
-  | "perfis-permissoes"
   | "vinculos-unidades"
   | "auditoria"
   | "integracoes"
@@ -49,19 +48,6 @@ export const MODULES: Record<ModuleKey, ModuleDescriptor> = {
     nextDelivery: WAITING_API,
     adminOnly: false,
     ...HOME_BACK,
-  },
-  "perfis-permissoes": {
-    key: "perfis-permissoes",
-    title: "Perfis e Permissões",
-    eyebrow: "Administração",
-    summary: "Consulta da matriz de perfis (ADM, USER e RH) e de suas permissões.",
-    willDo: [
-      "Exibir o que cada perfil pode fazer, por módulo e por campo.",
-      "Mostrar quais usuários têm cada perfil.",
-    ],
-    nextDelivery: WAITING_API,
-    adminOnly: true,
-    ...ADMIN_BACK,
   },
   "vinculos-unidades": {
     key: "vinculos-unidades",

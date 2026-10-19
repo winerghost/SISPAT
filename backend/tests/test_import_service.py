@@ -149,15 +149,11 @@ def test_create_preview_classifica_todas_as_situacoes() -> None:
     db, router = _make_db_mock()
     _register_refs(router, _make_unit())
     asset_query = router.register(Asset)
-    # Ordem das chamadas a `_active_assets_by_patrimony`, na ordem das linhas
-    # que efetivamente consultam o banco: linha 100 (NOVO), linha 100 de novo
-    # (DUPLICADO, busca informativa de matched_asset_id), linha 200
-    # (EXISTENTE), linha 300 (CONFLITANTE).
-    asset_query.filter.return_value.all.side_effect = [
-        [],
-        [],
-        [existing_asset_200],
-        [asset_a_300, asset_b_300],
+    # Pré-carga em lote: UMA query devolve os assets ativos de todas as linhas.
+    asset_query.filter.return_value.all.return_value = [
+        existing_asset_200,
+        asset_a_300,
+        asset_b_300,
     ]
 
     service = ImportService(db, sheets_client, settings=_make_settings())
