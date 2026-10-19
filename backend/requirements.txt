@@ -18,14 +18,14 @@ werkzeug==3.1.9           # transitiva do Flask; CVE-2026-102598 corrigido em 3.
 gunicorn==23.0.0          # CVE-2024-6827 (request smuggling, TE.CL) corrigido em 23.0.0
 
 # --- Banco de dados / ORM / Migrações ---
-sqlalchemy==2.0.54
+sqlalchemy==2.1.4
 alembic==1.20.0
 psycopg2-binary==2.9.13
 
 # --- Configuração / validação ---
-pydantic==2.13.4
-pydantic-settings==2.15.0
-python-dotenv==1.2.2      # CVE-2026-28684 corrigido em 1.2.2
+pydantic==2.14.1
+pydantic-settings==2.16.0
+python-dotenv==1.2.4      # CVE-2026-28684 corrigido em 1.2.2
 
 # --- Fila assíncrona / cache (sincronização, exportações) ---
 redis==5.3.1
