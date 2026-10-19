@@ -40,6 +40,13 @@ export interface ImportPreviewResponse {
   preview_id: string;
   summary: ImportPreviewSummary;
   expires_at: string;
+  /** Pendências de vínculo (código → linhas). Só contadores; nunca bloqueiam. Ausente em backends antigos. */
+  pending_counts?: Record<string, number>;
+}
+
+export interface ImportPendingReport {
+  preview_id: string;
+  pending_counts: Record<string, number>;
 }
 
 export interface ImportPreviewItem {
@@ -111,6 +118,11 @@ export function confirmGoogleSheetsImport(
   payload: ImportConfirmRequest,
 ): Promise<ImportConfirmResponse> {
   return apiClient.post<ImportConfirmResponse>(`${BASE_PATH}/confirm`, payload);
+}
+
+/** `GET /api/v1/imports/google-sheets/{preview_id}/pending` — contadores de pendências de vínculo. */
+export function getGoogleSheetsPendingReport(previewId: string): Promise<ImportPendingReport> {
+  return apiClient.get<ImportPendingReport>(`${BASE_PATH}/${encodeURIComponent(previewId)}/pending`);
 }
 
 export { ApiError };

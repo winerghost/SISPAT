@@ -30,7 +30,8 @@ import pytest
 from app.integrations.google_sheets_client import GoogleSheetsClientError, GoogleSheetsReadResult
 from app.models.assets import Asset
 from app.models.imports import ImportPreview, ImportPreviewItem
-from app.models.units import Unit
+from app.models.people import ResponsiblePerson
+from app.models.units import Room, Unit, UnitAlias
 from app.services.import_service import (
     ImportService,
     PreviewNotConfirmableError,
@@ -56,7 +57,12 @@ def _row(
     return {
         "source_row_number": source_row_number,
         "raw_values": {"PATRIMONIO": patrimonio, "ID": item_id, "DESCRICAO": descricao},
-        "normalized_values": {"PATRIMONIO": patrimonio, "ID": item_id, "DESCRICAO": descricao},
+        "normalized_values": {
+            "PATRIMONIO": patrimonio,
+            "ID": item_id,
+            "DESCRICAO": descricao,
+            "UNIDADE": "SEDE",
+        },
         "validation_errors": validation_errors or [],
     }
 
@@ -107,6 +113,16 @@ def _make_db_mock() -> tuple[MagicMock, _QueryRouter]:
     return db, router
 
 
+def _register_refs(router: _QueryRouter, unit: Unit | None) -> None:
+    """Tabelas de apoio da resolução de vínculos (sigla `SEDE` -> `unit`)."""
+    router.register(Unit).all.return_value = [unit] if unit else []
+    router.register(UnitAlias).all.return_value = (
+        [UnitAlias(alias="SEDE", unit_id=unit.id)] if unit else []
+    )
+    router.register(Room).filter.return_value.all.return_value = []
+    router.register(ResponsiblePerson).filter.return_value.all.return_value = []
+
+
 # ---------------------------------------------------------------------------
 # create_preview
 # ---------------------------------------------------------------------------
@@ -131,6 +147,7 @@ def test_create_preview_classifica_todas_as_situacoes() -> None:
     asset_b_300 = _make_asset("300")
 
     db, router = _make_db_mock()
+    _register_refs(router, _make_unit())
     asset_query = router.register(Asset)
     # Ordem das chamadas a `_active_assets_by_patrimony`, na ordem das linhas
     # que efetivamente consultam o banco: linha 100 (NOVO), linha 100 de novo
@@ -191,6 +208,7 @@ def test_create_preview_define_expires_at_conforme_settings() -> None:
     sheets_client.read_patrimony_rows.return_value = read_result
 
     db, router = _make_db_mock()
+    _register_refs(router, _make_unit())
     asset_query = router.register(Asset)
     asset_query.filter.return_value.all.return_value = []
 
@@ -267,8 +285,7 @@ def _wire_confirm_db(
     asset_query = router.register(Asset)
     asset_query.filter.return_value.all.side_effect = asset_query_results or []
 
-    unit_query = router.register(Unit)
-    unit_query.filter.return_value.filter.return_value.all.return_value = [unit] if unit else []
+    _register_refs(router, unit)
 
     return db, router
 

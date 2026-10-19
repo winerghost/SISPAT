@@ -193,27 +193,24 @@ test.describe("verificações manuais automatizadas", () => {
     await expect(page.getByRole("button", { name: "Confirmar Importação" })).toBeFocused();
   });
 
-  test("headings: um único h1 por tela e sem saltos de nível", async ({ page }) => {
-    // Percorre as 13 telas em sequência (≈50 s isolado no `next dev`); o limite
-    // padrão de 60 s estourava sob a carga da suíte completa.
-    test.setTimeout(180_000);
-    for (const screen of SCREENS) {
-      await page.context().clearCookies();
-      const fresh = await page.context().newPage();
-      await openScreen(fresh, screen);
-      const levels = await fresh.evaluate(() =>
+  // Um teste por tela (antes: loop único de ~6 min isolado e >20 min sob carga,
+  // estourando o limite). Mesmas asserções, paralelizáveis e com falha localizada.
+  for (const screen of SCREENS) {
+    test(`headings: ${screen.id}: um único h1 e sem saltos de nível`, async ({ page }) => {
+      test.setTimeout(120_000);
+      await openScreen(page, screen);
+      const levels = await page.evaluate(() =>
         Array.from(document.querySelectorAll("h1,h2,h3,h4,h5,h6"))
           .filter((h) => !h.closest("[aria-hidden='true']") && (h as HTMLElement).offsetParent !== null)
           .map((h) => Number(h.tagName[1])),
       );
-      const h1Count = await fresh.locator("main h1").count();
+      const h1Count = await page.locator("main h1").count();
       expect.soft(h1Count, `${screen.id}: h1 em <main>`).toBe(1);
       for (let i = 1; i < levels.length; i++) {
         expect.soft(levels[i]! - levels[i - 1]!, `${screen.id}: salto de heading ${levels.join(",")}`).toBeLessThanOrEqual(1);
       }
-      await fresh.close();
-    }
-  });
+    });
+  }
 
   test("login: erro anunciado (role=alert) e associado aos campos", async ({ page }) => {
     await installMocks(page);

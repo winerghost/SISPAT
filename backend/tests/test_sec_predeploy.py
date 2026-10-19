@@ -358,10 +358,20 @@ def test_celery_so_json_e_apenas_tasks_da_allowlist():
     celery = create_celery(Settings(**_prod_kwargs(redis_url="redis://:senha-sintetica@redis:6379/0")))
     assert celery.conf.accept_content == ["json"]
     assert celery.conf.task_serializer == "json" and celery.conf.result_serializer == "json"
-    assert celery.conf.beat_schedule == {}
+    # Beat: só as 3 tasks de insights (Etapa 4b), sem argumentos.
+    assert {e["task"] for e in celery.conf.beat_schedule.values()} == {
+        "sispat.ai.alerts_priority",
+        "sispat.ai.executive_summary",
+        "sispat.ai.quality_suggestions",
+    }
     celery.loader.import_default_modules()
     proprias = {name for name in celery.tasks if not name.startswith("celery.")}
-    assert proprias == {"sispat.ai.ping_provider"}
+    assert proprias == {
+        "sispat.ai.ping_provider",
+        "sispat.ai.alerts_priority",
+        "sispat.ai.executive_summary",
+        "sispat.ai.quality_suggestions",
+    }
 
 
 def test_nenhuma_rota_http_enfileira_task_celery():

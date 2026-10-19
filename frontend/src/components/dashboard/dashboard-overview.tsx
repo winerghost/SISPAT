@@ -135,8 +135,19 @@ export function DashboardOverview({
       {(status === "unavailable" || (status === "ready" && !ready)) && (
         <DashboardEmptyState
           action={
-            // Ação REAL (tela existente para todos os perfis). Também garante
+            // Ações REAIS (telas existentes para todos os perfis). Também garantem
             // conteúdo focável no <main> rolável (axe scrollable-region-focusable).
+            <div className="flex flex-col items-start gap-3">
+            <Link
+              href="/dashboard"
+              className="group inline-flex min-h-6 items-center gap-2 rounded-nav text-body-sm text-bone transition-factory hover:text-chalk focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-bone focus-visible:ring-offset-2 focus-visible:ring-offset-obsidian-canvas"
+            >
+              Ver o dashboard completo
+              <ArrowRight
+                aria-hidden
+                className="h-4 w-4 transition-transform duration-fast ease-factory group-hover:translate-x-0.5 motion-reduce:group-hover:translate-x-0"
+              />
+            </Link>
             <Link
               href="/configuracoes/seguranca"
               className="group inline-flex min-h-6 items-center gap-2 rounded-nav text-body-sm text-bone transition-factory hover:text-chalk focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-bone focus-visible:ring-offset-2 focus-visible:ring-offset-obsidian-canvas"
@@ -147,6 +158,7 @@ export function DashboardOverview({
                 className="h-4 w-4 transition-transform duration-fast ease-factory group-hover:translate-x-0.5 motion-reduce:group-hover:translate-x-0"
               />
             </Link>
+            </div>
           }
         />
       )}

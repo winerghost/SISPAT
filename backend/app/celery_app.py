@@ -6,19 +6,39 @@
   a partir de mensagens da fila).
 - Limites de tempo por task; prefetch 1; horários em UTC.
 - Arquivo de estado do beat: `CELERY_BEAT_SCHEDULE_FILENAME` (settings).
-- `beat_schedule` começa vazio: tasks periódicas (ex.: resumo executivo) são
-  adicionadas nas próximas etapas, sempre degradando para NullProvider.
+- `beat_schedule`: tasks de insights de IA (alertas a cada 6 h; resumo
+  executivo e qualidade de dados diários), sempre degradando para NullProvider.
 
 Uso: `celery -A app.celery_app worker -B --loglevel=info`.
 """
 from __future__ import annotations
 
 from celery import Celery
+from celery.schedules import crontab
 
 from app.config.settings import Settings, get_settings
 
 TASK_TIME_LIMIT_SECONDS = 120
 TASK_SOFT_TIME_LIMIT_SECONDS = 90
+
+
+# Insights de IA do dashboard (Etapa 4b). As tasks só agem com a flag da
+# funcionalidade ligada em `ai_settings.features` (senão retornam sem custo).
+# Horários em UTC (Araguaína = UTC-3).
+BEAT_SCHEDULE = {
+    "ai-alerts-priority": {
+        "task": "sispat.ai.alerts_priority",
+        "schedule": crontab(minute=0, hour="*/6"),
+    },
+    "ai-executive-summary": {
+        "task": "sispat.ai.executive_summary",
+        "schedule": crontab(minute=0, hour=9),  # 06:00 em Araguaína
+    },
+    "ai-quality-suggestions": {
+        "task": "sispat.ai.quality_suggestions",
+        "schedule": crontab(minute=30, hour=9),
+    },
+}
 
 
 def create_celery(settings: Settings | None = None) -> Celery:
@@ -43,7 +63,7 @@ def create_celery(settings: Settings | None = None) -> Celery:
         worker_hijack_root_logger=False,
         result_expires=3600,
         broker_connection_retry_on_startup=True,
-        beat_schedule={},
+        beat_schedule=BEAT_SCHEDULE,
         # O container do worker é read_only: o arquivo de estado do beat
         # fica, por padrão, no tmpfs privado /tmp (efêmero; o agendamento vem
         # do código). Configurável: CELERY_BEAT_SCHEDULE_FILENAME (AI-SAST-01).

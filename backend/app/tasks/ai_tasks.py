@@ -3,7 +3,9 @@
 `ping_ai_provider`: placeholder seguro. Lê `ai_settings` e devolve o status
 consolidado. Só chama o provedor (prompt fixo, sem dados do sistema) se
 `probe=True` E a IA estiver ativa; desligada => NullProvider, sem rede.
-NÃO está no beat_schedule (não gera custo periódico).
+NÃO está no beat_schedule (não gera custo periódico). As tasks de insights
+(alertas, resumo executivo, qualidade) estão no beat e só agem com a flag da
+respectiva funcionalidade ligada.
 """
 from __future__ import annotations
 
@@ -12,6 +14,11 @@ from typing import Any
 
 from app.celery_app import celery_app
 from app.services.ai.factory import AIConfig, compute_status, resolve_provider
+from app.services.ai.models import (
+    FEATURE_ALERTS_EXPLAIN,
+    FEATURE_DATA_QUALITY,
+    FEATURE_EXECUTIVE_SUMMARY,
+)
 from app.services.ai.null_provider import NullProvider
 
 logger = logging.getLogger(__name__)
@@ -53,3 +60,45 @@ def ping_ai_provider(probe: bool = False) -> dict[str, Any]:
     except Exception as exc:  # noqa: BLE001
         logger.error("ai_tasks: ping falhou (%s)", type(exc).__name__)
         return {"status": "unavailable", "probed": False, "reason": "internal_error"}
+
+
+# --- Insights do dashboard (Etapa 4b) ----------------------------------------
+# Entrada = só DTOs agregados dos alertas determinísticos (ver
+# `app.services.ai.insights`). Cada task respeita a flag da própria
+# funcionalidade; sem IA/erro/NullProvider nada é gravado. Sem argumentos
+# (nenhuma entrada de usuário chega às tasks).
+
+
+_INSIGHT_SOFT_LIMIT = 1500  # várias unidades x chamadas de até AI_TIMEOUT_SECONDS
+_INSIGHT_HARD_LIMIT = 1800
+
+
+def run_insight_task(feature: str, **kwargs: Any) -> dict[str, Any]:
+    """Núcleo testável (sem Celery): lê a config e gera os insights da funcionalidade."""
+    from app.services.ai.insights import run_insight_feature
+
+    config = kwargs.pop("config", None) or _load_config()
+    return run_insight_feature(feature, config=config, **kwargs)
+
+
+def _safe_run(feature: str) -> dict[str, Any]:
+    try:
+        return run_insight_task(feature)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("ai_tasks: %s falhou (%s)", feature, type(exc).__name__)
+        return {"feature": feature, "units": 0, "stored": 0, "skipped": "internal_error"}
+
+
+@celery_app.task(name="sispat.ai.alerts_priority", ignore_result=False, soft_time_limit=_INSIGHT_SOFT_LIMIT, time_limit=_INSIGHT_HARD_LIMIT)
+def generate_alerts_priority() -> dict[str, Any]:
+    return _safe_run(FEATURE_ALERTS_EXPLAIN)
+
+
+@celery_app.task(name="sispat.ai.executive_summary", ignore_result=False, soft_time_limit=_INSIGHT_SOFT_LIMIT, time_limit=_INSIGHT_HARD_LIMIT)
+def generate_executive_summary() -> dict[str, Any]:
+    return _safe_run(FEATURE_EXECUTIVE_SUMMARY)
+
+
+@celery_app.task(name="sispat.ai.quality_suggestions", ignore_result=False, soft_time_limit=_INSIGHT_SOFT_LIMIT, time_limit=_INSIGHT_HARD_LIMIT)
+def generate_quality_suggestions() -> dict[str, Any]:
+    return _safe_run(FEATURE_DATA_QUALITY)

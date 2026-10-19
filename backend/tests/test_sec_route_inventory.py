@@ -65,6 +65,15 @@ PUBLIC_ALLOWLIST: dict[tuple[str, str], str] = {
 AUTH = "auth"  # só exige usuário autenticado e ativo (por design)
 AAL2 = "aal2"  # autenticado + MFA concluído (qualquer perfil)
 ADMIN = "admin"  # ADM + AAL2 + permissão granular
+# Leitura compartilhada (USER/RH/ADM) com permissão granular + escopo de unidade;
+# ADM exige AAL2, USER/RH não (ver `catalog_http.require_aal2_for_adm`).
+READ = "read"
+# Escrita compartilhada ADM/USER (permissão granular + escopo; AAL2 só ADM). O
+# comportamento por perfil é testado em `test_assets_api.py`.
+SHARED_WRITE = "shared_write"
+# Pseudo-permissão: "qualquer uma das permissões de cadastro" (ver CATALOG_PERMISSIONS).
+CATALOG_ANY = "catalog_import.any"
+CATALOG_PERMISSIONS = {"units.update", "rooms.manage", "responsible.manage"}
 
 EXPECTED_POLICY: dict[tuple[str, str], tuple[str, str | None]] = {
     ("/api/v1/me", "GET"): (AUTH, None),
@@ -79,6 +88,16 @@ EXPECTED_POLICY: dict[tuple[str, str], tuple[str, str | None]] = {
     ("/api/v1/imports/google-sheets/preview/<uuid:preview_id>/items", "GET"): (ADMIN, "imports.execute"),
     ("/api/v1/imports/google-sheets/preview/<uuid:preview_id>/items", "HEAD"): (ADMIN, "imports.execute"),
     ("/api/v1/imports/google-sheets/confirm", "POST"): (ADMIN, "imports.execute"),
+    ("/api/v1/imports/google-sheets/<uuid:preview_id>/pending", "GET"): (ADMIN, "imports.execute"),
+    ("/api/v1/imports/google-sheets/<uuid:preview_id>/pending", "HEAD"): (ADMIN, "imports.execute"),
+    # --- Importação dos cadastros: ao menos UMA de units.update/rooms.manage/
+    # responsible.manage no decorator; a específica do kind é checada na view.
+    ("/api/v1/catalog-imports/<kind>/preview", "POST"): (ADMIN, CATALOG_ANY),
+    ("/api/v1/catalog-imports/<preview_id>/report", "GET"): (ADMIN, CATALOG_ANY),
+    ("/api/v1/catalog-imports/<preview_id>/report", "HEAD"): (ADMIN, CATALOG_ANY),
+    ("/api/v1/catalog-imports/<preview_id>/items", "GET"): (ADMIN, CATALOG_ANY),
+    ("/api/v1/catalog-imports/<preview_id>/items", "HEAD"): (ADMIN, CATALOG_ANY),
+    ("/api/v1/catalog-imports/<preview_id>/confirm", "POST"): (ADMIN, CATALOG_ANY),
     ("/api/v1/settings/ai", "GET"): (ADMIN, "settings.ai.manage"),
     ("/api/v1/settings/ai", "HEAD"): (ADMIN, "settings.ai.manage"),
     ("/api/v1/settings/ai", "PATCH"): (ADMIN, "settings.ai.manage"),
@@ -93,6 +112,19 @@ EXPECTED_POLICY: dict[tuple[str, str], tuple[str, str | None]] = {
     ("/api/v1/me/preferences", "GET"): (AUTH, None),
     ("/api/v1/me/preferences", "HEAD"): (AUTH, None),
     ("/api/v1/me/preferences", "PATCH"): (AUTH, None),
+    ("/api/v1/ai/insights", "GET"): (AUTH, None),
+    ("/api/v1/ai/insights", "HEAD"): (AUTH, None),
+    ("/api/v1/ai/ask", "POST"): (AAL2, "ai.use"),
+    ("/api/v1/dashboard/alerts", "GET"): (AUTH, None),
+    ("/api/v1/dashboard/alerts", "HEAD"): (AUTH, None),
+    ("/api/v1/dashboard/resumo", "GET"): (READ, "reports.read"),
+    ("/api/v1/dashboard/resumo", "HEAD"): (READ, "reports.read"),
+    ("/api/v1/dashboard/por-unidade", "GET"): (READ, "reports.read"),
+    ("/api/v1/dashboard/por-unidade", "HEAD"): (READ, "reports.read"),
+    ("/api/v1/dashboard/por-situacao", "GET"): (READ, "reports.read"),
+    ("/api/v1/dashboard/por-situacao", "HEAD"): (READ, "reports.read"),
+    ("/api/v1/dashboard/aquisicoes-mensais", "GET"): (READ, "reports.read"),
+    ("/api/v1/dashboard/aquisicoes-mensais", "HEAD"): (READ, "reports.read"),
     ("/api/v1/units", "GET"): (ADMIN, "users.manage"),
     ("/api/v1/units", "HEAD"): (ADMIN, "users.manage"),
     ("/api/v1/users/<uuid:user_id>", "GET"): (ADMIN, "users.manage"),
@@ -110,9 +142,89 @@ EXPECTED_POLICY: dict[tuple[str, str], tuple[str, str | None]] = {
     ("/api/v1/users/<uuid:user_id>/avatar", "DELETE"): (ADMIN, "users.avatar.manage"),
     ("/api/v1/users/<uuid:user_id>/avatar-url", "GET"): (ADMIN, "users.manage"),
     ("/api/v1/users/<uuid:user_id>/avatar-url", "HEAD"): (ADMIN, "users.manage"),
+    # --- Cadastros de apoio: salas, pessoas responsáveis, unidades ---
+    ("/api/v1/rooms", "GET"): (READ, "units.read"),
+    ("/api/v1/rooms", "HEAD"): (READ, "units.read"),
+    ("/api/v1/rooms/<uuid:room_id>", "GET"): (READ, "units.read"),
+    ("/api/v1/rooms/<uuid:room_id>", "HEAD"): (READ, "units.read"),
+    ("/api/v1/rooms", "POST"): (ADMIN, "rooms.manage"),
+    ("/api/v1/rooms/<uuid:room_id>", "PATCH"): (ADMIN, "rooms.manage"),
+    ("/api/v1/rooms/<uuid:room_id>/deactivate", "POST"): (ADMIN, "rooms.manage"),
+    ("/api/v1/rooms/<uuid:room_id>/activate", "POST"): (ADMIN, "rooms.manage"),
+    ("/api/v1/responsible-people", "GET"): (READ, "responsible.read"),
+    ("/api/v1/responsible-people", "HEAD"): (READ, "responsible.read"),
+    ("/api/v1/responsible-people/<uuid:person_id>", "GET"): (READ, "responsible.read"),
+    ("/api/v1/responsible-people/<uuid:person_id>", "HEAD"): (READ, "responsible.read"),
+    ("/api/v1/responsible-people", "POST"): (ADMIN, "responsible.manage"),
+    ("/api/v1/responsible-people/<uuid:person_id>", "PATCH"): (ADMIN, "responsible.manage"),
+    ("/api/v1/responsible-people/<uuid:person_id>/deactivate", "POST"): (ADMIN, "responsible.manage"),
+    ("/api/v1/responsible-people/<uuid:person_id>/activate", "POST"): (ADMIN, "responsible.manage"),
+    ("/api/v1/units/catalog", "GET"): (ADMIN, "units.update"),
+    ("/api/v1/units/catalog", "HEAD"): (ADMIN, "units.update"),
+    ("/api/v1/units/accessible", "GET"): (READ, "units.read"),
+    ("/api/v1/units/accessible", "HEAD"): (READ, "units.read"),
+    # --- Patrimônios: leitura/escrita compartilhadas (escopo + campos por perfil no
+    # serviço; AAL2 só ADM) e exclusão/restauração lógicas só ADM.
+    ("/api/v1/assets", "GET"): (READ, "assets.read"),
+    ("/api/v1/assets", "HEAD"): (READ, "assets.read"),
+    ("/api/v1/assets/<uuid:asset_id>", "GET"): (READ, "assets.read"),
+    ("/api/v1/assets/<uuid:asset_id>", "HEAD"): (READ, "assets.read"),
+    ("/api/v1/assets/<uuid:asset_id>/history", "GET"): (READ, "assets.read"),
+    ("/api/v1/assets/<uuid:asset_id>/history", "HEAD"): (READ, "assets.read"),
+    ("/api/v1/assets", "POST"): (SHARED_WRITE, "assets.create"),
+    ("/api/v1/assets/<uuid:asset_id>", "PATCH"): (SHARED_WRITE, "assets.update"),
+    ("/api/v1/assets/<uuid:asset_id>/delete", "POST"): (ADMIN, "assets.delete"),
+    ("/api/v1/assets/<uuid:asset_id>/restore", "POST"): (ADMIN, "assets.delete"),
+    # --- Movimentações: leitura via `assets.read` (não há `movements.read`); solicitar/
+    # cancelar compartilhados ADM/USER; aprovar/rejeitar só ADM + AAL2.
+    ("/api/v1/movements", "GET"): (READ, "assets.read"),
+    ("/api/v1/movements", "HEAD"): (READ, "assets.read"),
+    ("/api/v1/movements/<uuid:movement_id>", "GET"): (READ, "assets.read"),
+    ("/api/v1/movements/<uuid:movement_id>", "HEAD"): (READ, "assets.read"),
+    ("/api/v1/movements", "POST"): (SHARED_WRITE, "movements.create"),
+    ("/api/v1/movements/<uuid:movement_id>/cancel", "POST"): (SHARED_WRITE, "movements.create"),
+    ("/api/v1/movements/<uuid:movement_id>/approve", "POST"): (ADMIN, "movements.approve"),
+    ("/api/v1/movements/<uuid:movement_id>/reject", "POST"): (ADMIN, "movements.approve"),
+    # --- Inventários: leitura/conferência compartilhadas ADM/USER (inventory.check; AAL2 só
+    # ADM); criar/iniciar/encerrar/cancelar só ADM + AAL2. Locais: leitura via units.read.
+    ("/api/v1/inventories", "GET"): (READ, "inventory.check"),
+    ("/api/v1/inventories", "HEAD"): (READ, "inventory.check"),
+    ("/api/v1/inventories/<uuid:inventory_id>", "GET"): (READ, "inventory.check"),
+    ("/api/v1/inventories/<uuid:inventory_id>", "HEAD"): (READ, "inventory.check"),
+    ("/api/v1/inventories/<uuid:inventory_id>/summary", "GET"): (READ, "inventory.check"),
+    ("/api/v1/inventories/<uuid:inventory_id>/summary", "HEAD"): (READ, "inventory.check"),
+    ("/api/v1/inventories/<uuid:inventory_id>/items", "GET"): (READ, "inventory.check"),
+    ("/api/v1/inventories/<uuid:inventory_id>/items", "HEAD"): (READ, "inventory.check"),
+    ("/api/v1/inventories/<uuid:inventory_id>/items", "POST"): (SHARED_WRITE, "inventory.check"),
+    ("/api/v1/inventories", "POST"): (ADMIN, "inventory.create"),
+    ("/api/v1/inventories/<uuid:inventory_id>/start", "POST"): (ADMIN, "inventory.create"),
+    ("/api/v1/inventories/<uuid:inventory_id>/close", "POST"): (ADMIN, "inventory.create"),
+    ("/api/v1/inventories/<uuid:inventory_id>/cancel", "POST"): (ADMIN, "inventory.create"),
+    ("/api/v1/locations", "GET"): (READ, "units.read"),
+    ("/api/v1/locations", "HEAD"): (READ, "units.read"),
+    ("/api/v1/locations/<uuid:location_id>", "GET"): (READ, "units.read"),
+    ("/api/v1/locations/<uuid:location_id>", "HEAD"): (READ, "units.read"),
+    ("/api/v1/units/<uuid:unit_id>", "GET"): (READ, "units.read"),
+    ("/api/v1/units/<uuid:unit_id>", "HEAD"): (READ, "units.read"),
+    ("/api/v1/units/<uuid:unit_id>", "PATCH"): (ADMIN, "units.update"),
+    ("/api/v1/units/<uuid:unit_id>/deactivate", "POST"): (ADMIN, "units.update"),
+    ("/api/v1/units/<uuid:unit_id>/activate", "POST"): (ADMIN, "units.update"),
+    # --- APIs administrativas de LEITURA (ADM + AAL2; sem escrita) ---
+    ("/api/v1/admin/audit-logs", "GET"): (ADMIN, "audit.read"),
+    ("/api/v1/admin/audit-logs", "HEAD"): (ADMIN, "audit.read"),
+    ("/api/v1/admin/audit-logs/<uuid:log_id>", "GET"): (ADMIN, "audit.read"),
+    ("/api/v1/admin/audit-logs/<uuid:log_id>", "HEAD"): (ADMIN, "audit.read"),
+    ("/api/v1/admin/roles", "GET"): (ADMIN, "roles.manage"),
+    ("/api/v1/admin/roles", "HEAD"): (ADMIN, "roles.manage"),
+    ("/api/v1/admin/permissions", "GET"): (ADMIN, "roles.manage"),
+    ("/api/v1/admin/permissions", "HEAD"): (ADMIN, "roles.manage"),
+    ("/api/v1/admin/unit-access", "GET"): (ADMIN, "users.manage"),
+    ("/api/v1/admin/unit-access", "HEAD"): (ADMIN, "users.manage"),
 }
 
-ALL_PERMISSIONS = {perm for _, perm in EXPECTED_POLICY.values() if perm} | {
+ALL_PERMISSIONS = {
+    perm for _, perm in EXPECTED_POLICY.values() if perm and perm != CATALOG_ANY
+} | CATALOG_PERMISSIONS | {
     "users.deactivate",
     "users.assign_role",
     "users.assign_unit",
@@ -550,7 +662,8 @@ def test_aal_ausente_ou_forjado_vale_aal1(guarded, rule, method, aal_claim):
 @pytest.mark.parametrize("rule,method", ADMIN_ROUTES, ids=_ids(ADMIN_ROUTES))
 def test_adm_aal2_sem_a_permissao_da_rota_negado(guarded, rule, method):
     _, permission = EXPECTED_POLICY[(rule, method)]
-    _as(guarded, {"ADM"}, ALL_PERMISSIONS - {permission})
+    removed = CATALOG_PERMISSIONS if permission == CATALOG_ANY else {permission}
+    _as(guarded, {"ADM"}, ALL_PERMISSIONS - removed)
     response = _open(guarded.client, rule, method, headers={"Authorization": f"Bearer {_hs256()}"})
     _denied(response, method, "forbidden")
     guarded.db.assert_not_called()

@@ -361,3 +361,198 @@ formato do GET. Erros no formato `{"error": {"code", "message"}}`:
 - Rate limit por usuário (falha fechada): leitura 600/h, escrita 60/h.
 - Matriz de permissões: sem permissão nova (rota AUTH, como `/me`); registrada em
   `test_sec_route_inventory.py`.
+
+## Etapa 4a — Alertas determinísticos
+
+Sem IA: regras em SQL (ORM, parametrizadas) em `backend/app/services/alerts/`
+(`rules.py`, `service.py`); rota em `backend/app/api/v1/dashboard.py`. A IA (4b) só
+priorizará/explicará estes resultados; nunca gera SQL.
+
+### `GET /api/v1/dashboard/alerts`
+
+Qualquer perfil autenticado (USER/RH/ADM), sem AAL2 e sem permissão granular (rota AUTH, como
+`/me`; registrada em `test_sec_route_inventory.py`; sem permissão nova na matriz). Rate limit
+por usuário, falha fechada: 120/h. Resposta `Cache-Control: no-store`:
+
+```
+{"generated_at": "2026-10-15T12:00:00Z",
+ "items": [{"code", "severity": "info"|"warning"|"critical", "title", "description", "count"}],
+ "unavailable": ["<code da regra que falhou>"]}
+```
+
+Só entram itens com `count > 0` (ordenados por severidade). Cada regra roda em sessão própria; se
+falhar, só o código vai em `unavailable` (causa só no log, pelo nome da exceção) e a resposta
+segue 200. Contagens < 5 NÃO são suprimidas aqui (supressão vale só para payload de IA).
+
+### Regras (códigos)
+
+Todas aplicam `apply_unit_scope` (escopo vazio = nada) e consideram só bens ativos
+(`deleted_at IS NULL`). O cliente não envia nenhum filtro/unidade (parâmetros são ignorados).
+
+| Código | Severidade | Regra |
+|---|---|---|
+| `assets_duplicate_patrimony` | critical | bens ativos no escopo com o mesmo `patrimony_number` (`GROUP BY`/`HAVING > 1`); `count` = bens envolvidos |
+| `assets_unchecked` | warning | nenhum `inventory_items.checked_at` nos últimos N dias (inclui nunca conferidos) |
+| `assets_no_movement` | info | nenhuma movimentação (exceto CANCELADA/REJEITADA) nos últimos N dias |
+| `assets_no_responsible` | warning | `responsible_person_id` e `assigned_user_id` nulos |
+| `assets_no_location` | warning | `room_id` e `location_id` nulos |
+| `assets_nonstandard_patrimony` | info | número fora da regex configurada (operador `!~` do PostgreSQL, regex como parâmetro) |
+| `sync_conflicts_pending` | warning | `SyncConflict` PENDENTE ligado a bem do escopo |
+| `import_records_conflict` | warning | `RawImportRecord` CONFLITO cujo `source_record_id` casa com `assets.source_record_id` de bem do escopo |
+| `movement_spike` | warning | por `movement_type`: movimentos dos últimos 7 dias >= mínimo e > média + k·σ das N semanas anteriores (um item por tipo, até 20) |
+
+Baixas: N/A (não existe o conceito; `movement_type` é texto livre — sugestão 8 do plano).
+
+### Configuração (`.env`, todos opcionais)
+
+`ALERTS_UNCHECKED_DAYS=365`, `ALERTS_NO_MOVEMENT_DAYS=365`, `ALERTS_PATRIMONY_REGEX`
+(default `^[0-9A-Za-z][0-9A-Za-z./-]{0,31}$`; regex inválida torna só aquela regra
+`unavailable`), `ALERTS_SPIKE_BASELINE_WEEKS=8`, `ALERTS_SPIKE_SIGMA=3.0`,
+`ALERTS_SPIKE_MIN_COUNT=5`.
+
+### Privacidade (RH incluído)
+
+As regras só leem colunas de identificadores/datas e devolvem contagens; nenhum nome, e-mail
+ou matrícula é lido ou devolvido, então RH recebe exatamente o mesmo formato (sem identificar
+pessoas). O único texto vindo do banco é o `movement_type` (importado, não confiável) em
+`movement_spike`, saneado (somente imprimíveis, 60 caracteres).
+
+### Limitações conhecidas
+
+- `SyncConflict` sem `asset_id` e `RawImportRecord` sem bem correspondente não têm unidade e
+  por isso NÃO são contados para ninguém (falha segura).
+- `assets_unchecked`/`assets_no_movement` não excluem bens recém-cadastrados (podem ser
+  numerosos logo após a importação).
+- Sem índice novo (nenhuma migração): `inventory_items(asset_id, checked_at)` e
+  `asset_movements(asset_id, created_at)` ajudariam os `NOT EXISTS` em bases grandes.
+- Testes: `backend/tests/test_alerts_api.py` (SQLite com schema real; `REGEXP` emulado).
+
+## Etapa 4b — IA no dashboard
+
+Consultiva e somente leitura. Cada funcionalidade tem flag própria em `ai_settings.features`
+(`alerts_explain`, `executive_summary`, `data_quality`, `assistant`); `AI_ENABLED=false` no
+ambiente vence tudo. Qualquer falha (sem chave, circuito aberto, cota, Redis fora, timeout,
+resposta vazia, bloqueio da redação) degrada para `NullProvider`: respostas 200 neutras, nada é
+gravado, sem exceção. Chaves só em env; logs só com `type(exc).__name__`.
+
+### Tasks Celery (`app/tasks/ai_tasks.py`, agenda em `app/celery_app.py`)
+
+| Task | Funcionalidade | Agenda (UTC) | Cache (Redis, TTL) |
+|---|---|---|---|
+| `sispat.ai.alerts_priority` | `alerts_explain` | a cada 6 h | `sispat:ai:insights:<unit_id>:alert_priority` (8 h) |
+| `sispat.ai.executive_summary` | `executive_summary` | diária 09:00 | `...:executive_summary` (30 h) |
+| `sispat.ai.quality_suggestions` | `data_quality` | diária 09:30 | `...:quality_suggestion` (30 h) |
+
+Sem argumentos (nenhuma entrada de usuário chega às tasks). Para cada unidade ativa: roda as
+regras determinísticas de `services/alerts` limitadas à unidade (`app/services/ai/insights.py`),
+monta um DTO agregado (só código da regra, severidade e contagem; `unit_code`/`unit_label`;
+no resumo, `metrics.total`), passa por `AIService.run_feature` (flag -> redação com allowlist,
+contagens 1..4 viram `"<5"` e varredura bloqueante de CPF/e-mail/telefone/JWT/chaves ->
+prompt com `<dados>` -> provedor) e grava o texto puro. Unidade sem alertas não chama a IA. As
+tasks não aplicam o rate limit por usuário/unidade (o custo é limitado pelo agendamento e pelo
+teto mensal de tokens). Falha de cota/circuito/chave interrompe o laço.
+
+### `GET /api/v1/ai/insights`
+
+`require_auth` (qualquer perfil), escopo = unidades do usuário, só lê o cache (nunca chama o
+provedor), `Cache-Control: no-store`. Contrato:
+
+```
+{"status": "ok"|"unavailable", "generated_at": ISO|null,
+ "items": [{"kind": "alert_priority"|"executive_summary"|"quality_suggestion", "title", "text"}]}
+```
+
+IA desligada, flag da funcionalidade desligada, sem cache, Redis fora ou usuário sem unidade:
+`200 {"status":"unavailable","generated_at":null,"items":[]}`. Com mais de uma unidade, o título
+recebe o nome da unidade. Rate limit de rota 300/h com `fail_open` (a IA falha fechada sozinha).
+
+### `POST /api/v1/ai/ask`
+
+`require_auth` + permissão `ai.use` + flag `assistant`. Corpo `{"question": str 1..500}`
+(`extra="forbid"`; campo extra -> 400 auditado). Resposta `200 {"status":"ok","answer","tools_used"}`
+ou `200 {"status":"unavailable"}` quando a IA está desligada/degradada ou a pergunta é bloqueada
+pela redação (CPF/e-mail...); `429 rate_limited` quando estoura o limite por usuário
+(`AI_RATE_LIMIT_PER_USER`) ou por unidade (`AI_RATE_LIMIT_PER_UNIT`). Cada chamada ao provedor
+consome 1 do limite (uma pergunta com ferramentas usa até 4).
+
+Function calling por protocolo de texto (`services/ai/assistant.py`): o modelo responde com
+texto final ou com uma linha `{"tool","args"}`. Quem decide e executa é o backend
+(`services/ai/tools.py`): allowlist fechada (`contar_bens`, `listar_alertas`, `bens_por_sala`,
+`contagem_responsaveis`), argumentos validados por schema `extra="forbid"` estrito, escopo SEMPRE
+via `apply_unit_scope` do usuário autenticado (a unidade nunca vem do LLM nem do cliente), nenhum
+SQL do LLM, no máximo 3 execuções por pergunta (um 4º pedido -> `unavailable`). Ferramenta fora
+da allowlist vira resultado `recusada` (nada executa, não entra em `tools_used`); argumentos
+inválidos viram `argumentos_invalidos`. Nenhuma ferramenta devolve nome, e-mail ou matrícula; as
+que tocam responsáveis retornam só contagens (RH incluído). A pergunta e os resultados (rótulos de
+sala são dado importado não confiável) vão no bloco `<dados>`, com `<`, `>`, `&` escapados; o
+system prompt é fixo. Saída em texto puro, sem controle, truncada em 2000 caracteres. Auditoria
+`AI_USAGE` sem conteúdo (provedor, modelo, funcionalidade, tokens, resultado).
+
+### Limitações / pendências
+
+- `ai.use` está semeada só para ADM (migração 0005). USER/RH recebem 403 em `/ai/ask` até uma
+  migração/seed conceder a permissão (decisão de produto; nenhuma migração foi criada aqui).
+- Rótulos de sala podem conter texto livre importado: a varredura pega CPF/e-mail/telefone, não
+  nomes próprios.
+- A task reaproveita as regras de alerta com uma sessão que fixa o escopo na unidade processada
+  (`_UnitScopedSession`); um `scope_unit_ids` explícito em `RuleContext` seria mais limpo.
+- Testes: `test_ai_insights.py`, `test_ai_assistant_api.py`, `test_ai_tools.py`
+  (infra em `test_ai_dash_support.py`).
+
+## Tabela `unit_aliases` (importação de bens)
+
+Migração Alembic `0007_unit_aliases` (espelho `backend/migrations/sql/0010_unit_aliases.sql`),
+pendente de aplicação. Mapeia a sigla da coluna UNIDADE da planilha (ex.: `UEA`)
+para `units.id`: `alias` único case-insensitive (`lower(alias)`), 1..32 caracteres
+sem espaços nas pontas, `unit_id` FK `ON DELETE RESTRICT`, RLS default-deny e
+REVOKE de anon/authenticated. Seed: `UEA` → unidade de code `023404` (ignorado se a
+unidade não existir). Aplicar: `cd backend && alembic upgrade head`.
+
+## Migrações 0009 e 0010 (índices únicos e correção de permissões)
+
+Duas migrações separadas, **preparadas e NÃO aplicadas** em banco algum. O usuário escolhe.
+A cadeia Alembic é linear: `0008` → `0009` → `0010`. Como o `alembic_version` do banco ainda
+marca `0006` (0007/0008 foram aplicadas à mão), **não rode `alembic upgrade head` no
+Supabase sem antes alinhar o `alembic_version`**; prefira colar os `.sql`.
+
+| Alembic | Espelho SQL (colar nesta ordem) | Efeito |
+|---|---|---|
+| `0009_unique_indexes_assets_movements` | `backend/migrations/sql/0012_unique_indexes_assets_movements.sql` | SEC-AST-01: `uq_assets_patrimony_number_active` em `assets (lower(btrim(patrimony_number))) WHERE deleted_at IS NULL`. SEC-MOV-02: `uq_asset_movements_one_pending` em `asset_movements (asset_id) WHERE status = 'PENDENTE'`. |
+| `0010_seed_permission_corrections` | `backend/migrations/sql/0013_seed_permission_corrections.sql` | Revoga do perfil USER `rooms.manage` e `inventory.create` (a matriz as reserva ao ADM). |
+
+- 0009: cada índice é precedido de verificação que aborta com contagem (sem dados pessoais) se
+  houver duplicatas. Tabelas de bens/movimentações têm 0 linhas hoje. `CREATE UNIQUE INDEX IF
+  NOT EXISTS`, idempotente.
+- 0010: as rotas já exigem papel ADM; é correção de menor privilégio (sem mudança de
+  comportamento da API). `DELETE` restrito ao perfil USER e a essas duas permissões; idempotente.
+  O teste `test_db_static.py` abre exceção explícita e verificada só para este DELETE.
+- Pré-requisitos no banco: 0007/0008 (espelhos 0010/0011) já aplicados.
+
+Aplicar (após autorização explícita), uma das opções:
+
+- SQL Editor do Supabase: colar `0012_...sql`; depois, se desejado, `0013_...sql`.
+- Alembic (só com `alembic_version` correto): `cd backend && alembic upgrade 0009_unique_indexes_assets_movements`
+  e depois `alembic upgrade 0010_seed_permission_corrections` (ou `alembic upgrade head`).
+
+Reverter (nesta ordem inversa):
+
+```sql
+-- 0010 (devolve as permissões ao USER)
+INSERT INTO public.role_permissions (role_id, permission_id)
+SELECT r.id, p.id FROM public.roles r
+JOIN public.permissions p ON p.code IN ('rooms.manage', 'inventory.create')
+WHERE r.code = 'USER'
+ON CONFLICT (role_id, permission_id) DO NOTHING;
+
+-- 0009
+DROP INDEX IF EXISTS public.uq_asset_movements_one_pending;
+DROP INDEX IF EXISTS public.uq_assets_patrimony_number_active;
+```
+
+Alembic: `alembic downgrade 0009_unique_indexes_assets_movements` e
+`alembic downgrade 0008_catalog_source_ids_permissions`.
+
+Nota: o índice `uq_assets_patrimony_number_active` existe só na migração (não no modelo
+SQLAlchemy), porque testes existentes (`test_alerts_api`, `test_sec_alerts`, importação) criam
+duplicatas ativas no SQLite para exercitar a regra de alerta `assets_duplicate_patrimony`. Após
+aplicar a 0009 essa regra deixa de ter casos reais no PostgreSQL (defesa em profundidade).

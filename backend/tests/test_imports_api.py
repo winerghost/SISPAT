@@ -232,7 +232,9 @@ def test_list_items_sucesso_retorna_200(client):
 
     patches = _patch_db_and_service(mock_service)
     with _patch_authenticated(role_codes={"ADM"}, permission_codes={"imports.execute"}):
-        with patches[0], patches[1], patches[2]:
+        with patches[0], patches[1], patches[2], patch(
+            "app.api.v1.imports._bens_preview_exists", return_value=True
+        ):
             response = client.get(
                 _items_url(preview_id) + "?status=NOVO&search=100&page=1&page_size=25",
                 headers=_auth_headers(token),

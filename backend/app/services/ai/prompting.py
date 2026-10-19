@@ -57,7 +57,13 @@ FEATURE_INSTRUCTIONS: Mapping[str, str] = {
     ),
     FEATURE_ASSISTANT: (
         "Responda à pergunta contida nos dados usando somente os resultados de "
-        "ferramentas fornecidos."
+        "ferramentas fornecidos (campo items). Se faltar informação, peça UMA "
+        "ferramenta respondendo APENAS com um objeto JSON em uma linha, no formato "
+        "{\"tool\":\"nome\",\"args\":{}}, escolhendo entre: contar_bens "
+        "(args: filtro = todos|sem_responsavel|sem_localizacao), listar_alertas "
+        "(sem args), bens_por_sala (args: limite 1..20), contagem_responsaveis "
+        "(sem args). Não existem outras ferramentas. Com informação suficiente, "
+        "responda em texto simples, sem JSON."
     ),
     FEATURE_DATA_QUALITY: (
         "Sugira, em até 5 itens, correções de qualidade de dados para revisão humana. "

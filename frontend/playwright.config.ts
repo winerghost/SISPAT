@@ -46,9 +46,13 @@ export default defineConfig({
     ...devices["Desktop Chrome"],
   },
   projects: [
+    // Unitário puro (sem navegador): helper `cn` e tokens do DESIGN.md.
+    { name: "unit", testMatch: /cn\.spec\.ts/ },
     { name: "responsive", testMatch: /responsive\.spec\.ts/ },
     { name: "a11y", testMatch: /a11y\.spec\.ts/ },
     { name: "e2e", testMatch: /functional\.spec\.ts/ },
+    // Dashboard de indicadores e relatório imprimível (/dashboard*).
+    { name: "dashboard", testMatch: /(^|[\/])dashboard\.spec\.ts$/ },
     // Fundação de animações (reduced motion, transição de rota, modal, hidratação).
     { name: "motion", testMatch: /motion-.*\.spec\.ts/ },
   ],

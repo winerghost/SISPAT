@@ -41,6 +41,18 @@ HARDENING_PY = VERSIONS_DIR / "0004_db_security_hardening.py"
 HARDENING_SQL = SQL_DIR / "0006_db_security_hardening.sql"
 SETTINGS_PY = VERSIONS_DIR / "0005_settings_ai_users.py"
 SETTINGS_SQL = SQL_DIR / "0007_settings_ai_users.sql"
+ALIASES_PY = VERSIONS_DIR / "0007_unit_aliases.py"
+ALIASES_SQL = SQL_DIR / "0010_unit_aliases.sql"
+CATALOG_PY = VERSIONS_DIR / "0008_catalog_source_ids_permissions.py"
+CATALOG_SQL = SQL_DIR / "0011_catalog_source_ids_permissions.sql"
+UNIQUE_PY = VERSIONS_DIR / "0009_unique_indexes_assets_movements.py"
+UNIQUE_SQL = SQL_DIR / "0012_unique_indexes_assets_movements.sql"
+PERMFIX_PY = VERSIONS_DIR / "0010_seed_permission_corrections.py"
+PERMFIX_SQL = SQL_DIR / "0013_seed_permission_corrections.sql"
+
+# Únicos arquivos autorizados a ter DELETE FROM no upgrade: revogação pontual
+# de duas permissões do perfil USER (verificada por test_db_0010_*).
+_DELETE_ALLOWED = {PERMFIX_PY.name, PERMFIX_SQL.name}
 
 _DESTRUCTIVE_SQL = [
     re.compile(r"\bDROP\s+(TABLE|COLUMN|SCHEMA|DATABASE)\b", re.IGNORECASE),
@@ -85,6 +97,8 @@ def _strip_sql_comments(sql: str) -> str:
 def test_db_alembic_upgrade_is_not_destructive(path: Path) -> None:
     text = _upgrade_text(path)
     for pattern in _DESTRUCTIVE_SQL:
+        if path.name in _DELETE_ALLOWED and pattern is _DESTRUCTIVE_SQL[1]:
+            continue
         assert not pattern.search(text), f"{path.name}: padrão destrutivo {pattern.pattern!r} no upgrade"
 
 
@@ -92,6 +106,8 @@ def test_db_alembic_upgrade_is_not_destructive(path: Path) -> None:
 def test_db_sql_mirror_is_not_destructive(path: Path) -> None:
     text = _strip_sql_comments(path.read_text(encoding="utf-8"))
     for pattern in _DESTRUCTIVE_SQL:
+        if path.name in _DELETE_ALLOWED and pattern is _DESTRUCTIVE_SQL[1]:
+            continue
         assert not pattern.search(text), f"{path.name}: padrão destrutivo {pattern.pattern!r}"
 
 
@@ -116,7 +132,7 @@ def test_db_alembic_revision_chain_is_linear() -> None:
     down_targets = [d for d in revisions.values() if d is not None]
     assert len(down_targets) == len(set(down_targets)), "ramificação (branch) de revisões"
     heads = set(revisions) - set(down_targets)
-    assert heads == {"0006_email_settings_permission"}, heads
+    assert heads == {"0010_seed_permission_corrections"}, heads
 
 
 # ---------------------------------------------------------------------------
@@ -186,7 +202,11 @@ def test_db_hardening_covers_every_model_table_with_rls(hardening) -> None:
     # Tabelas criadas depois da 0004 têm RLS habilitado na própria migração
     # que as cria (0005: NEW_TABLES); ver testes da 0005 abaixo.
     settings_mig = _load_module(SETTINGS_PY)
-    covered = set(hardening.APP_TABLES) | set(settings_mig.NEW_TABLES)
+    covered = (
+        set(hardening.APP_TABLES)
+        | set(settings_mig.NEW_TABLES)
+        | set(_load_module(ALIASES_PY).NEW_TABLES)
+    )
     model_tables = set(Base.metadata.tables)
     assert model_tables <= covered, model_tables - covered
     for table in model_tables & set(hardening.APP_TABLES):
@@ -384,3 +404,301 @@ def test_db_0005_models_match_migration_constraints() -> None:
         assert name in cols, name
     assert not cols.version.nullable
     assert not any("key" in c.name and c.name != "avatar_object_key" for c in AISettings.__table__.columns)
+
+
+# ---------------------------------------------------------------------------
+# Migração 0007_unit_aliases
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def aliases_migration() -> ModuleType:
+    return _load_module(ALIASES_PY)
+
+
+def test_db_0007_revises_0006(aliases_migration) -> None:
+    assert aliases_migration.revision == "0007_unit_aliases"
+    assert aliases_migration.down_revision == "0006_email_settings_permission"
+
+
+def test_db_0007_rls_revoke_and_no_policies(aliases_migration) -> None:
+    assert aliases_migration.NEW_TABLES == ("unit_aliases",)
+    assert "ALTER TABLE public.unit_aliases ENABLE ROW LEVEL SECURITY" in (
+        aliases_migration.ENABLE_RLS_NEW_TABLES_SQL
+    )
+    assert "REVOKE ALL ON TABLE public.unit_aliases FROM anon, authenticated" in (
+        aliases_migration.REVOKE_API_ROLES_NEW_TABLES_SQL
+    )
+    assert "CREATE POLICY" not in "\n".join(aliases_migration.UPGRADE_STATEMENTS).upper()
+
+
+def test_db_0007_table_definition(aliases_migration) -> None:
+    sql = aliases_migration.CREATE_UNIT_ALIASES_SQL
+    assert "REFERENCES public.units(id) ON DELETE RESTRICT" in sql
+    assert "CREATE UNIQUE INDEX IF NOT EXISTS uq_unit_aliases_alias_lower" in sql
+    assert "(lower(alias))" in sql
+    assert "char_length(alias) BETWEEN 1 AND 32" in sql
+    assert "alias = btrim(alias)" in sql
+    assert "ix_unit_aliases_unit_id" in sql
+    assert "COMMENT ON TABLE public.unit_aliases" in sql
+
+
+def test_db_0007_seed_is_idempotent_and_safe(aliases_migration) -> None:
+    sql = aliases_migration.SEED_ALIASES_SQL
+    for alias, code in (("PF", "023401"), ("PU", "023402"), ("CJU", "023403"), ("UEA", "023404")):
+        assert f"('{alias}', '{code}')" in sql
+    assert "ON CONFLICT DO NOTHING" in sql
+    assert len(re.findall(r"INSERT\s+INTO", "\n".join(aliases_migration.UPGRADE_STATEMENTS))) == 1
+    upgrade_sql = "\n".join(aliases_migration.UPGRADE_STATEMENTS)
+    assert not re.search(r"CREATE\s+TABLE\s+(?!IF\s+NOT\s+EXISTS)", upgrade_sql)
+
+
+def test_db_0007_downgrade_only_drops_its_table(aliases_migration) -> None:
+    sql = aliases_migration.DOWNGRADE_SQL
+    assert re.findall(r"DROP TABLE IF EXISTS public\.(\w+)", sql) == ["unit_aliases"]
+    assert not re.search(r"^\s*DELETE\s+FROM|TRUNCATE", sql, re.IGNORECASE | re.MULTILINE)
+
+
+def test_db_0007_sql_mirror_matches_alembic(aliases_migration) -> None:
+    mirror = ALIASES_SQL.read_text(encoding="utf-8")
+    for statement in aliases_migration.UPGRADE_STATEMENTS:
+        assert statement.strip("\n") in mirror
+    assert "PENDENTE DE APLICAÇÃO" in mirror
+
+
+def test_db_unit_alias_model_matches_migration() -> None:
+    from app.models.units import UnitAlias
+
+    table = UnitAlias.__table__
+    assert table.name == "unit_aliases"
+    assert isinstance(table.c.alias.type, Text) and not table.c.alias.nullable
+    fk = next(iter(table.c.unit_id.foreign_keys))
+    assert fk.column.table.name == "units" and fk.ondelete == "RESTRICT"
+    assert not table.c.unit_id.nullable
+    assert {c.name for c in table.constraints} >= {
+        "ck_unit_aliases_alias_length", "ck_unit_aliases_alias_trimmed"
+    }
+    assert {i.name for i in table.indexes} == {"uq_unit_aliases_alias_lower", "ix_unit_aliases_unit_id"}
+
+
+# ---------------------------------------------------------------------------
+# Migração 0008_catalog_source_ids_permissions
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def catalog_migration() -> ModuleType:
+    return _load_module(CATALOG_PY)
+
+
+def test_db_0008_revises_0007(catalog_migration) -> None:
+    assert catalog_migration.revision == "0008_catalog_source_ids_permissions"
+    assert catalog_migration.down_revision == "0007_unit_aliases"
+
+
+def test_db_0008_source_record_id_columns_and_partial_uniques(catalog_migration) -> None:
+    sql = catalog_migration.ADD_SOURCE_COLUMNS_SQL
+    for table in ("units", "rooms", "responsible_people"):
+        assert f"ALTER TABLE public.{table} ADD COLUMN IF NOT EXISTS source_record_id text NULL" in sql
+        assert f"ON public.{table} (source_record_id) WHERE source_record_id IS NOT NULL" in sql
+
+
+def test_db_0008_uniqueness_and_checks(catalog_migration) -> None:
+    sql = catalog_migration.UNIQUENESS_SQL
+    assert "ON public.rooms (unit_id, lower(btrim(name)))" in sql
+    assert "ON public.responsible_people (lower(btrim(email))) WHERE email IS NOT NULL" in sql
+    checks = catalog_migration.CHECKS_SQL
+    assert checks.count("char_length(name) BETWEEN 1 AND 200 AND name = btrim(name)") == 2
+
+
+def test_db_0008_is_idempotent(catalog_migration) -> None:
+    upgrade_sql = chr(10).join(catalog_migration.UPGRADE_STATEMENTS)
+    assert not re.search(r"\bADD\s+COLUMN\s+(?!IF\s+NOT\s+EXISTS)", upgrade_sql)
+    assert not re.search(r"\bCREATE\s+(UNIQUE\s+)?INDEX\s+(?!IF\s+NOT\s+EXISTS)", upgrade_sql)
+    for match in re.finditer(r"\bINSERT\s+INTO\b", upgrade_sql):
+        assert "ON CONFLICT" in upgrade_sql[match.start():].split(";", 1)[0]
+
+
+def test_db_0008_permissions_only_for_adm(catalog_migration) -> None:
+    assert set(catalog_migration.NEW_PERMISSIONS) == {"responsible.manage", "units.update"}
+    sql = catalog_migration.SEED_PERMISSIONS_SQL
+    for code in catalog_migration.NEW_PERMISSIONS:
+        assert f"'{code}'" in sql
+    assert re.findall(r"WHERE r\.code = '(\w+)'", sql) == ["ADM"]
+
+
+def test_db_0008_downgrade_scope(catalog_migration) -> None:
+    sql = catalog_migration.DOWNGRADE_SQL
+    assert set(re.findall(r"DROP COLUMN IF EXISTS (\w+)", sql)) == {"source_record_id", "phone"}
+    assert "ck_users_phone_format" in sql and "ck_responsible_people_phone_format" in sql
+    assert "DROP TABLE" not in sql.upper()
+    assert "DISABLE ROW LEVEL SECURITY" not in sql.upper()
+
+
+def test_db_0008_sql_mirror_matches_alembic(catalog_migration) -> None:
+    mirror = CATALOG_SQL.read_text(encoding="utf-8")
+    for statement in catalog_migration.UPGRADE_STATEMENTS:
+        assert statement.strip(chr(10)) in mirror
+    assert "PENDENTE DE APLICAÇÃO" in mirror
+
+
+def test_db_0008_models_match_migration() -> None:
+    from app.models.people import ResponsiblePerson
+    from app.models.units import Room, Unit
+
+    for model in (Unit, Room, ResponsiblePerson):
+        table = model.__table__
+        assert table.c.source_record_id.nullable
+        assert f"uq_{table.name}_source_record_id" in {i.name for i in table.indexes}
+    assert "uq_rooms_unit_name_lower" in {i.name for i in Room.__table__.indexes}
+    assert "uq_responsible_people_email_lower" in {i.name for i in ResponsiblePerson.__table__.indexes}
+    assert "ck_rooms_name_trimmed" in {c.name for c in Room.__table__.constraints}
+    assert "ck_responsible_people_name_trimmed" in {c.name for c in ResponsiblePerson.__table__.constraints}
+
+
+def test_db_0008_phone_columns_format_and_lgpd_comment(catalog_migration) -> None:
+    sql = catalog_migration.PHONE_SQL
+    assert "ALTER TABLE public.responsible_people ADD COLUMN IF NOT EXISTS phone text NULL" in sql
+    assert "ALTER TABLE public.users ADD COLUMN IF NOT EXISTS phone text NULL" in sql
+    assert sql.count("phone ~ '^[0-9]{10,13}$'") == 2
+    assert sql.count("DADO PESSOAL (LGPD)") == 2
+    assert not re.search(r"photo|foto|avatar", sql, re.IGNORECASE)
+
+
+def test_db_0008_phone_models_match_migration() -> None:
+    from app.models.people import ResponsiblePerson
+    from app.models.rbac import User
+
+    for model, name in (
+        (ResponsiblePerson, "ck_responsible_people_phone_format"),
+        (User, "ck_users_phone_format"),
+    ):
+        assert model.__table__.c.phone.nullable
+        assert name in {c.name for c in model.__table__.constraints}
+    assert not hasattr(ResponsiblePerson, "photo_object_key")
+
+
+# ---------------------------------------------------------------------------
+# Migração 0009_unique_indexes_assets_movements
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def unique_migration() -> ModuleType:
+    return _load_module(UNIQUE_PY)
+
+
+def test_db_0009_revises_0008(unique_migration) -> None:
+    assert unique_migration.revision == "0009_unique_indexes_assets_movements"
+    assert unique_migration.down_revision == "0008_catalog_source_ids_permissions"
+
+
+def test_db_0009_partial_unique_indexes(unique_migration) -> None:
+    assets = unique_migration.CREATE_ASSETS_INDEX_SQL
+    assert "CREATE UNIQUE INDEX IF NOT EXISTS uq_assets_patrimony_number_active" in assets
+    assert "ON public.assets (lower(btrim(patrimony_number))) WHERE deleted_at IS NULL" in assets
+    moves = unique_migration.CREATE_MOVEMENTS_INDEX_SQL
+    assert "CREATE UNIQUE INDEX IF NOT EXISTS uq_asset_movements_one_pending" in moves
+    assert "ON public.asset_movements (asset_id) WHERE status = 'PENDENTE'" in moves
+    assert set(unique_migration.NEW_INDEXES) == {
+        "uq_assets_patrimony_number_active",
+        "uq_asset_movements_one_pending",
+    }
+
+
+def test_db_0009_precheck_aborts_without_personal_data(unique_migration) -> None:
+    for sql in (unique_migration.PRECHECK_ASSETS_SQL, unique_migration.PRECHECK_MOVEMENTS_SQL):
+        assert "RAISE EXCEPTION" in sql and "HAVING count(*) > 1" in sql
+        message = re.search(r"RAISE EXCEPTION '([^']*)'", sql).group(1)
+        assert message.count("%") == 1  # só a contagem
+        assert "patrimony_number" not in message
+    statements = unique_migration.UPGRADE_STATEMENTS
+    # a verificação vem ANTES do índice correspondente
+    assert statements.index(unique_migration.PRECHECK_ASSETS_SQL) < statements.index(
+        unique_migration.CREATE_ASSETS_INDEX_SQL
+    )
+    assert statements.index(unique_migration.PRECHECK_MOVEMENTS_SQL) < statements.index(
+        unique_migration.CREATE_MOVEMENTS_INDEX_SQL
+    )
+
+
+def test_db_0009_is_idempotent_and_additive(unique_migration) -> None:
+    upgrade_sql = chr(10).join(unique_migration.UPGRADE_STATEMENTS)
+    assert not re.search(r"\bCREATE\s+(UNIQUE\s+)?INDEX\s+(?!IF\s+NOT\s+EXISTS)", upgrade_sql)
+    assert not re.search(r"\b(UPDATE|DELETE|INSERT)\b", upgrade_sql)
+
+
+def test_db_0009_downgrade_only_drops_its_indexes(unique_migration) -> None:
+    sql = unique_migration.DOWNGRADE_SQL
+    assert re.findall(r"DROP INDEX IF EXISTS public\.(\w+)", sql) == [
+        "uq_asset_movements_one_pending",
+        "uq_assets_patrimony_number_active",
+    ]
+    assert "DROP TABLE" not in sql.upper()
+
+
+def test_db_0009_sql_mirror_matches_alembic(unique_migration) -> None:
+    mirror = UNIQUE_SQL.read_text(encoding="utf-8")
+    for statement in unique_migration.UPGRADE_STATEMENTS:
+        assert statement.strip(chr(10)) in mirror
+    assert "PENDENTE DE APLICAÇÃO" in mirror
+    assert not re.search(r"^\s*(BEGIN|COMMIT)\s*;", mirror, re.IGNORECASE | re.MULTILINE)
+
+
+def test_db_0009_movement_index_in_model_and_asset_index_only_in_migration() -> None:
+    from app.models.assets import AssetMovement
+
+    moves_idx = {i.name: i for i in AssetMovement.__table__.indexes}
+    assert moves_idx["uq_asset_movements_one_pending"].unique
+    assert "PENDENTE" in str(
+        moves_idx["uq_asset_movements_one_pending"].dialect_options["postgresql"]["where"]
+    )
+    # Deliberado: testes de alertas/importação criam duplicatas ativas no SQLite.
+    assert "uq_assets_patrimony_number_active" not in {i.name for i in Asset.__table__.indexes}
+
+
+# ---------------------------------------------------------------------------
+# Migração 0010_seed_permission_corrections
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def permfix_migration() -> ModuleType:
+    return _load_module(PERMFIX_PY)
+
+
+def test_db_0010_revises_0009(permfix_migration) -> None:
+    assert permfix_migration.revision == "0010_seed_permission_corrections"
+    assert permfix_migration.down_revision == "0009_unique_indexes_assets_movements"
+
+
+def test_db_0010_revokes_only_two_permissions_from_user(permfix_migration) -> None:
+    assert set(permfix_migration.REVOKED_FROM_USER) == {"rooms.manage", "inventory.create"}
+    sql = permfix_migration.REVOKE_USER_PERMISSIONS_SQL
+    assert sql.count("DELETE FROM public.role_permissions") == 1
+    assert re.findall(r"r\.code = '(\w+)'", sql) == ["USER"]
+    assert "p.code IN ('rooms.manage', 'inventory.create')" in sql
+    assert not re.search(r"\b(TRUNCATE|DROP)\b", sql, re.IGNORECASE)
+    assert "DELETE FROM public.permissions" not in sql
+
+
+def test_db_0010_downgrade_restores_user_grants_idempotently(permfix_migration) -> None:
+    sql = permfix_migration.DOWNGRADE_SQL
+    assert "INSERT INTO public.role_permissions" in sql
+    assert re.findall(r"r\.code = '(\w+)'", sql) == ["USER"]
+    assert "ON CONFLICT (role_id, permission_id) DO NOTHING" in sql
+    assert "'rooms.manage'" in sql and "'inventory.create'" in sql
+
+
+def test_db_0010_sql_mirror_matches_alembic(permfix_migration) -> None:
+    mirror = PERMFIX_SQL.read_text(encoding="utf-8")
+    for statement in permfix_migration.UPGRADE_STATEMENTS:
+        assert statement.strip(chr(10)) in mirror
+    assert "PENDENTE DE APLICAÇÃO" in mirror
+    assert not re.search(r"^\s*(BEGIN|COMMIT)\s*;", mirror, re.IGNORECASE | re.MULTILINE)
+
+
+def test_db_0010_seed_0002_grants_are_what_is_being_revoked() -> None:
+    seed = (SQL_DIR / "0002_seeds_roles_permissions.sql").read_text(encoding="utf-8")
+    user_block = seed.split("WHERE r.code = 'USER'")[0].rsplit("INSERT INTO role_permissions", 1)[1]
+    assert "'rooms.manage'" in user_block and "'inventory.create'" in user_block

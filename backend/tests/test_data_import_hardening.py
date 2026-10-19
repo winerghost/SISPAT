@@ -18,7 +18,8 @@ from app.integrations.google_sheets_client import GoogleSheetsReadResult
 from app.models.assets import Asset
 from app.models.imports import ImportPreview, ImportPreviewItem
 from app.models.sync import RawImportRecord
-from app.models.units import Unit
+from app.models.people import ResponsiblePerson
+from app.models.units import Room, Unit, UnitAlias
 from app.services.import_service import (
     MAX_SEARCH_LENGTH,
     ImportService,
@@ -79,13 +80,21 @@ def _item(preview_id, classification, patrimony, normalized=None) -> ImportPrevi
     )
 
 
+def _register_refs(router, unit=None):
+    router.register(Unit).all.return_value = [unit] if unit else []
+    router.register(UnitAlias).all.return_value = (
+        [UnitAlias(alias="SEDE", unit_id=unit.id)] if unit else []
+    )
+    router.register(Room).filter.return_value.all.return_value = []
+    router.register(ResponsiblePerson).filter.return_value.all.return_value = []
+
+
 def _wire_confirm(preview, items, asset_results, unit=None):
     db, router = _db()
     router.register(ImportPreview).filter.return_value.first.return_value = preview
     router.register(ImportPreviewItem).filter.return_value.all.return_value = items
     router.register(Asset).filter.return_value.all.side_effect = asset_results
-    unit_q = router.register(Unit)
-    unit_q.filter.return_value.filter.return_value.all.return_value = [unit] if unit else []
+    _register_refs(router, unit)
     return db, router
 
 
@@ -202,7 +211,7 @@ def test_id_de_origem_repetido_gera_aviso_e_linha_de_origem_preservada() -> None
         {
             "source_row_number": n,
             "raw_values": {"ID": "7", "PATRIMONIO": p},
-            "normalized_values": {"ID": "7", "PATRIMONIO": p},
+            "normalized_values": {"ID": "7", "PATRIMONIO": p, "UNIDADE": "SEDE"},
             "validation_errors": [],
         }
         for n, p in ((2, "100"), (3, "200"))
@@ -211,6 +220,7 @@ def test_id_de_origem_repetido_gera_aviso_e_linha_de_origem_preservada() -> None
     sheets.read_patrimony_rows.return_value = _rows_result(rows)
     db, router = _db()
     router.register(Asset).filter.return_value.all.return_value = []
+    _register_refs(router, Unit(id=uuid.uuid4(), code="U", name="SEDE", active=True))
 
     ImportService(db, sheets, settings=_settings()).create_preview(uuid.uuid4())
 
@@ -281,18 +291,18 @@ def test_confirm_adquire_advisory_lock_por_patrimonio_em_ordem() -> None:
     item_b = _item(preview.id, "NOVO", "200")
     item_a = _item(preview.id, "NOVO", "100")
     db, _ = _wire_confirm(preview, [item_b, item_a], [[], []], unit=unit)
+    db.get_bind.return_value.dialect.name = "postgresql"
 
     ImportService(db, MagicMock(), settings=_settings()).confirm_preview(
         preview.id, uuid.uuid4(), [item_a.id, item_b.id]
     )
 
-    lock_stmts = [c.args[0] for c in db.execute.call_args_list]
-    assert len(lock_stmts) == 2
-    compiled = [s.compile(dialect=postgresql.dialect()) for s in lock_stmts]
-    assert all("pg_advisory_xact_lock" in str(c) for c in compiled)
-    # patrimônio vai como bind parameter, e em ordem crescente (sem deadlock)
-    patrimonies = [[v for v in c.params.values() if isinstance(v, str)][0] for c in compiled]
-    assert patrimonies == ["100", "200"]
+    calls = db.execute.call_args_list
+    assert len(calls) == 2
+    assert all("pg_advisory_xact_lock" in str(c.args[0]) for c in calls)
+    # chave normalizada (mesma da API) vai como bind parameter, em ordem crescente (sem deadlock)
+    keys = [c.args[1]["key"] for c in calls]
+    assert keys == ["sispat:asset-number:100", "sispat:asset-number:200"]
 
 
 def test_falha_de_banco_em_um_item_desfaz_so_o_savepoint_e_segue() -> None:

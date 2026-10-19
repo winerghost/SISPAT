@@ -70,6 +70,18 @@ export function writeUiCookie(prefs: UiPreferences): void {
   document.cookie = `${UI_COOKIE_NAME}=${serializeUiCookie(prefs)}; Path=/; Max-Age=${COOKIE_MAX_AGE_SECONDS}; SameSite=Lax${secure}`;
 }
 
+/**
+ * Apaga o cookie `sispat-ui` (Max-Age=0, mesmo Path/SameSite) no logout e
+ * quando a sessão expira (401): a preferência de um usuário não pode vazar
+ * para o próximo no mesmo navegador. Também volta o <html> aos padrões.
+ */
+export function clearUiCookie(): void {
+  if (typeof document === "undefined") return;
+  const secure = typeof location !== "undefined" && location.protocol === "https:" ? "; Secure" : "";
+  document.cookie = `${UI_COOKIE_NAME}=; Path=/; Max-Age=0; SameSite=Lax${secure}`;
+  applyUiPreferences(DEFAULT_UI_PREFERENCES);
+}
+
 /** Depois de o backend CONFIRMAR: grava o cookie e aplica no <html>. */
 export function persistUiPreferences(prefs: UiPreferences): void {
   writeUiCookie(prefs);

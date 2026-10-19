@@ -46,13 +46,17 @@ Garantias deste cliente (`GoogleSheetsClient`), no mesmo espírito do
       `float()` sobre o valor de `PATRIMONIO` — preservando zeros à esquerda
       e evitando notação científica.
     - **Duas colunas `RESPONSAVEL`**: mapeadas por ORDEM de ocorrência no
-      cabeçalho — a primeira para `responsavel_original` (pessoa física
-      historicamente registrada) e a segunda para `responsavel_unidade`
-      (unidade/setor responsável). **Esta é uma suposição pendente de
-      confirmação institucional**, replicando exatamente a mesma suposição
-      documentada em `docs/architecture/estrategia-sincronizacao.md`
-      (seção 4.2) — não fundir, não trocar a ordem sem antes revisar aquele
-      documento.
+      cabeçalho — a 1ª é o vínculo/situação (`vinculo_situacao`: Servidor,
+      Terceirizado, Ocioso...) e a 2ª é a pessoa (`responsavel_pessoa` +
+      `responsavel_pessoa_key`). **Hipótese baseada na amostra de 2026-10-16,
+      a validar na prévia real** (ver `docs/architecture/estrategia-sincronizacao.md`
+      seção 4.2 e `plano-importacao-mconferencia.md`). As chaves antigas
+      `responsavel_original` (1ª) / `responsavel_unidade` (2ª) são mantidas
+      apenas por compatibilidade e NÃO devem mais ser usadas como
+      "pessoa"/"unidade". Não fundir as colunas.
+    - **Normalização de campos da amostra**: delegada às funções puras de
+      `app.services.import_normalizer` (código do material, unidade
+      pertencente, LOCALIZADO, SALA, USUARIO, coordenadas, datas, ...).
     - **Coluna `QT` nunca é interpretada**: o valor bruto é repassado tal
       como lido, em `raw_values["QT"]` e em `normalized_values["qt_raw"]`
       (como texto). Nenhuma regra de negócio, cálculo ou indicador deste
@@ -105,6 +109,7 @@ from app.security.sanitize import (
     normalize_free_text,
     normalize_identifier,
 )
+from app.services.import_normalizer import normalize_row
 
 logger = logging.getLogger(__name__)
 
@@ -414,9 +419,114 @@ class GoogleSheetsClient:
         falha de rede, credencial ou planilha/aba inacessível é convertida em
         `GoogleSheetsClientError`.
         """
+        sheet_title = self._resolve_sheet_title()
+        values, fetched_at = self._fetch_values(sheet_title)
+        if not values:
+            return GoogleSheetsReadResult(
+                rows=[], headers=[], sheet_title=sheet_title, fetched_at=fetched_at
+            )
+
+        # Cabeçalhos: NFC, sem BOM/zero-width, sem NUL, `strip()`.
+        headers = [
+            normalize_identifier(make_db_safe("" if header is None else str(header))[0])
+            for header in values[0]
+        ]
+        disambiguated_headers = _disambiguate_headers(headers)
+
+        rows: list[dict[str, Any]] = []
+        for offset, raw_row in enumerate(values[1:], start=1):
+            source_row_number = offset + 1  # linha 1 é o cabeçalho
+            rows.append(
+                self._build_row(
+                    headers, disambiguated_headers, raw_row, source_row_number
+                )
+            )
+
+        return GoogleSheetsReadResult(
+            rows=rows, headers=headers, sheet_title=sheet_title, fetched_at=fetched_at
+        )
+
+    def _resolve_tab_title(self, sheet_name: str | None, sheet_gid: str | None) -> str:
+        """Título da aba por nome exato (prioridade) ou GID; nunca "chuta"."""
+        if sheet_name and str(sheet_name).strip():
+            return str(sheet_name).strip()
+        if sheet_gid is not None and str(sheet_gid).strip():
+            for tab in self.list_sheet_tabs():
+                if str(tab.get("sheetId")) == str(sheet_gid).strip():
+                    return tab.get("title", "")
+            raise GoogleSheetsClientError("nenhuma aba encontrada com o GID informado.")
+        raise GoogleSheetsClientError("aba não configurada (informe nome ou GID).")
+
+    def read_tab_rows(
+        self, *, sheet_name: str | None = None, sheet_gid: str | None = None
+    ) -> GoogleSheetsReadResult:
+        """Lê UMA aba qualquer (por nome exato ou GID) de forma genérica.
+
+        Usada pela importação dos cadastros (unidades, salas, pessoas). Não
+        aplica nenhuma regra de patrimônio: cada linha traz `raw_values`
+        (cabeçalho desambiguado -> célula, vazia = `None`, NUL/surrogate
+        trocados por U+FFFD) e `validation_errors` apenas com avisos de
+        conteúdo. Mesmos limites de linhas/colunas/célula e mesmo tratamento
+        de erro (`GoogleSheetsClientError`) de `read_patrimony_rows`, que não
+        é alterado. `normalized_values` é igual a `raw_values` com `strip()`.
+        """
+        sheet_title = self._resolve_tab_title(sheet_name, sheet_gid)
+        values, fetched_at = self._fetch_values(sheet_title)
+        if not values:
+            return GoogleSheetsReadResult(
+                rows=[], headers=[], sheet_title=sheet_title, fetched_at=fetched_at
+            )
+        headers = [
+            normalize_identifier(make_db_safe("" if header is None else str(header))[0])
+            for header in values[0]
+        ]
+        keys = _disambiguate_headers(headers)
+        rows: list[dict[str, Any]] = []
+        for offset, raw_row in enumerate(values[1:], start=1):
+            raw_values: dict[str, Any] = {}
+            warnings: list[str] = []
+            for idx, key in enumerate(keys):
+                cell = raw_row[idx] if idx < len(raw_row) else None
+                if _is_blank(cell):
+                    cell = None
+                elif not isinstance(cell, str):
+                    cell = make_db_safe(str(cell))[0]
+                else:
+                    cell, changed = make_db_safe(cell)
+                    if changed:
+                        warnings.append(
+                            f"aviso: campo {key} continha caracteres não armazenáveis "
+                            "(NUL/surrogate), substituídos por U+FFFD"
+                        )
+                if isinstance(cell, str) and len(cell) > _MAX_CELL_CHARS:
+                    warnings.append(
+                        f"erro: campo {key} excede {_MAX_CELL_CHARS} caracteres ({len(cell)})"
+                    )
+                    cell = cell[:_MAX_CELL_CHARS]
+                raw_values[key] = cell
+            rows.append(
+                {
+                    "source_row_number": offset + 1,
+                    "raw_values": raw_values,
+                    "normalized_values": {
+                        k: (v.strip() if isinstance(v, str) else v) for k, v in raw_values.items()
+                    },
+                    "validation_errors": warnings,
+                }
+            )
+        return GoogleSheetsReadResult(
+            rows=rows, headers=headers, sheet_title=sheet_title, fetched_at=fetched_at
+        )
+
+    def _fetch_values(self, sheet_title: str) -> tuple[list[list[Any]], datetime]:
+        """Lê a faixa LIMITADA da aba `sheet_title` e valida formato/limites.
+
+        Compartilhado por `read_patrimony_rows` e `read_tab_rows`. Qualquer
+        falha vira `GoogleSheetsClientError`. Retorna `(values, fetched_at)`;
+        `values` vazio indica aba sem dados.
+        """
         service = self._get_service()
         spreadsheet_id = self._spreadsheet_id()
-        sheet_title = self._resolve_sheet_title()
         max_rows = int(getattr(self._settings, "google_sheets_max_rows", None) or _DEFAULT_MAX_ROWS)
         max_columns = int(
             getattr(self._settings, "google_sheets_max_columns", None) or _DEFAULT_MAX_COLUMNS
@@ -464,9 +574,7 @@ class GoogleSheetsClient:
         fetched_at = datetime.now(timezone.utc)
 
         if not values:
-            return GoogleSheetsReadResult(
-                rows=[], headers=[], sheet_title=sheet_title, fetched_at=fetched_at
-            )
+            return [], fetched_at
 
         if len(values) - 1 > max_rows:
             logger.error("google_sheets_client: aba excede o limite de %d linhas.", max_rows)
@@ -478,26 +586,7 @@ class GoogleSheetsClient:
             raise GoogleSheetsClientError(
                 f"a planilha excede o limite de {max_columns} colunas por importação."
             )
-
-        # Cabeçalhos: NFC, sem BOM/zero-width, sem NUL, `strip()`.
-        headers = [
-            normalize_identifier(make_db_safe("" if header is None else str(header))[0])
-            for header in values[0]
-        ]
-        disambiguated_headers = _disambiguate_headers(headers)
-
-        rows: list[dict[str, Any]] = []
-        for offset, raw_row in enumerate(values[1:], start=1):
-            source_row_number = offset + 1  # linha 1 é o cabeçalho
-            rows.append(
-                self._build_row(
-                    headers, disambiguated_headers, raw_row, source_row_number
-                )
-            )
-
-        return GoogleSheetsReadResult(
-            rows=rows, headers=headers, sheet_title=sheet_title, fetched_at=fetched_at
-        )
+        return values, fetched_at
 
     # ------------------------------------------------------------------
     # Parsing/normalização por linha
@@ -517,8 +606,10 @@ class GoogleSheetsClient:
           (ausente ou em branco) é `None`.
         - `normalized_values`: `strip()` aplicado a cada valor não nulo
           (nunca upper()/lower() sobre conteúdo livre); as duas colunas
-          `RESPONSAVEL` são separadas em `responsavel_original`/
-          `responsavel_unidade`; `QT` é repassado sem interpretação em
+          `RESPONSAVEL` são separadas (1ª = `vinculo_situacao`, 2ª =
+          `responsavel_pessoa`; legados `responsavel_original`/
+          `responsavel_unidade` mantidos); demais campos normalizados por
+          `import_normalizer` (avisos com prefixo "aviso: "); `QT` é repassado sem interpretação em
           `qt_raw`; `PATRIMONIO` nunca é convertido para número (permanece
           string, preservando zeros à esquerda).
         - `validation_errors`: `ID`/`PATRIMONIO` ausentes ou vazios geram
@@ -592,8 +683,34 @@ class GoogleSheetsClient:
                 return (normalize_free_text(raw) or None) if isinstance(raw, str) else raw
             return None
 
+        # Chaves legadas, só por compatibilidade (posição 0 / 1). A amostra
+        # indica: 1ª = vínculo/situação, 2ª = pessoa (ver chaves novas abaixo).
         normalized_values["responsavel_original"] = _responsavel_value(0)
         normalized_values["responsavel_unidade"] = _responsavel_value(1)
+
+        def _first_cell(header_name: str) -> Any:
+            for idx, canon in enumerate(canonical_headers):
+                if canon == header_name:
+                    return cell_values[idx]
+            return None
+
+        # Normalização pura (app.services.import_normalizer); `raw_values`
+        # permanece intacto. Valores inválidos viram None + "aviso:".
+        extra, extra_warnings = normalize_row(
+            descricao=_first_cell("DESCRICAO"),
+            localizado=_first_cell("LOCALIZADO"),
+            sala=_first_cell("SALA"),
+            usuario=_first_cell("USUARIO"),
+            unidade_pertencente=_first_cell("UNIDADE_PERTENCENTE"),
+            responsavel_vinculo=_responsavel_value(0),
+            responsavel_pessoa=_responsavel_value(1),
+            data_registro=_first_cell("DATA_REGISTRO"),
+            localizacao=_first_cell("LOCALIZACAO"),
+            data_alteracao=_first_cell("DATA_ALTERACAO"),
+            pesquisador=_first_cell("PESQUISADOR"),
+        )
+        normalized_values.update(extra)
+        validation_errors.extend(extra_warnings)
 
         # QT: valor bruto repassado sem NENHUMA interpretação como quantidade.
         if qt_indices:

@@ -49,7 +49,7 @@ from app.auth.supabase_auth import require_auth
 from app.authorization.rbac import require_aal2, require_permission, require_role
 from app.database.session import get_db_session
 from app.integrations.google_sheets_client import GoogleSheetsClient
-from app.models.imports import ImportPreviewItem
+from app.models.imports import ImportPreview, ImportPreviewItem
 from app.security.rate_limit import rate_limit
 from app.services.import_service import (
     ImportService,
@@ -121,6 +121,9 @@ def create_preview_endpoint():
                     "conflitante": preview.count_conflitante,
                 },
                 "expires_at": preview.expires_at.isoformat(),
+                # Pendências de vínculo (sala/pessoa/unidade pertencente...):
+                # só contadores, nunca bloqueiam a confirmação.
+                "pending_counts": dict(getattr(preview, "pending_counts", None) or {}),
             }
     except UpstreamSourceError:
         logger.error("imports_api: falha ao gerar prévia (origem Google Sheets indisponível).")
@@ -148,6 +151,9 @@ def list_preview_items_endpoint(preview_id: uuid.UUID):
 
     try:
         with get_db_session() as db:
+            # SEC-CAT-01: só prévia de BENS; cadastro/inexistente -> mesmo 404 genérico.
+            if not _bens_preview_exists(db, preview_id):
+                raise PreviewNotFoundError("pré-visualização não encontrada")
             service = ImportService(db, GoogleSheetsClient())
             result = service.list_preview_items(
                 preview_id, status=status, search=search, page=page, page_size=page_size
@@ -163,6 +169,36 @@ def list_preview_items_endpoint(preview_id: uuid.UUID):
         raise AssertionError("inalcançável")  # pragma: no cover
 
     return jsonify(payload), 200
+
+
+def _bens_preview_exists(db: Any, preview_id: uuid.UUID) -> bool:
+    """True só para prévia de BENS (`source = 'google_sheets'`); prévias de
+    cadastros (`catalog:*`) ou inexistentes -> False (mesmo 404)."""
+    source = db.query(ImportPreview.source).filter(ImportPreview.id == preview_id).scalar()
+    return source == "google_sheets"
+
+
+@imports_bp.route("/google-sheets/<uuid:preview_id>/pending", methods=["GET"])
+@require_auth
+@require_role("ADM")
+@require_aal2
+@require_permission("imports.execute")
+@rate_limit(admin_rate_limit_key, limit=_ITEMS_LIMIT_PER_HOUR, window_seconds=_WINDOW_SECONDS)
+def pending_report_endpoint(preview_id: uuid.UUID):
+    """`GET /api/v1/imports/google-sheets/<preview_id>/pending`.
+
+    Contadores de pendências de vínculo da prévia de bens (unidade sem alias,
+    sala/pessoa não encontrada ou ambígua...). Somente contadores. 404 uniforme
+    para prévia inexistente ou de outro tipo (cadastros).
+    """
+    rejected = reject_any_body("imports.pending")
+    if rejected is not None:
+        return rejected
+    with get_db_session() as db:
+        if not _bens_preview_exists(db, preview_id):
+            abort(404)  # mensagem padrão = a do 404 de roteamento (id malformado)
+        counts = ImportService(db, GoogleSheetsClient()).pending_report(preview_id)
+    return jsonify({"preview_id": str(preview_id), "pending_counts": counts}), 200
 
 
 @imports_bp.route("/google-sheets/confirm", methods=["POST"])

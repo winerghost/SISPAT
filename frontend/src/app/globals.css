@@ -263,3 +263,18 @@ html[data-font-scale="125"] {
     display: none;
   }
 }
+
+/* Impressão (relatório /dashboard/relatorio): papel branco, sem rolagem
+   interna do shell, margens de página; o shell esconde sidebar/header com
+   `print:hidden` e a folha do relatório usa o tema "paper" (chart-theme.ts). */
+@media print {
+  @page {
+    margin: 12mm;
+  }
+
+  html,
+  body {
+    height: auto !important;
+    background: #fff !important;
+  }
+}

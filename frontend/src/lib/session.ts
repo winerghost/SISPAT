@@ -36,6 +36,7 @@ import type { Session } from "@supabase/supabase-js";
 
 import { apiClient, ApiError } from "@/lib/api-client";
 import { clearPersistedAuthState, getSupabaseClient } from "@/lib/supabase-client";
+import { clearUiCookie } from "@/lib/ui-preferences";
 
 export type AuthenticatorAssuranceLevel = "aal1" | "aal2";
 
@@ -151,7 +152,8 @@ export function isAdministrativeAreaUnlocked(me: MeResponse | undefined): boolea
  *   2. se a revogação remota falhar (rede/token já expirado), ainda assim
  *      encerra localmente (`scope: "local"`) — o logout nunca "falha aberto";
  *   3. remove resíduos de sessão do storage do navegador;
- *   4. limpa o cache do TanStack Query (dados de `/me`, usuários, prévias).
+ *   4. apaga o cookie `sispat-ui` (Max-Age=0);
+ *   5. limpa o cache do TanStack Query (dados de `/me`, usuários, prévias).
  */
 export async function signOutEverywhere(queryClient?: QueryClient): Promise<void> {
   const supabase = (() => {
@@ -174,6 +176,9 @@ export async function signOutEverywhere(queryClient?: QueryClient): Promise<void
     }
   }
   clearPersistedAuthState();
+  // Cookie de aparência (`sispat-ui`): apagado no logout e no 401 global
+  // (AuthGuard também passa por aqui).
+  clearUiCookie();
   queryClient?.clear();
 }
 

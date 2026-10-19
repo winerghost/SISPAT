@@ -19,6 +19,12 @@ O SISPAT-AGU controla o inventário patrimonial da unidade, com:
   segurança).
 - **Banco de dados:** Supabase/PostgreSQL remoto e gerenciado é a fonte
   operacional de verdade. Não há banco de produção local neste repositório.
+- **Credencial do Google Sheets no Docker:** o JSON da service account fica
+  FORA do repositório; defina `GOOGLE_SHEETS_CREDENTIALS_HOST_PATH` no `.env`
+  (caminho do host) e o Compose o monta como secret somente leitura em
+  `/run/secrets/google_sheets_credentials.json` (backend e worker), sobrepondo
+  `GOOGLE_SHEETS_CREDENTIALS_JSON` no container. Fora do Docker, use essa
+  última com o caminho do host. Ver `docs/deployment/checklist-deploy-vps.md`.
 - **Integrações:** Google Sheets API (importação inicial, unidirecional:
   Sheets → Flask → PostgreSQL) e n8n **externo** (instância já existente,
   administrada fora deste repositório — este projeto não instala nem roda
@@ -230,6 +236,16 @@ docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
 
 ## Gestão de usuários
 
+Cadastros de apoio (CRUD de salas, pessoas responsáveis e edição de unidades; só ADM escreve, "excluir" = inativar): [`docs/architecture/cadastros-apoio-api.md`](./docs/architecture/cadastros-apoio-api.md). Listagem de cadastro de unidades (ativas e inativas, ADM + AAL2 + `units.update`): `GET /api/v1/units/catalog` (`q`, `active=true|false|all`, `sort`, `page`, `page_size`); `GET /api/v1/units` (seletor) não mudou.
+
+Patrimônios (`/api/v1/assets`: listagem/detalhe/histórico, criação, edição com `version`, exclusão lógica `POST /<id>/delete` e `/restore`, com escopo de unidade e campos por perfil; RH nunca recebe `notes`): [`docs/architecture/assets-api.md`](./docs/architecture/assets-api.md). `GET /api/v1/units/accessible` lista as unidades do escopo do usuário (qualquer perfil com `units.read`) para os seletores.
+
+Movimentações (`/api/v1/movements`: solicitar, aprovar/rejeitar só ADM+AAL2, cancelar, listar/detalhar; histórico imutável, aprovação atômica com `version` do bem): [`docs/architecture/movements-api.md`](./docs/architecture/movements-api.md).
+
+APIs administrativas de leitura (ADM + AAL2, sem escrita): `GET /api/v1/admin/audit-logs[/<id>]` (`audit.read`; projeção em allowlist, sem PII/segredos, escopo de unidade, janela máx. 90 dias, grava `AUDIT_VIEWED`), `GET /api/v1/admin/roles` e `/permissions` (`roles.manage`), `GET /api/v1/admin/unit-access` (`users.manage`): [`docs/architecture/admin-read-api.md`](./docs/architecture/admin-read-api.md).
+
+Inventários (`/api/v1/inventories`: campanhas de conferência por unidade; criar/iniciar/encerrar/cancelar só ADM+AAL2, conferir bens ADM/USER, resumo calculado no servidor; encerramento imutável; não altera `assets.located`) e locais (`GET /api/v1/locations`, somente leitura): [`docs/architecture/inventories-api.md`](./docs/architecture/inventories-api.md).
+
 Tela **Administração → Usuários** (ADM com MFA/AAL2) e **Configurações → Perfil**
 (qualquer usuário). Contrato em
 [`docs/architecture/modulo-configuracoes.md`](./docs/architecture/modulo-configuracoes.md)
@@ -286,5 +302,8 @@ A IA é **consultiva e somente leitura**: nunca altera dados nem executa ações
 2. **Em andamento:** importação do Google Sheets, MFA/convite, UX e o módulo de
    Configurações (IA, Aparência, Gestão de Usuários) — ver `CLAUDE.md` (mantido localmente).
    Etapas 1 (IA), 2 (usuários) e 3 (Aparência: `/me/preferences`, cookie `sispat-ui`,
-   `/configuracoes/aparencia`) concluídas; falta a Etapa 4 (IA no dashboard). Evidências em
+   `/configuracoes/aparencia`) e 4 (alertas determinísticos `/dashboard/alerts`, insights
+   `/ai/insights` e assistente `/ai/ask`, ADM + AAL2) concluídas. Evidências em
    `docs/security/evidence/settings-module-etapa*.md`.
+   API de importação dos cadastros (`/api/v1/catalog-imports`, ADM + AAL2) e `GET
+   /imports/google-sheets/<id>/pending`: ver `docs/architecture/cadastros-apoio-api.md`.

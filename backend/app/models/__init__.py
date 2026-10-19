@@ -19,7 +19,7 @@ Nota de design sobre `relationship()`:
 from app.database.session import Base  # noqa: F401
 
 from app.models.rbac import Permission, Role, RolePermission, User, UserRole  # noqa: F401,E402
-from app.models.units import Location, Room, Unit, UserUnitAccess  # noqa: F401,E402
+from app.models.units import Location, Room, Unit, UnitAlias, UserUnitAccess  # noqa: F401,E402
 from app.models.people import ResponsiblePerson  # noqa: F401,E402
 from app.models.assets import Asset, AssetMovement  # noqa: F401,E402
 from app.models.inventory import Inventory, InventoryItem  # noqa: F401,E402
@@ -38,6 +38,7 @@ __all__ = [
     "RolePermission",
     "UserRole",
     "Unit",
+    "UnitAlias",
     "UserUnitAccess",
     "Room",
     "Location",

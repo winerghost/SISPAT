@@ -80,21 +80,25 @@ Decisões de design assumidas (documentadas para revisão futura):
       coluna dedicada for adicionada em uma fase futura (via migração), esta
       lógica deve ser atualizada para usá-la em vez da chave dentro do
       JSONB.
-    - Resolução de `unit_id` para itens NOVO: como `Asset.unit_id` é
-      obrigatório mas a planilha de origem não traz uma referência direta
-      ao `id` de `units`, este serviço tenta casar a coluna `UNIDADE` (nome
-      de cabeçalho, comparação case-insensitive) com `units.name`, também
-      case-insensitive. Se não houver exatamente uma unidade ativa com esse
-      nome (nenhuma, ou mais de uma — ex.: nomes duplicados), o item vira
-      uma FALHA em `confirm_preview` (não é possível importar sem uma
-      unidade determinística). Esta é uma suposição PENDENTE de confirmação
-      institucional (no mesmo espírito das suposições já documentadas em
-      `app.integrations.google_sheets_client`, ex.: colunas RESPONSAVEL) —
-      não fundir/alterar sem revisar aquele módulo e os requisitos reais da
-      planilha.
-    - Vínculos de `responsible_person_id`/`room_id`/`location_id`/
-      `assigned_user_id` NÃO são resolvidos a partir da planilha nesta fase
-      (ficam `NULL` na criação) — fora do escopo desta tarefa.
+    - Resolução de vínculos para itens NOVO (etapa 3 do plano MConferencia,
+      ver `app.services.import_references`): `unit_id` vem da sigla da coluna
+      `UNIDADE` via `unit_aliases` (case-insensitive, trim; NUNCA por nome da
+      unidade). Sigla vazia/sem alias/unidade inativa => item INVALIDO com
+      mensagem clara (sem chute). `owner_unit_id` <- código de
+      `UNIDADE_PERTENCENTE` em `units.code`; `located`, `registration_date`,
+      `source_updated_at` <- valores normalizados; `notes` <- `OBSERVACAO`;
+      `room_id` <- sala por NOME na unidade (nunca criada); 
+      `responsible_person_id` <- 2ª `RESPONSAVEL` por chave de casamento entre
+      pessoas ativas. Sala/pessoa/unidade pertencente não encontradas ou
+      ambíguas => PENDÊNCIA (campo NULL), contada na prévia
+      (`preview.pending_counts`, `pending_report`) e SEM bloquear a
+      confirmação. `USUARIO` (e-mail) vira `usuario_person_id` só dentro de
+      `normalized_values`; `assigned_user_id` permanece NULL. A 1ª
+      `RESPONSAVEL` (ex.: `Ocioso`) é só `vinculo_situacao`, nunca pessoa. Os
+      vínculos são resolvidos na prévia (informativo, em `_links`) e
+      RESOLVIDOS DE NOVO na confirmação (autoritativo). Itens EXISTENTE
+      continuam atualizando apenas descrição/origem (não sobrescrevem campos
+      editados manualmente).
     - Cada linha gera, no máximo, uma consulta a `assets` por classificação
       (pré-visualização) e mais uma na confirmação (revalidação) — não há
       consulta em lote (`IN (...)`) nesta fase. Para volumes grandes de
@@ -105,11 +109,11 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import or_
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.exc import StaleDataError
@@ -120,7 +124,17 @@ from app.models.assets import Asset
 from app.models.audit import AuditLog
 from app.models.imports import ImportPreview, ImportPreviewItem
 from app.models.sync import RawImportRecord, SyncJob
-from app.models.units import Unit
+from app.services.patrimony_lock import (
+    acquire_patrimony_lock,
+    normalize_patrimony_number,
+    normalized_column,
+)
+from app.services.import_references import (
+    PENDING_CODES,
+    ImportReferences,
+    LinkResolution,
+    message_for,
+)
 from app.security.sanitize import (
     LIKE_ESCAPE_CHAR,
     canonical_header,
@@ -156,6 +170,11 @@ _HEADER_PATRIMONIO = "PATRIMONIO"
 _HEADER_ID = "ID"
 _HEADER_DESCRICAO = "DESCRICAO"
 _HEADER_UNIDADE = "UNIDADE"
+_HEADER_OBSERVACAO = "OBSERVACAO"
+# Chaves dentro de `normalized_values` escritas por este serviço.
+_LINKS_KEY = "_links"
+_VALID_LOCATED = frozenset({"SIM", "NAO", "DESCONHECIDO"})
+_IMPORT_SOURCE = "google_sheets"
 
 _SELECTABLE_CLASSIFICATIONS = ("NOVO", "EXISTENTE")
 _ERROR_PREFIX = "erro:"
@@ -249,6 +268,25 @@ def _source_row_number_of(item: ImportPreviewItem) -> int | None:
     return None
 
 
+def _parse_iso_date(value: Any) -> date | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+def _parse_iso_datetime(value: Any) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
+
+
 class ImportService:
     """Serviço de importação de dados do Google Sheets para `assets`.
 
@@ -266,6 +304,7 @@ class ImportService:
         self._db = db_session
         self._sheets_client = sheets_client
         self._settings = settings or get_settings()
+        self._refs: ImportReferences | None = None
 
     # ------------------------------------------------------------------
     # Consultas auxiliares a `assets`/`units`
@@ -273,47 +312,38 @@ class ImportService:
 
     def _active_assets_by_patrimony(self, patrimony_number: str | None) -> list[Asset]:
         """Retorna todos os `assets` ATIVOS (`deleted_at IS NULL`) com este
-        `patrimony_number` exato. Nunca grava em `assets` — apenas leitura."""
+        `patrimony_number`, comparado como `lower(trim)` (igual à API de bens;
+        SEC-AST-01). Nunca grava em `assets` — apenas leitura."""
         if patrimony_number is None:
             return []
         return (
             self._db.query(Asset)
-            .filter(Asset.patrimony_number == patrimony_number, Asset.deleted_at.is_(None))
+            .filter(
+                normalized_column(Asset.patrimony_number)
+                == normalize_patrimony_number(patrimony_number),
+                Asset.deleted_at.is_(None),
+            )
             .all()
         )
 
-    def _resolve_unit(self, item: ImportPreviewItem) -> Unit | None:
-        """Tenta casar a coluna `UNIDADE` da linha com uma `Unit` ativa pelo
-        nome (case-insensitive). Retorna `None` se não houver exatamente uma
-        correspondência — ver decisão de design documentada na docstring do
-        módulo (pendência institucional)."""
-        unidade_name = _extract_field(item.normalized_values, _HEADER_UNIDADE)
-        if not isinstance(unidade_name, str) or not unidade_name.strip():
-            return None
-        matches = (
-            self._db.query(Unit)
-            .filter(Unit.active.is_(True))
-            .filter(func.lower(Unit.name) == unidade_name.strip().lower())
-            .all()
+    def _references(self) -> ImportReferences:
+        """Mapas de unidades/aliases/salas/pessoas (carga única por operação)."""
+        if self._refs is None:
+            self._refs = ImportReferences(self._db)
+        return self._refs
+
+    def _resolve_links(self, normalized_values: dict[str, Any] | None) -> LinkResolution:
+        nv = normalized_values or {}
+        return self._references().resolve(
+            unit_sigla=_extract_field(nv, _HEADER_UNIDADE), normalized=nv
         )
-        if len(matches) == 1:
-            return matches[0]
-        return None
 
     def _lock_patrimony(self, patrimony_number: str) -> None:
-        """Advisory lock TRANSACIONAL do PostgreSQL por número patrimonial
-        (`pg_advisory_xact_lock(namespace, hashtext(patrimonio))`).
-
-        Valor passado como bind parameter (nunca concatenado). Liberado
-        automaticamente no fim da transação (commit/rollback).
-        """
-        self._db.execute(
-            select(
-                func.pg_advisory_xact_lock(
-                    _ADVISORY_LOCK_NAMESPACE_ASSET_PATRIMONY, func.hashtext(patrimony_number)
-                )
-            )
-        )
+        """Advisory lock TRANSACIONAL por número patrimonial NORMALIZADO
+        (`lower(btrim)`), com a MESMA chave da API de bens (SEC-AST-01; ver
+        `app.services.patrimony_lock`). Bind parameter; liberado no
+        commit/rollback."""
+        acquire_patrimony_lock(self._db, patrimony_number)
 
     def _apply_item(
         self, item: ImportPreviewItem, now: datetime, confirmed_by_user_id: uuid.UUID
@@ -332,23 +362,39 @@ class ImportService:
                     0,
                     0,
                 )
-            unit = self._resolve_unit(item)
-            if unit is None:
+            links = self._resolve_links(item.normalized_values)
+            if links.blocking is not None or links.unit_id is None:
                 return (
-                    "não foi possível determinar a unidade (coluna UNIDADE ausente "
-                    "ou sem correspondência exata em uma unidade ativa)",
+                    f"não foi possível determinar a unidade: "
+                    f"{message_for(links.blocking or 'unidade_ausente')}",
                     0,
                     0,
                 )
+            nv = item.normalized_values or {}
+            located = nv.get("located_enum")
+            notes = _extract_field(nv, _HEADER_OBSERVACAO)
+            item.normalized_values = {
+                **nv,
+                _LINKS_KEY: links.to_json(),
+                "usuario_person_id": str(links.usuario_person_id)
+                if links.usuario_person_id
+                else None,
+            }
             asset = Asset(
                 id=uuid4(),
                 source_record_id=item.source_record_id,
-                source_system="google_sheets",
+                source_system=_IMPORT_SOURCE,
                 patrimony_number=item.patrimony_number,
                 description=item.description,
-                unit_id=unit.id,
-                located="DESCONHECIDO",
-                source_updated_at=now,
+                unit_id=links.unit_id,
+                owner_unit_id=links.owner_unit_id,
+                room_id=links.room_id,
+                responsible_person_id=links.responsible_person_id,
+                assigned_user_id=None,  # contas do sistema; nunca vem da planilha
+                located=located if located in _VALID_LOCATED else "DESCONHECIDO",
+                notes=notes.strip() if isinstance(notes, str) and notes.strip() else None,
+                registration_date=_parse_iso_date(nv.get("registration_date")),
+                source_updated_at=_parse_iso_datetime(nv.get("source_updated_at_utc")) or now,
                 created_by=confirmed_by_user_id,
                 updated_by=confirmed_by_user_id,
                 version=1,
@@ -385,7 +431,10 @@ class ImportService:
                 asset.description = item.description
             asset.source_system = "google_sheets"
             asset.source_record_id = item.source_record_id
-            asset.source_updated_at = now
+            asset.source_updated_at = (
+                _parse_iso_datetime((item.normalized_values or {}).get("source_updated_at_utc"))
+                or now
+            )
             asset.updated_by = confirmed_by_user_id
             asset.version = asset.version + 1
             self._db.add(asset)
@@ -449,6 +498,8 @@ class ImportService:
         seen_source_ids: set[str] = set()
         counts = {"NOVO": 0, "EXISTENTE": 0, "DUPLICADO": 0, "INVALIDO": 0, "CONFLITANTE": 0}
         items: list[ImportPreviewItem] = []
+        pending_counts: dict[str, int] = {}
+        self._refs = None  # sempre recarrega os mapas de apoio nesta operação
 
         for row in read_result.rows:
             raw_values: dict[str, Any] = dict(row.get("raw_values") or {})
@@ -487,7 +538,10 @@ class ImportService:
                     )
                 seen_source_ids.add(source_record_id)
 
-            already_seen = seen_patrimony.get(patrimony_number, 0) if patrimony_number else 0
+            already_seen = (
+                seen_patrimony.get(normalize_patrimony_number(patrimony_number), 0)
+                if patrimony_number else 0
+            )
             matched_asset_id: uuid.UUID | None = None
 
             if _has_blocking_error(validation_errors):
@@ -515,9 +569,20 @@ class ImportService:
                     normalized_values[_VERSION_AT_PREVIEW_KEY] = candidates[0].version
                 else:
                     classification = "NOVO"
+                    links = self._resolve_links(normalized_values)
+                    normalized_values[_LINKS_KEY] = links.to_json()
+                    normalized_values["usuario_person_id"] = (
+                        str(links.usuario_person_id) if links.usuario_person_id else None
+                    )
+                    for code in links.pendencias:
+                        pending_counts[code] = pending_counts.get(code, 0) + 1
+                        level = "erro" if code == links.blocking else "aviso"
+                        validation_errors.append(f"{level}: {message_for(code)}")
+                    if links.blocking is not None:
+                        classification = "INVALIDO"
 
             if patrimony_number is not None:
-                seen_patrimony[patrimony_number] = already_seen + 1
+                seen_patrimony[normalize_patrimony_number(patrimony_number)] = already_seen + 1
 
             counts[classification] += 1
             selected_default = classification in _SELECTABLE_CLASSIFICATIONS
@@ -559,7 +624,31 @@ class ImportService:
             self._db.add_all(items)
         self._db.flush()
 
+        # Atributo transitório (não persistido): contadores de pendências de
+        # vínculo, para a prévia exibir sem bloquear a confirmação.
+        preview.pending_counts = {  # type: ignore[attr-defined]
+            code: pending_counts.get(code, 0) for code in PENDING_CODES
+        }
         return preview
+
+    def pending_report(self, preview_id: uuid.UUID) -> dict[str, int]:
+        """Contadores de pendências de vínculo de uma prévia (a partir dos itens).
+
+        Chaves = `PENDING_CODES` (unidade sem alias, sala não encontrada,
+        pessoa não encontrada/ambígua, ...). Somente leitura.
+        """
+        counts = {code: 0 for code in PENDING_CODES}
+        items = (
+            self._db.query(ImportPreviewItem)
+            .filter(ImportPreviewItem.preview_id == preview_id)
+            .all()
+        )
+        for item in items:
+            links = (item.normalized_values or {}).get(_LINKS_KEY) or {}
+            for code in links.get("pendencias") or []:
+                if code in counts:
+                    counts[code] += 1
+        return counts
 
     # ------------------------------------------------------------------
     # list_preview_items (suporte à tela de revisão / paginação da API)
@@ -711,8 +800,18 @@ class ImportService:
                 f"pré-visualização não pode ser confirmada (status atual: {preview.status!r})"
             )
 
+        if preview.source != _IMPORT_SOURCE:
+            # Prévias de outras origens (ex.: cadastros) têm serviço próprio.
+            raise PreviewNotConfirmableError(
+                "esta pré-visualização não é uma importação de bens"
+            )
+        self._refs = None
+
         now = datetime.now(timezone.utc)
-        if now > preview.expires_at:
+        expires_at = preview.expires_at
+        if expires_at.tzinfo is None:  # timestamptz volta aware no PostgreSQL
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        if now > expires_at:
             preview.status = "EXPIRADA"
             self._db.add(preview)
             # Esta escrita precisa sobreviver mesmo que a confirmação falhe

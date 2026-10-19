@@ -51,6 +51,14 @@ networks:
   egress-net:
     driver: bridge
 
+# Credenciais da service account do Google Sheets: arquivo FORA do repositório
+# (caminho do HOST em GOOGLE_SHEETS_CREDENTIALS_HOST_PATH, no .env). Montado
+# somente leitura em /run/secrets/google_sheets_credentials.json apenas no
+# backend e no worker; o frontend não recebe. Nunca versionar o arquivo.
+secrets:
+  google_sheets_credentials:
+    file: ${GOOGLE_SHEETS_CREDENTIALS_HOST_PATH:-./secrets/google_sheets_credentials.json}
+
 volumes:
   redis-data:
     name: sispat-agu_redis-data
@@ -72,6 +80,12 @@ services:
       - .env
     environment:
       - TZ=${TZ:-America/Araguaina}
+      # Caminho DENTRO do container; sobrepõe o valor do .env (env_file), que
+      # pode ser um caminho do host para execução local fora do Docker.
+      - GOOGLE_SHEETS_CREDENTIALS_JSON=/run/secrets/google_sheets_credentials.json
+    secrets:
+      - source: google_sheets_credentials
+        target: google_sheets_credentials.json
     networks:
       - edge-net
       - backend-net
@@ -119,6 +133,12 @@ services:
       - .env
     environment:
       - TZ=${TZ:-America/Araguaina}
+      # Caminho DENTRO do container; sobrepõe o valor do .env (env_file), que
+      # pode ser um caminho do host para execução local fora do Docker.
+      - GOOGLE_SHEETS_CREDENTIALS_JSON=/run/secrets/google_sheets_credentials.json
+    secrets:
+      - source: google_sheets_credentials
+        target: google_sheets_credentials.json
     command: ["celery", "-A", "app.celery_app", "worker", "-B", "--loglevel=info"]
     networks:
       - backend-net

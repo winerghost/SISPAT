@@ -29,6 +29,9 @@ class User(TimestampMixin, Base):
             "avatar_object_key IS NULL OR char_length(avatar_object_key) BETWEEN 1 AND 200",
             name="ck_users_avatar_object_key_length",
         ),
+        CheckConstraint(
+            "phone IS NULL OR phone ~ '^[0-9]{10,13}$'", name="ck_users_phone_format"
+        ).ddl_if(dialect="postgresql"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -54,6 +57,10 @@ class User(TimestampMixin, Base):
     )
     # Chave do objeto no bucket privado `avatars` (nunca uma URL pública).
     avatar_object_key: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # DADO PESSOAL (LGPD): somente ADM le/escreve (imposto no backend).
+    # deferred: a query de autenticacao nao seleciona `phone`, evitando 500 em
+    # bancos sem a 0008 (ver PREDEPLOY-01).
+    phone: Mapped[str | None] = mapped_column(Text, nullable=True, deferred=True)
     deactivated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     deactivated_by: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True

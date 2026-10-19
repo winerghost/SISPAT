@@ -19,6 +19,11 @@ export interface DashboardStat {
   decimals?: number;
   /** Texto de apoio (ex.: "atualizado em …"). */
   description?: string;
+  /**
+   * Variação percentual REAL informada pelo backend (positiva/negativa).
+   * `null`/ausente = sem comparação disponível (nenhum selo é exibido).
+   */
+  delta?: number | null;
 }
 
 /** Ponto de uma série categórica (barra ou fatia). */
@@ -31,6 +36,17 @@ export interface ChartDatum {
 }
 
 export type ChartKind = "bar" | "donut";
+
+/**
+ * Dados de gráficos com várias séries (barras agrupadas e linhas).
+ * `values[categoria]` ausente = sem medição (linha com lacuna; nunca vira 0).
+ */
+export interface MultiSeriesChartData {
+  /** Eixo X, na ordem de exibição. */
+  categories: { key: string; label: string }[];
+  /** Ordem das séries = ordem das cores (fixa; a cor segue a entidade). */
+  series: { key: string; label: string; values: Record<string, number | undefined> }[];
+}
 
 export interface DashboardChart {
   id: string;

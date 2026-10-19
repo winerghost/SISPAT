@@ -72,7 +72,8 @@ Use hex nas senhas que entram em URLs (ex.: Redis), para não precisar escapar c
 | `MAX_CONTENT_LENGTH_BYTES`, `JWT_LEEWAY_SECONDS` | não | padrões `1048576` / `30` |
 | `DB_SSLMODE`, `DB_SSLROOTCERT` | recomendado | `verify-full` + caminho da CA, **somente** se o arquivo for montado no container |
 | `DB_STATEMENT_TIMEOUT_MS`, `DB_CONNECT_TIMEOUT`, `DB_POOL_*` | não | ajuste fino do pool |
-| `GOOGLE_SHEETS_CREDENTIALS_JSON`, `GOOGLE_SHEETS_SPREADSHEET_ID`, `GOOGLE_SHEETS_SHEET_NAME`/`_GID` | para importação | o arquivo de credenciais precisa ser montado no container (somente leitura); sem isso a importação fica indisponível |
+| `GOOGLE_SHEETS_CREDENTIALS_HOST_PATH` | para importação | caminho no HOST do JSON da service account, **fora do repositório**; o Compose o monta como secret somente leitura em `/run/secrets/google_sheets_credentials.json` (e já sobrepõe `GOOGLE_SHEETS_CREDENTIALS_JSON` no container). Sem o arquivo, `docker compose up` falha |
+| `GOOGLE_SHEETS_SPREADSHEET_ID`, `GOOGLE_SHEETS_SHEET_NAME`/`_GID` | para importação | identificam a planilha/aba de origem |
 | `N8N_INTEGRATION_ENABLED` (+ `N8N_*`) | não | `false` até haver n8n externo com HTTPS |
 | `AI_ENABLED` (+ `*_API_KEY`, `AI_*`) | não | `false` por padrão; chaves só no backend |
 | `*_CPUS`, `*_MEMORY` | não | limites por serviço; não use valores de dev |
@@ -82,6 +83,15 @@ Notas:
   frontend (`docker compose up -d --build frontend`). Se ficarem vazias, o login não funciona.
 - Se faltar `REDIS_PASSWORD`, o Compose recusa subir. Se `SUPABASE_JWT_SECRET`/JWKS estiverem
   errados, a API sobe mas responde 401 a todos.
+- Credencial do Google Sheets (service account):
+  1. Guarde o JSON **fora do repositório** (ex.: `/etc/sispat-agu/google_sheets_credentials.json`)
+     e aponte `GOOGLE_SHEETS_CREDENTIALS_HOST_PATH` para ele no `.env`.
+  2. Permissão `chmod 0400` e dono = UID do usuário do container (`chown 10001 <arquivo>`; confirme
+     com `docker compose run --rm --entrypoint id backend`). O Compose (sem Swarm) ignora
+     `uid/mode` do secret: valem as permissões do arquivo no host.
+  3. Após a **importação inicial**, apague a chave (`shred -u` no arquivo, remova a variável do
+     `.env`, delete a chave da service account no console do Google Cloud) e **reative** a
+     política `iam.disableServiceAccountKeyCreation`.
 
 ## 3. Banco de dados: migrações (somente com autorização)
 

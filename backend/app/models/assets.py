@@ -67,6 +67,11 @@ class Asset(TimestampMixin, Base):
             "unit_id",
             postgresql_where=text("deleted_at IS NULL"),
         ),
+        # SEC-AST-01: o índice único parcial `uq_assets_patrimony_number_active`
+        # (lower(btrim(patrimony_number)) WHERE deleted_at IS NULL) existe só na
+        # migração 0009_unique_indexes_assets_movements. NÃO é declarado aqui
+        # porque testes existentes (alertas de duplicidade, importação)
+        # constroem duplicatas ativas no SQLite; ver docs/architecture.
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -156,6 +161,15 @@ class AssetMovement(Base):
         CheckConstraint(
             "status IN ('PENDENTE','APROVADA','REJEITADA','CONCLUIDA','CANCELADA')",
             name="ck_asset_movements_status",
+        ),
+        # SEC-MOV-02 (migração 0009_unique_indexes_assets_movements): no
+        # máximo UMA movimentação PENDENTE por bem.
+        Index(
+            "uq_asset_movements_one_pending",
+            "asset_id",
+            unique=True,
+            postgresql_where=text("status = 'PENDENTE'"),
+            sqlite_where=text("status = 'PENDENTE'"),
         ),
     )
 

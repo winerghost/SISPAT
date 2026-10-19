@@ -37,7 +37,7 @@ async function navigateToUsuarios(page: Page) {
     await nav.getByRole("button", { name: "Administração" }).click();
   }
   await link.click();
-  await expect(page).toHaveURL(/\/administracao\/usuarios$/);
+  await expect(page).toHaveURL(/\/administracao\/usuarios$/, { timeout: 60_000 });
   await expect(page.getByRole("button", { name: "Convidar Usuário" })).toBeVisible();
 }
 

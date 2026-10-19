@@ -1,6 +1,7 @@
 import type { LucideIcon } from "lucide-react";
 import {
   Home,
+  LayoutDashboard,
   Package,
   Building2,
   DoorOpen,
@@ -22,6 +23,7 @@ import {
   Sparkles,
   CircleUserRound,
   Palette,
+  Database,
 } from "lucide-react";
 
 // =============================================================================
@@ -82,6 +84,7 @@ export const SETTINGS_HREF = "/configuracoes";
 
 export const NAV_ITEMS: NavGroup[] = [
   { label: "Home", href: "/", icon: Home },
+  { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
   { label: "Patrimônios", href: "/patrimonios", icon: Package },
   { label: "Unidades", href: "/unidades", icon: Building2 },
   { label: "Salas e Localizações", href: "/salas-localizacoes", icon: DoorOpen },
@@ -97,6 +100,10 @@ export const NAV_ITEMS: NavGroup[] = [
     adminOnly: true,
     children: [
       { label: "Usuários", href: "/administracao/usuarios", icon: UserCog },
+      // Cadastros de apoio (salas, pessoas responsáveis, unidades): só ADM escreve.
+      { label: "Cadastro de Unidades", href: "/administracao/unidades", icon: Building2 },
+      { label: "Cadastro de Salas", href: "/administracao/salas", icon: DoorOpen },
+      { label: "Cadastro de Responsáveis", href: "/administracao/responsaveis", icon: Users },
       { label: "Perfis e Permissões", href: "/administracao/perfis-permissoes", icon: KeyRound },
       { label: "Vínculos de Unidades", href: "/administracao/vinculos-unidades", icon: Link2 },
       { label: "Auditoria", href: "/administracao/auditoria", icon: History },
@@ -105,6 +112,11 @@ export const NAV_ITEMS: NavGroup[] = [
         label: "Importação de Dados → Google Sheets",
         href: "/administracao/importacao/google-sheets",
         icon: FileSpreadsheet,
+      },
+      {
+        label: "Importação de Dados → Cadastros de apoio",
+        href: "/administracao/importacao/cadastros",
+        icon: Database,
       },
       {
         label: "Configurações do Sistema",

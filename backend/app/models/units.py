@@ -1,13 +1,23 @@
 """Modelos de unidades organizacionais, salas, locais e acesso por unidade.
 
-Tabelas: units, user_unit_access, rooms, locations.
+Tabelas: units, unit_aliases, user_unit_access, rooms, locations.
 """
 from __future__ import annotations
 
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Text, UniqueConstraint, text
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Index,
+    Text,
+    UniqueConstraint,
+    func,
+    text,
+)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -19,6 +29,16 @@ class Unit(TimestampMixin, Base):
     """Unidade organizacional da AGU (ex.: sede, núcleos/escritórios regionais)."""
 
     __tablename__ = "units"
+    __table_args__ = (
+        CheckConstraint(
+            "source_record_id IS NULL OR char_length(source_record_id) BETWEEN 1 AND 64",
+            name="ck_units_source_record_id_length",
+        ),
+        Index(
+            "uq_units_source_record_id", "source_record_id", unique=True,
+            postgresql_where=text("source_record_id IS NOT NULL"),
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
@@ -28,6 +48,7 @@ class Unit(TimestampMixin, Base):
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     address: Mapped[str | None] = mapped_column(Text, nullable=True)
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
+    source_record_id: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     rooms: Mapped[list["Room"]] = relationship(back_populates="unit", cascade="all, delete-orphan")
     locations: Mapped[list["Location"]] = relationship(back_populates="unit", cascade="all, delete-orphan")
@@ -38,6 +59,38 @@ class Unit(TimestampMixin, Base):
 
     def __repr__(self) -> str:  # pragma: no cover
         return f"<Unit code={self.code!r}>"
+
+
+class UnitAlias(Base):
+    """Sigla de unidade usada na planilha de origem (ex.: `UEA`) -> `units`.
+
+    Unicidade case-insensitive em `lower(alias)`. Somente leitura para o
+    fluxo de importação; cadastro por migração/administração.
+    """
+
+    __tablename__ = "unit_aliases"
+    __table_args__ = (
+        CheckConstraint("char_length(alias) BETWEEN 1 AND 32", name="ck_unit_aliases_alias_length"),
+        CheckConstraint("alias = trim(alias)", name="ck_unit_aliases_alias_trimmed"),
+        Index("uq_unit_aliases_alias_lower", func.lower(text("alias")), unique=True),
+        Index("ix_unit_aliases_unit_id", "unit_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    alias: Mapped[str] = mapped_column(Text, nullable=False)
+    unit_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("units.id", ondelete="RESTRICT"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
+    unit: Mapped["Unit"] = relationship()
 
 
 class UserUnitAccess(Base):
@@ -77,6 +130,21 @@ class Room(TimestampMixin, Base):
     """Sala/ambiente físico dentro de uma unidade."""
 
     __tablename__ = "rooms"
+    __table_args__ = (
+        CheckConstraint(
+            "char_length(name) BETWEEN 1 AND 200 AND name = trim(name)",
+            name="ck_rooms_name_trimmed",
+        ),
+        CheckConstraint(
+            "source_record_id IS NULL OR char_length(source_record_id) BETWEEN 1 AND 64",
+            name="ck_rooms_source_record_id_length",
+        ),
+        Index("uq_rooms_unit_name_lower", "unit_id", func.lower(func.trim(text("name"))), unique=True),
+        Index(
+            "uq_rooms_source_record_id", "source_record_id", unique=True,
+            postgresql_where=text("source_record_id IS NOT NULL"),
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
@@ -87,6 +155,7 @@ class Room(TimestampMixin, Base):
     name: Mapped[str] = mapped_column(Text, nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     floor: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_record_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
 
     unit: Mapped["Unit"] = relationship(back_populates="rooms")

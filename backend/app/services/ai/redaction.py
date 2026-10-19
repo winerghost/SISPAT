@@ -60,7 +60,7 @@ SUPPRESSED_COUNT = "<5"
 
 MAX_STRING_LENGTH = 300
 MAX_LIST_ITEMS = 50
-MAX_DEPTH = 5
+MAX_DEPTH = 7  # assistente: items -> {tool,result} -> result.items -> {room_label,count}
 MAX_PAYLOAD_CHARS = 20_000
 
 # Texto já normalizado (dígitos ASCII); `[0-9]` evita casar dígitos de outras escritas.

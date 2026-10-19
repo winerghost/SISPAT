@@ -6,3 +6,4 @@ export { DashboardEmptyState, type DashboardEmptyStateProps } from "./dashboard-
 export { DashboardOverview, type DashboardOverviewProps } from "./dashboard-overview";
 export { StatCard, type StatCardProps } from "./stat-card";
 export type * from "./types";
+export { chartClasses, chartPalette, type ChartThemeName } from "./chart-theme";

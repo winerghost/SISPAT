@@ -58,7 +58,7 @@ export function Header() {
   const breadcrumbs = buildBreadcrumbs(pathname);
 
   return (
-    <header className="flex h-16 shrink-0 items-center justify-between gap-3 border-b border-ash-stroke bg-obsidian-canvas px-4 sm:gap-6 sm:px-6">
+    <header className="flex h-16 shrink-0 print:hidden items-center justify-between gap-3 border-b border-ash-stroke bg-obsidian-canvas px-4 sm:gap-6 sm:px-6">
       <div className="flex min-w-0 flex-1 items-center gap-3">
         <MobileNav />
         <nav

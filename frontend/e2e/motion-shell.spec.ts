@@ -105,6 +105,9 @@ test.describe("sidebar desktop", () => {
     const nav = desktopNav(page);
     await nav.getByRole("link", { name: "Home" }).focus();
     await page.keyboard.press("ArrowDown");
+    // "Dashboard" vem logo após Home no menu.
+    await expect(nav.getByRole("link", { name: "Dashboard" })).toBeFocused();
+    await page.keyboard.press("ArrowDown");
     await expect(nav.getByRole("link", { name: "Patrimônios" })).toBeFocused();
     await page.keyboard.press("End");
     // "Configurações" virou grupo (Perfil, Segurança, Aparência, IA): o último item é o botão.

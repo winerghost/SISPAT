@@ -40,6 +40,8 @@ export async function collectLayoutReport(page: Page): Promise<LayoutReport> {
 
     function isHiddenFromUser(el: Element): boolean {
       if (el.closest("[aria-hidden='true'], [inert], nextjs-portal")) return true;
+      // Conteúdo visualmente oculto (tabelas alternativas dos gráficos): contido por um ancestral .sr-only.
+      if (el.closest(".sr-only")) return true;
       const style = getComputedStyle(el);
       if (style.visibility === "hidden" || style.display === "none") return true;
       // Padrão sr-only (ex.: "Pular para o conteúdo" fora de foco).

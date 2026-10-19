@@ -1,5 +1,7 @@
 import { StaggerContainer, StaggerItem } from "@/components/animations";
 import { DashboardOverview } from "@/components/dashboard";
+import { AiInsightsWidget, AskSispatBox } from "@/components/features/dashboard/ai-insights-widget";
+import { AlertsWidget } from "@/components/features/dashboard/alerts-widget";
 import { Badge } from "@/components/ui/badge";
 
 // =============================================================================
@@ -45,6 +47,11 @@ export default function HomePage() {
           </p>
         </StaggerItem>
       </StaggerContainer>
+
+      <AlertsWidget />
+
+      <AiInsightsWidget />
+      <AskSispatBox />
 
       <DashboardOverview status="unavailable" />
     </div>

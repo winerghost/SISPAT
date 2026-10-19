@@ -98,7 +98,11 @@ class AIService:
         http_session: requests.Session | None = None,
         db_session: Any | None = None,
         audit_writer: Any | None = None,
+        enforce_rate_limit: bool = True,
     ) -> None:
+        # `enforce_rate_limit=False` só para tasks de sistema (sem usuário): o
+        # custo delas é limitado pelo agendamento e pelo teto mensal de tokens.
+        self._enforce_rate_limit = enforce_rate_limit
         self._config = config
         self._settings = settings
         self._redis = redis_client
@@ -174,7 +178,7 @@ class AIService:
         if reason is not None or isinstance(provider, NullProvider):
             return provider.complete(AIRequest(model="", system=system, user=user, feature=feature))
 
-        if not check_ai_rate_limit(
+        if self._enforce_rate_limit and not check_ai_rate_limit(
             redis_client,
             user_id=actor.user_id,
             unit_id=actor.unit_id,

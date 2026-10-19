@@ -28,13 +28,25 @@ const ROW_CLASSES =
 interface TableProps extends React.HTMLAttributes<HTMLTableElement> {
   /** Carregando nova página/filtro com dados anteriores visíveis. */
   busy?: boolean;
+  /**
+   * Nome da região rolável. Quando informado, o contêiner de rolagem vira uma
+   * região focável por teclado (WCAG 2.1.1; axe scrollable-region-focusable) —
+   * útil em tabelas sem controles internos que rolam em telas estreitas.
+   */
+  regionLabel?: string;
 }
 
 const Table = React.forwardRef<HTMLTableElement, TableProps>(
-  ({ className, busy = false, ...props }, ref) => (
+  ({ className, busy = false, regionLabel, ...props }, ref) => (
     // `relative`: elementos absolutos internos (ex.: textos sr-only nos
     // cabeçalhos) ficam contidos na rolagem da tabela, nunca na da página.
-    <div className="relative w-full overflow-x-auto">
+    <div
+      className={cn(
+        "relative w-full overflow-x-auto",
+        regionLabel && "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-bone",
+      )}
+      {...(regionLabel ? { role: "region", "aria-label": regionLabel, tabIndex: 0 } : {})}
+    >
       <table
         ref={ref}
         aria-busy={busy || undefined}

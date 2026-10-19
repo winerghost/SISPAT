@@ -1,0 +1,161 @@
+"use client";
+
+import { useState } from "react";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
+
+import { Button } from "@/components/ui/button";
+import { LoadingSkeleton } from "@/components/ui/loading-skeleton";
+import { listAssets, type AssetRecord } from "@/lib/assets-api";
+import { CatalogHeader, CatalogNotice, CatalogPagination } from "@/components/features/catalog/catalog-parts";
+import { SESSION_ERROR_MESSAGE } from "@/components/features/lookup/lookup-labels";
+import { noClientRetry, useAccessibleUnits, useLookupAccess } from "@/components/features/lookup/use-lookup";
+import { AssetDetailSheet } from "./asset-detail-sheet";
+import { assetsQueryKey, AssetFormDialog } from "./asset-form-dialog";
+import { ASSET_LOOKUPS_ERROR_MESSAGE, ASSET_PAGE_SIZE, assetListErrorMessage } from "./asset-labels";
+import { AssetsTable } from "./assets-table";
+import { AssetsToolbar } from "./assets-toolbar";
+import { useAssetFilters } from "./use-asset-filters";
+import { useUnitPeople, useUnitRooms } from "./use-asset-lookups";
+
+// =============================================================================
+// /patrimonios — lista real de bens (`GET /api/v1/assets`).
+// Busca (debounce 300 ms), unidade, sala, responsável, "localizado", ordenação
+// (allowlist) e paginação vão como parâmetros; o BACKEND aplica perfil, escopo de
+// unidade e campos por perfil. Esta tela é só apresentação: esconder botões por
+// perfil é UX, nunca segurança. Detalhe/edição/exclusão lógica/histórico ficam
+// no painel lateral. Nenhum número é animado; o total vem do backend.
+// =============================================================================
+
+export function PatrimoniosPage() {
+  const access = useLookupAccess();
+  const units = useAccessibleUnits(access.ready);
+  const filters = useAssetFilters();
+  const roles = access.me.data?.roles ?? [];
+  const canWrite = roles.includes("ADM") || roles.includes("USER");
+
+  const [selected, setSelected] = useState<AssetRecord | null>(null);
+  const [detailOpen, setDetailOpen] = useState(false);
+  const [createOpen, setCreateOpen] = useState(false);
+  const [createSession, setCreateSession] = useState(0);
+
+  const rooms = useUnitRooms(filters.unitId, access.ready, false);
+  const people = useUnitPeople(filters.unitId, access.ready, false);
+
+  const includeDeleted = access.isAdmin && filters.includeDeleted;
+  const params = {
+    q: filters.q || undefined,
+    unit_id: filters.unitId || undefined,
+    room_id: filters.roomId || undefined,
+    responsible_person_id: filters.personId || undefined,
+    located: filters.located || undefined,
+    include_deleted: includeDeleted || undefined,
+    sort: filters.sort,
+    page: filters.page,
+    page_size: ASSET_PAGE_SIZE,
+  };
+  const assets = useQuery({
+    queryKey: [...assetsQueryKey, "list", params],
+    queryFn: () => listAssets(params),
+    enabled: access.ready,
+    placeholderData: keepPreviousData,
+    retry: noClientRetry,
+  });
+
+  const lookupsFailed = units.isError || rooms.isError || people.isError;
+
+  return (
+    <div className="flex flex-col gap-8 p-4 sm:p-6 lg:p-8">
+      <CatalogHeader
+        eyebrow="Patrimônio"
+        title="Patrimônios"
+        description={
+          canWrite || !access.ready
+            ? "Bens patrimoniais das unidades do seu escopo de acesso. O número patrimonial é sempre tratado como texto."
+            : "Bens patrimoniais das unidades do seu escopo de acesso. Seu perfil é somente de consulta."
+        }
+        action={
+          canWrite ? (
+            <Button
+              onClick={() => {
+                setCreateSession((n) => n + 1);
+                setCreateOpen(true);
+              }}
+            >
+              Novo bem
+            </Button>
+          ) : null
+        }
+      />
+
+      <AssetsToolbar
+        filters={filters}
+        units={units.data?.units}
+        rooms={rooms.data?.rooms}
+        people={people.data?.people}
+        isAdmin={access.isAdmin}
+      />
+
+      {access.sessionError ? <CatalogNotice>{SESSION_ERROR_MESSAGE}</CatalogNotice> : null}
+      {lookupsFailed && !assets.isError ? <CatalogNotice>{ASSET_LOOKUPS_ERROR_MESSAGE}</CatalogNotice> : null}
+
+      {!access.sessionError && (access.me.isPending || assets.isPending) && (
+        <LoadingSkeleton variant="table" count={5} columns={4} label="Carregando bens…" />
+      )}
+
+      {assets.isError && (
+        <CatalogNotice onRetry={() => assets.refetch()} retrying={assets.isFetching}>
+          {assetListErrorMessage(assets.error)}
+        </CatalogNotice>
+      )}
+
+      {assets.data && (
+        <>
+          <AssetsTable
+            assets={assets.data.assets}
+            pageKey={`${assets.data.page}|${filters.q}|${filters.unitId}|${filters.roomId}|${filters.personId}|${filters.located}|${includeDeleted}|${filters.sort}`}
+            busy={assets.isFetching && !assets.isPending}
+            sort={filters.sort}
+            onSortChange={filters.chooseSort}
+            filtered={filters.filtered}
+            onOpen={(asset) => {
+              setSelected(asset);
+              setDetailOpen(true);
+            }}
+          />
+          <CatalogPagination
+            page={assets.data.page}
+            total={assets.data.total}
+            pageSize={ASSET_PAGE_SIZE}
+            noun="bem(ns)"
+            loading={assets.isPlaceholderData}
+            onPage={filters.setPage}
+          />
+        </>
+      )}
+
+      <AssetDetailSheet
+        asset={selected}
+        open={detailOpen}
+        onOpenChange={setDetailOpen}
+        isAdmin={access.isAdmin}
+        canWrite={canWrite}
+        units={units.data?.units}
+      />
+
+      {createSession > 0 ? (
+        <AssetFormDialog
+          key={createSession}
+          open={createOpen}
+          onOpenChange={setCreateOpen}
+          asset={null}
+          isAdmin={access.isAdmin}
+          units={units.data?.units}
+          defaultUnitId={filters.unitId}
+          conflict={false}
+          onConflict={() => undefined}
+          onSaved={() => undefined}
+        />
+      ) : null}
+    </div>
+  );
+}

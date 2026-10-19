@@ -37,6 +37,23 @@ const PROTECTED = [
   "/configuracoes/inteligencia-artificial",
   "/administracao/usuarios",
   "/administracao/importacao/google-sheets",
+  "/administracao/importacao/cadastros",
+  "/administracao",
+  "/patrimonios",
+  "/unidades",
+  "/salas-localizacoes",
+  "/responsaveis",
+  "/inventarios",
+  "/movimentacoes",
+  "/relatorios",
+  "/dashboard",
+  "/dashboard/relatorio",
+  "/importacoes",
+  "/administracao/perfis-permissoes",
+  "/administracao/vinculos-unidades",
+  "/administracao/auditoria",
+  "/administracao/integracoes",
+  "/administracao/configuracoes-sistema",
 ];
 
 const ADMIN_HREFS = ["/administracao", "/configuracoes/inteligencia-artificial"];
@@ -87,26 +104,30 @@ test("FE-SSR-01: conteúdo de Server Component protegido não vai no HTML sem se
 });
 
 test.describe("toda ação na API sai autenticada", () => {
+  // Um teste por (perfil, rota): no `next dev` cada rota compila na 1ª visita e,
+  // sob a carga da suíte completa, um único teste com todas as rotas estourava
+  // o limite. As asserções são as mesmas, só distribuídas e paralelizáveis.
   for (const role of ["ADM", "USER", "RH"] as const) {
-    test(`${role}: nenhuma requisição à API sem Authorization: Bearer`, async ({ page }) => {
-      await installMocks(page, { role, aal: "aal2" });
-      await seedSession(page, { role, aal: "aal2" });
-      const requests = trackRequests(page);
+    for (const path of PROTECTED) {
+      test(`${role}: ${path}: nenhuma requisição à API sem Authorization: Bearer`, async ({ page }) => {
+        test.setTimeout(180_000);
+        await installMocks(page, { role, aal: "aal2" });
+        await seedSession(page, { role, aal: "aal2" });
+        const requests = trackRequests(page);
 
-      for (const path of PROTECTED) {
         await page.goto(path);
         await waitForHydration(page);
-        await page.waitForLoadState("networkidle");
-      }
+        await page.waitForLoadState("networkidle", { timeout: 90_000 });
 
-      const calls = apiCalls(requests);
-      expect(calls.length).toBeGreaterThan(0); // ao menos /v1/me
-      for (const call of calls) {
-        expect(call.headers()["authorization"] ?? "", `${call.method()} ${call.url()}`).toMatch(
-          /^Bearer \S+$/,
-        );
-      }
-    });
+        const calls = apiCalls(requests);
+        expect(calls.length).toBeGreaterThan(0); // ao menos /v1/me
+        for (const call of calls) {
+          expect(call.headers()["authorization"] ?? "", `${call.method()} ${call.url()}`).toMatch(
+            /^Bearer \S+$/,
+          );
+        }
+      });
+    }
   }
 
   test("sessão expirada sem refresh possível: nenhuma chamada à API sem Bearer", async ({ page }) => {

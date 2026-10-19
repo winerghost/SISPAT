@@ -89,6 +89,10 @@ Variáveis de ambiente suportadas:
                             o MENOR entre este valor e `ai_settings.monthly_token_cap`.
     AI_CIRCUIT_FAILURE_THRESHOLD  Falhas consecutivas que abrem o circuito (default: 3).
     AI_CIRCUIT_OPEN_SECONDS Tempo (s) com o circuito aberto -> NullProvider (default: 300).
+    ALERTS_UNCHECKED_DAYS, ALERTS_NO_MOVEMENT_DAYS  Limites (dias) dos alertas (default: 365).
+    ALERTS_PATRIMONY_REGEX  Formato aceito do número patrimonial (alerta "fora do padrão").
+    ALERTS_SPIKE_BASELINE_WEEKS, ALERTS_SPIKE_SIGMA, ALERTS_SPIKE_MIN_COUNT  Picos de
+                            movimentações (defaults: 8 semanas, 3.0 sigma, mínimo 5).
     EMAIL_ENABLED           Chave geral do envio de e-mail SMTP (default: false). Quando false,
                             `app.services.email` usa NullEmailSender (nao envia, nao falha).
     EMAIL_HOST / EMAIL_PORT Servidor SMTP e porta (587 STARTTLS ou 465 SSL; 25 recusada).
@@ -287,6 +291,15 @@ class Settings(BaseSettings):
             "google_sheets_sheet_name não estiver configurado. Opcional."
         ),
     )
+    # Abas dos CADASTROS de apoio (importação de unidades/salas/pessoas). Cada
+    # aba é localizada por nome exato (prioridade) OU GID; todas opcionais —
+    # sem configuração, a importação do cadastro correspondente recusa rodar.
+    google_sheets_units_sheet_name: str | None = Field(default=None, description="Aba de Unidades (nome exato).")
+    google_sheets_units_sheet_gid: str | None = Field(default=None, description="Aba de Unidades (GID).")
+    google_sheets_rooms_sheet_name: str | None = Field(default=None, description="Aba de Salas (nome exato).")
+    google_sheets_rooms_sheet_gid: str | None = Field(default=None, description="Aba de Salas (GID).")
+    google_sheets_people_sheet_name: str | None = Field(default=None, description="Aba de Pessoas (nome exato).")
+    google_sheets_people_sheet_gid: str | None = Field(default=None, description="Aba de Pessoas (GID).")
     google_sheets_timeout_seconds: int | None = Field(
         default=None,
         ge=1,
@@ -337,6 +350,27 @@ class Settings(BaseSettings):
             "(app.services.import_service.ImportService.create_preview) antes "
             "de expirar e não poder mais ser confirmada."
         ),
+    )
+
+    # --- Alertas determinísticos (app.services.alerts; Etapa 4a). Só limites
+    # de regras; nenhum segredo. ---
+    alerts_unchecked_days: int = Field(
+        default=365, ge=1, le=3650, description="Dias sem conferência (checked_at) para alertar."
+    )
+    alerts_no_movement_days: int = Field(
+        default=365, ge=1, le=3650, description="Dias sem movimentação para alertar."
+    )
+    alerts_patrimony_regex: str = Field(
+        default=r"^[0-9A-Za-z][0-9A-Za-z./-]{0,31}$",
+        max_length=200,
+        description="Regex (POSIX/PostgreSQL) do formato aceito do número patrimonial.",
+    )
+    alerts_spike_baseline_weeks: int = Field(
+        default=8, ge=4, le=52, description="Semanas anteriores usadas como linha de base."
+    )
+    alerts_spike_sigma: float = Field(default=3.0, ge=1.0, le=10.0)
+    alerts_spike_min_count: int = Field(
+        default=5, ge=1, le=100_000, description="Mínimo de movimentos na semana para haver pico."
     )
 
     # --- IA consultiva (app.services.ai). Chaves: repr=False para nunca

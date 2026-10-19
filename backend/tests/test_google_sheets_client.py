@@ -58,8 +58,9 @@ def _make_mock_service(values_rows: list[list[str]]) -> MagicMock:
 @patch("app.integrations.google_sheets_client.service_account.Credentials.from_service_account_file")
 @patch("googleapiclient.discovery.build")
 def test_mapeamento_das_duas_colunas_responsavel(mock_build, mock_from_file) -> None:
-    """A primeira coluna RESPONSAVEL deve virar `responsavel_original` e a
-    segunda `responsavel_unidade`, na ordem em que aparecem no cabeçalho."""
+    """As duas colunas RESPONSAVEL são separadas por ordem: 1ª = vínculo/situação,
+    2ª = pessoa (hipótese da amostra). Chaves legadas `responsavel_original`/
+    `responsavel_unidade` mantidas só por compatibilidade."""
     headers = ["ID", "PATRIMONIO", "RESPONSAVEL", "RESPONSAVEL", "UNIDADE"]
     data_row = ["1", "00123", "Joao da Silva", "Setor de Compras", "SEDE"]
     mock_build.return_value = _make_mock_service([headers, data_row])
@@ -72,6 +73,8 @@ def test_mapeamento_das_duas_colunas_responsavel(mock_build, mock_from_file) -> 
     row = result.rows[0]
     assert row["normalized_values"]["responsavel_original"] == "Joao da Silva"
     assert row["normalized_values"]["responsavel_unidade"] == "Setor de Compras"
+    assert row["normalized_values"]["vinculo_situacao"] == "Joao da Silva"
+    assert row["normalized_values"]["responsavel_pessoa"] == "Setor de Compras"
     # raw_values deve preservar ambas as colunas lado a lado, sob chaves distintas.
     assert row["raw_values"]["RESPONSAVEL_1"] == "Joao da Silva"
     assert row["raw_values"]["RESPONSAVEL_2"] == "Setor de Compras"
@@ -273,3 +276,62 @@ def test_settings_real_do_projeto_sem_campos_google_sheets_nao_quebra_com_attrib
             client.read_patrimony_rows()
 
     mock_build.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# read_tab_rows (abas de cadastros: unidades/salas/pessoas)
+# ---------------------------------------------------------------------------
+
+
+@patch("app.integrations.google_sheets_client.service_account.Credentials.from_service_account_file")
+@patch("googleapiclient.discovery.build")
+def test_read_tab_rows_por_nome_preserva_celulas_e_vazias_viram_none(mock_build, mock_from_file) -> None:
+    service = _make_mock_service([["ID", "SALA", "UNIDADE"], ["897bb3a9", " 2 ", "UEA"], ["x", "", "PF"]])
+    mock_build.return_value = service
+
+    result = GoogleSheetsClient(settings=_FakeSettings()).read_tab_rows(sheet_name="Salas")
+
+    assert result.sheet_title == "Salas"
+    assert result.rows[0]["raw_values"] == {"ID": "897bb3a9", "SALA": " 2 ", "UNIDADE": "UEA"}
+    assert result.rows[0]["normalized_values"]["SALA"] == "2"
+    assert result.rows[1]["raw_values"]["SALA"] is None
+    assert result.rows[1]["source_row_number"] == 3
+    called_range = service.spreadsheets.return_value.values.return_value.get.call_args.kwargs["range"]
+    assert called_range.startswith("'Salas'!A1:")
+
+
+@patch("app.integrations.google_sheets_client.service_account.Credentials.from_service_account_file")
+@patch("googleapiclient.discovery.build")
+def test_read_tab_rows_por_gid_resolve_titulo_via_lista_de_abas(mock_build, mock_from_file) -> None:
+    service = _make_mock_service([["ID", "NOME"], ["1", "ANA"]])
+    service.spreadsheets.return_value.get.return_value.execute.return_value = {
+        "sheets": [
+            {"properties": {"sheetId": 0, "title": "Patrimonio", "index": 0}},
+            {"properties": {"sheetId": 555, "title": "Pessoas", "index": 1}},
+        ]
+    }
+    mock_build.return_value = service
+
+    result = GoogleSheetsClient(settings=_FakeSettings()).read_tab_rows(sheet_gid="555")
+
+    assert result.sheet_title == "Pessoas"
+    with pytest.raises(GoogleSheetsClientError):
+        GoogleSheetsClient(settings=_FakeSettings()).read_tab_rows(sheet_gid="999")
+
+
+def test_read_tab_rows_sem_nome_nem_gid_nao_chuta_aba() -> None:
+    with patch("googleapiclient.discovery.build") as mock_build:
+        with pytest.raises(GoogleSheetsClientError):
+            GoogleSheetsClient(settings=_FakeSettings()).read_tab_rows()
+
+
+@patch("app.integrations.google_sheets_client.service_account.Credentials.from_service_account_file")
+@patch("googleapiclient.discovery.build")
+def test_read_tab_rows_substitui_nul_e_desambigua_cabecalho_duplicado(mock_build, mock_from_file) -> None:
+    mock_build.return_value = _make_mock_service([["ID", "NOME", "NOME"], ["1", "A\x00B", "C"]])
+
+    result = GoogleSheetsClient(settings=_FakeSettings()).read_tab_rows(sheet_name="Pessoas")
+
+    row = result.rows[0]
+    assert row["raw_values"] == {"ID": "1", "NOME_1": "A\ufffdB", "NOME_2": "C"}
+    assert any("NUL" in e for e in row["validation_errors"])

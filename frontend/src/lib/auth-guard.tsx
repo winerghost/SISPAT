@@ -26,6 +26,7 @@ import { useQueryClient } from "@tanstack/react-query";
 
 import { UNAUTHORIZED_EVENT } from "@/lib/api-client";
 import { signOutEverywhere, useSupabaseSession } from "@/lib/session";
+import { clearUiCookie } from "@/lib/ui-preferences";
 
 /** Rotas acessíveis sem sessão (não existe /register nem /signup — só convite). */
 export const PUBLIC_ROUTES = ["/login", "/ativar-conta"] as const;
@@ -44,6 +45,7 @@ export function AuthGuard({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (!isPublic && !loading && !session) {
+      clearUiCookie(); // sessão expirou/encerrada em outra aba: não deixa a preferência para o próximo usuário
       router.replace("/login");
     }
   }, [isPublic, loading, session, router]);

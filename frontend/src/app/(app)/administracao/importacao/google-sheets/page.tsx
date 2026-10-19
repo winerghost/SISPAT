@@ -16,6 +16,7 @@ import { PreviewSummaryCards } from "@/components/features/imports/preview-summa
 import { PreviewReviewAlert } from "@/components/features/imports/preview-review-alert";
 import { PreviewItemsTable, type SelectionSummary } from "@/components/features/imports/preview-items-table";
 import { ConfirmImportDialog } from "@/components/features/imports/confirm-import-dialog";
+import { PendingCountsPanel } from "@/components/features/imports/pending-counts-panel";
 import { ApiError } from "@/lib/api-client";
 import { rateLimitMessage } from "@/lib/api-errors";
 import {
@@ -196,6 +197,9 @@ export default function ImportacaoGoogleSheetsPage() {
           <SlideIn key={`preview-${preview.preview_id}`} distance="sm" className="flex flex-col gap-8">
             <PreviewSummaryCards summary={preview.summary} />
             <PreviewReviewAlert summary={preview.summary} />
+            {preview.pending_counts ? (
+              <PendingCountsPanel previewId={preview.preview_id} counts={preview.pending_counts} />
+            ) : null}
             <PreviewItemsTable
               key={preview.preview_id}
               previewId={preview.preview_id}

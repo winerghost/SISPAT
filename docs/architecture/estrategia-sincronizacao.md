@@ -92,19 +92,31 @@ como semanticamente distintas, nunca fundidas:
 
 | Coluna de origem | Campo normalizado | Significado assumido | Uso no modelo lógico |
 |---|---|---|---|
-| 1ª coluna `RESPONSAVEL` | `responsavel_original` | Nome da pessoa física historicamente registrada como responsável pelo bem na origem | Candidato a correspondência com `responsible_people.name` (ver matching abaixo) |
-| 2ª coluna `RESPONSAVEL` | `responsavel_unidade` | Unidade/setor responsável, possivelmente diferente da pessoa física (ex.: responsabilidade organizacional, não individual) | Candidato a correspondência com `units.name`/`units.code`, usado para validar/complementar `assets.unit_id` |
+| 1ª coluna `RESPONSAVEL` | `vinculo_situacao` | Vínculo/situação (`Servidor`, `Terceirizado`, `Ocioso`) — **não é pessoa** | Informativo; não resolve FK |
+| 2ª coluna `RESPONSAVEL` | `responsavel_pessoa` (+ `responsavel_pessoa_key`) | Nome da pessoa responsável; a chave de casamento é casefold, sem acento, espaços colapsados (a planilha mistura `Fulano` e `FULANO`) | Candidato a correspondência com `responsible_people.name` via a chave (ver matching abaixo) |
 
-**Pendente de validação institucional:** confirmar com a origem da planilha
-(cabeçalhos exatos, posição das colunas, e se o significado acima está
-correto) antes de fixar essa interpretação em produção. Até a confirmação, o
-pipeline:
+> **Revisão 2026-10-16:** a amostra real de 10 linhas invalidou a suposição
+> anterior (1ª = pessoa, 2ª = unidade). As chaves antigas
+> `responsavel_original` (1ª) e `responsavel_unidade` (2ª) continuam gravadas
+> **apenas por compatibilidade** e não devem ser usadas. Normalização feita
+> por `app/services/import_normalizer.py` (funções puras); ver também
+> `plano-importacao-mconferencia.md`. Novas chaves em `normalized_values`:
+> `codigo_material`, `descricao_limpa`, `owner_unit_code`, `owner_unit_name`,
+> `located_enum`, `sala_codigo`, `usuario_email`, `latitude`, `longitude`,
+> `source_updated_at_utc`, `registration_date`, `pesquisador`. Valores
+> inválidos viram `null` com `validation_errors` `aviso:`; só `ID`/`PATRIMONIO`
+> geram `erro:`.
+
+**Pendente de validação institucional (hipótese baseada na amostra):**
+confirmar na prévia real se 1ª = vínculo e 2ª = pessoa antes de fixar essa
+interpretação em produção. Até a confirmação, o pipeline:
 
 - Sempre grava ambos os valores brutos em `raw_import_records.raw_values` sob
   chaves distintas (`"RESPONSAVEL_1"`, `"RESPONSAVEL_2"` ou equivalente
   posicional, nunca sobrescrevendo uma com a outra).
-- Grava a interpretação tentativa em `normalized_values.responsavel_original`
-  e `normalized_values.responsavel_unidade`.
+- Grava a interpretação tentativa em `normalized_values.vinculo_situacao` e
+  `normalized_values.responsavel_pessoa` (legado: `responsavel_original`/
+  `responsavel_unidade`).
 - Resolução de `responsible_person_id` (FK em `assets`): busca em
   `responsible_people` por `name` igual (normalizado: trim, colapso de espaços,
   comparação *case-insensitive*) dentro da unidade candidata. Se não houver
@@ -127,6 +139,8 @@ preenchimento herdado do controle manual anterior.
 
 Tratamento adotado na Fase 1:
 
+- A amostra de 2026-10-16 mostra `QT` = 25, 30, 32, 38... (parece contador
+  sequencial, não quantidade) — reforça a decisão de não interpretar.
 - `QT` é preservado em `raw_import_records.raw_values` e replicado, sem
   interpretação, em `normalized_values.qt_raw` (como texto, não como número).
 - **Nenhuma coluna `assets.quantity` é criada neste momento** — o modelo lógico
@@ -147,11 +161,58 @@ Mapeamento direto para os campos correspondentes de `assets` (`description`,
 - Datas: parse tolerante a formatos comuns de planilha (`DD/MM/AAAA` e
   variantes), gravando erro em `validation_errors` quando não parseável — nunca
   interpretar uma data inválida como `NULL` silenciosamente.
-- Unidade (`unit_id`)/sala (`room_id`)/local (`location_id`): resolvidos por
-  correspondência de nome/código contra os cadastros já existentes de `units`,
-  `rooms`, `locations`. Correspondência ambígua ou ausente gera
-  `validation_errors`, não criação automática de cadastro mestre a partir da
-  planilha — unidades/salas/locais são cadastros controlados.
+- Vínculos (implementado, etapa 3 — `app.services.import_references`; só para
+  itens NOVO, sem nunca criar cadastro mestre):
+  - `unit_id` <- sigla da coluna `UNIDADE` via `unit_aliases` (case-insensitive,
+    trim). Sigla vazia, sem alias ou de unidade inativa => item **INVALIDO**
+    com mensagem clara (nunca "chute", nunca por nome de unidade).
+  - `owner_unit_id` <- código de 6 dígitos de `UNIDADE_PERTENCENTE` => `units.code`.
+  - `located` <- S/N (`SIM`/`NAO`/`DESCONHECIDO`); `registration_date` e
+    `source_updated_at` <- valores normalizados (dd/mm/aaaa em America/Araguaina
+    -> UTC; sem valor, `source_updated_at` = instante da confirmação);
+    `notes` <- `OBSERVACAO`.
+  - `room_id` <- sala por NOME dentro da unidade do bem (casefold, espaços
+    colapsados). `responsible_person_id` <- 2ª `RESPONSAVEL` pela chave de casamento
+    entre pessoas ATIVAS. `USUARIO` (e-mail) vira `usuario_person_id` somente em
+    `normalized_values`; `assigned_user_id` permanece NULL. A 1ª `RESPONSAVEL`
+    (`Ocioso`...) é só `vinculo_situacao`, nunca pessoa.
+  - Sala/pessoa/unidade pertencente inexistente ou ambígua => **pendência**:
+    campo NULL, contada em `preview.pending_counts` / `ImportService.pending_report`
+    (`unidade_sem_alias`, `unidade_ausente`, `sala_nao_encontrada`,
+    `pessoa_nao_encontrada`, `pessoa_ambigua`, ...) e SEM bloquear a
+    confirmação dos itens válidos. Os vínculos são resolvidos na prévia
+    (informativo, em `normalized_values["_links"]`) e **de novo na confirmação**
+    (autoritativo; alias removido entre as etapas => falha do item).
+  - Itens EXISTENTE continuam atualizando só descrição/origem (não sobrescrevem
+    edição manual de sala, responsável, observações).
+
+### 4.5 Importação dos cadastros de apoio (unidades, salas, pessoas)
+
+`app.services.catalog_import_service.CatalogImportService` (+ normalizadores
+puros em `catalog_normalizer`), prévia -> confirmação, reutilizando
+`import_previews`/`import_preview_items` com `source = 'catalog:units|rooms|people'`
+(`ImportService.confirm_preview` recusa essas prévias e vice-versa). Leitura
+via `GoogleSheetsClient.read_tab_rows(sheet_name=..., sheet_gid=...)` (nome
+exato tem prioridade; sem nome nem GID nunca assume aba). Settings opcionais
+(documentadas em `.env.example`): `GOOGLE_SHEETS_{UNITS,ROOMS,PEOPLE}_SHEET_{NAME,GID}`.
+
+| Aba | Colunas | Regra |
+|---|---|---|
+| Unidades | `ID`, `UNIDADE` (sigla), `Orgao` (`023401 - NOME`) | casa por `units.code`; existente: grava `source_record_id` se vazio (nome não é alterado, divergência = aviso); ausente: cria. Garante o alias da sigla (sigla de outra unidade => CONFLITANTE) |
+| Salas | `ID`, `SALA`, `UNIDADE` (sigla) | único por (unidade, nome casefold); `06` e `6` distintas, listadas em "prováveis duplicatas" |
+| Pessoas | `ID`, `NOME`, `EMAIL`, `TELEFONE`, `UNIDADE` (sigla) | e-mail minúsculo/validado; telefone só dígitos (10–13; com/sem 55; inválido = NULL + aviso); sufixo ` -` removido; `Ocioso`/e-mail sem domínio válido não vira pessoa; mesmo e-mail => mantém a 1ª, a outra é DUPLICADO |
+
+Comuns: trim e espaços colapsados; grafia NUNCA corrigida (relatório de nomes
+suspeitos, ex.: `JÕAO`); sigla vazia/sem alias => INVALIDO (pendente); ID
+repetido na origem => linhas mantidas, conflito sinalizado, só a 1ª linha
+importável grava `source_record_id` (índice único) e o ID original fica em
+`raw_import_records`. Existente: só preenche campos vazios. Confirmação:
+savepoint por item, `SyncJob` + `RawImportRecord` + `AuditLog`
+(`CONFIRM_CATALOG_IMPORT`) na mesma transação, idempotente (prévia CONFIRMADA
+=> 409), revalidando contra o estado atual (corrida => falha só daquele item).
+O relatório (`create_preview(...).report`, `get_report`) traz classificações,
+pendências por código, `ids_repetidos`, `nomes_suspeitos` e `provaveis_duplicatas`.
+Sem rotas nesta etapa; as rotas (ADM + AAL2) vêm na próxima onda.
 
 ## 5. Idempotência
 
@@ -269,8 +330,8 @@ consome apenas as APIs autenticadas do Flask (`CLAUDE.md`), que permanece o
 1. Esquema real de identificação de linha na planilha (`source_record_id`) —
    depende de inspeção da planilha de produção.
 2. Confirmação do significado das duas colunas `RESPONSAVEL`.
-3. Política de criação automática (ou não) de `responsible_people` a partir de
-   nomes não encontrados na planilha.
+3. ~~Criação automática de `responsible_people`~~ — decidido: NÃO cria; pessoa
+   não encontrada é pendência; cadastros entram pela importação dedicada (4.5).
 4. Significado definitivo da coluna `QT` e, caso confirmado como quantidade,
    a decisão de modelagem associada (bens individuais vs. campo agregado).
 5. Lista fechada de campos de `assets` sincronizáveis automaticamente versus

@@ -1,5 +1,23 @@
 import type { Page, Request, Route } from "@playwright/test";
 
+import {
+  defaultDashboard,
+  handleDashboard,
+  type DashboardEndpoint,
+  type DashboardMockData,
+} from "./dashboard-mocks";
+import { defaultAssets, handleAssets, type AssetMockState } from "./asset-mocks";
+import { defaultMovements, handleMovements, type MovementMockState } from "./movement-mocks";
+import { defaultInventories, handleInventories, type InventoryMockState } from "./inventory-mocks";
+import { defaultCatalog, handleCatalog, type CatalogMockState } from "./catalog-mocks";
+import {
+  defaultCatalogImport,
+  handleCatalogImports,
+  PENDING_COUNTS_MOCK,
+  type CatalogImportMockOptions,
+  type CatalogImportMockState,
+} from "./catalog-import-mocks";
+
 // =============================================================================
 // Mocks SINTÉTICOS do Supabase Auth e da API Flask para os testes e2e.
 // =============================================================================
@@ -43,6 +61,24 @@ export interface MockOptions {
   prefs?: Partial<PreferencesMock>;
   /** Status HTTP forçado em `GET /api/v1/me/preferences` (ex.: 500 testa o estado de erro). */
   prefsGetStatus?: number;
+  /** Resposta de `GET /api/v1/dashboard/alerts` (padrão: 3 alertas, um crítico). */
+  alerts?: AlertsMock;
+  /** Status HTTP forçado em `GET /api/v1/dashboard/alerts` (ex.: 500 testa o estado de erro). */
+  alertsStatus?: number;
+  /** Respostas de `GET /api/v1/dashboard/{resumo,por-unidade,por-situacao,aquisicoes-mensais}` (padrão: dados sintéticos). */
+  dashboard?: Partial<DashboardMockData>;
+  /** Status HTTP forçado por endpoint do dashboard (ex.: `{ "por-unidade": 500 }`); testes podem mutar `state.dashboardStatus`. */
+  dashboardStatus?: Partial<Record<DashboardEndpoint, number>>;
+  /** Resposta de `GET /api/v1/ai/insights` (padrão: status ok com os 3 tipos). */
+  aiInsights?: AiInsightsMock;
+  /** Status HTTP forçado em `GET /api/v1/ai/insights` (ex.: 500, 403). */
+  aiInsightsStatus?: number;
+  /** Resposta de `POST /api/v1/ai/ask` (padrão: status ok com resposta). */
+  aiAsk?: AiAskMock;
+  /** Status HTTP forçado em `POST /api/v1/ai/ask` (ex.: 429, 403, 500). */
+  aiAskStatus?: number;
+  /** Atraso (ms) da resposta de `POST /api/v1/ai/ask` — testa envio duplo/estado "enviando". */
+  aiAskDelayMs?: number;
   /** Resultado de `POST /users/<id>/password-reset` (padrão "sent"). */
   passwordReset?: "sent" | "unavailable";
   /** Supabase Storage fora do ar: rotas de foto → 503 `storage_unavailable`. */
@@ -55,6 +91,22 @@ export interface MockOptions {
   usersRateLimitRetryAfter?: number;
   /** Status de `POST /security/mfa/factor-added-notice` (padrão 204; ex.: 500 testa o best-effort). */
   factorNoticeStatus?: number;
+  /** Cadastros de apoio: omite a chave `phone` (como o backend faz para quem não é ADM). */
+  catalogHidePhone?: boolean;
+  /** Cadastros de apoio: omite a chave `address` das unidades. */
+  catalogHideAddress?: boolean;
+  /** Importação dos cadastros (/catalog-imports) e pendências de bens: erros/variações simuladas. */
+  catalogImport?: CatalogImportMockOptions;
+  /** `GET /v1/units/accessible` responde com este status de erro (ex.: 403, 404, 500). */
+  accessibleUnitsStatus?: number;
+  /** `GET /v1/rooms` e `GET /v1/responsible-people` respondem com este status de erro (telas de consulta). */
+  lookupListStatus?: number;
+  /** `GET /v1/assets` responde com este status de erro (ex.: 403, 404, 500); testes também podem mudar `state.forceListStatus`. */
+  assetsListStatus?: number;
+  /** `GET /v1/movements` responde com este status de erro (ex.: 403, 404, 500); testes também podem mudar `state.forceMovementListStatus`. */
+  movementsListStatus?: number;
+  /** `GET /v1/inventories` responde com este status de erro (ex.: 403, 404, 500); testes também podem mudar `state.forceInventoryListStatus`. */
+  inventoriesListStatus?: number;
 }
 
 /** Espelho sintético do contrato `/api/v1/settings/ai` (docs/architecture/modulo-configuracoes.md). */
@@ -73,6 +125,79 @@ export interface AiSettingsMock {
   updated_at: string;
 }
 
+/** Espelho sintético do contrato `/api/v1/dashboard/alerts` (Etapa 4a). */
+export interface AlertsMock {
+  generated_at: string;
+  items: {
+    code: string;
+    severity: "info" | "warning" | "critical";
+    title: string;
+    description: string;
+    count: number;
+  }[];
+  unavailable: string[];
+}
+
+export function defaultAlerts(): AlertsMock {
+  return {
+    generated_at: "2026-10-15T15:00:00Z",
+    items: [
+      {
+        code: "duplicate_asset_number",
+        severity: "critical",
+        title: "Patrimônio duplicado",
+        description: "Números patrimoniais sintéticos repetidos entre bens ativos.",
+        count: 7,
+      },
+      {
+        code: "no_responsible",
+        severity: "warning",
+        title: "Bens sem responsável",
+        description: "Bens ativos sem responsável definido.",
+        count: 1234,
+      },
+      {
+        code: "sheets_conflicts",
+        severity: "info",
+        title: "Divergências do Google Sheets",
+        description: "Conflitos de sincronização pendentes de revisão.",
+        count: 0,
+      },
+    ],
+    unavailable: [],
+  };
+}
+
+/** Espelho sintético do contrato `/api/v1/ai/insights` (Etapa 4b). */
+export interface AiInsightsMock {
+  status: "ok" | "unavailable";
+  generated_at: string | null;
+  items: { kind: "alert_priority" | "executive_summary" | "quality_suggestion"; title: string; text: string }[];
+}
+
+/** Espelho sintético do contrato `POST /api/v1/ai/ask` (Etapa 4b). */
+export type AiAskMock = { status: "ok"; answer: string; tools_used: string[] } | { status: "unavailable" };
+
+export function defaultAiInsights(): AiInsightsMock {
+  return {
+    status: "ok",
+    generated_at: "2026-10-15T15:00:00Z",
+    items: [
+      {
+        kind: "alert_priority",
+        title: "Priorize os duplicados",
+        text: "Resolva primeiro o alerta de patrimônio duplicado.\nDepois trate os bens sem responsável.",
+      },
+      { kind: "executive_summary", title: "Resumo da semana", text: "Panorama sintético do patrimônio da unidade." },
+      { kind: "quality_suggestion", title: "Padronizar descrições", text: "Sugestão sintética para revisão humana." },
+    ],
+  };
+}
+
+export function defaultAiAsk(): AiAskMock {
+  return { status: "ok", answer: "Existem 1234 bens sem responsável.", tools_used: ["contar_bens"] };
+}
+
 /** Espelho sintético do contrato `/api/v1/me/preferences` (Etapa 3 — Aparência). */
 export interface PreferencesMock {
   density: "comfortable" | "compact";
@@ -86,7 +211,10 @@ export function defaultPreferences(): PreferencesMock {
 
 const PREFS_PATCH_FIELDS = new Set(["density", "font_scale", "version"]);
 
-export interface MockState {
+export interface MockState extends CatalogMockState, AssetMockState, MovementMockState, InventoryMockState {
+  catalogImport: CatalogImportMockState;
+  accessibleUnitsStatus: number | null;
+  lookupListStatus: number | null;
   role: Role;
   aal: "aal1" | "aal2";
   hasVerifiedFactor: boolean;
@@ -98,6 +226,15 @@ export interface MockState {
   /** Preferências de aparência do próprio usuário (testes podem simular edição concorrente). */
   prefs: PreferencesMock;
   prefsGetStatus: number | null;
+  alerts: AlertsMock;
+  alertsStatus: number | null;
+  dashboard: DashboardMockData;
+  dashboardStatus: Partial<Record<DashboardEndpoint, number>>;
+  aiInsights: AiInsightsMock;
+  aiInsightsStatus: number | null;
+  aiAsk: AiAskMock;
+  aiAskStatus: number | null;
+  aiAskDelayMs: number;
   /** Usuários administráveis (contrato `UserSummary`); testes podem mutar. */
   users: UserMock[];
   /** Unidades do escopo do ADM (`GET /api/v1/units`). */
@@ -508,6 +645,26 @@ async function handleMyAvatar(route: Route, state: MockState, method: string, pa
   return true;
 }
 
+/**
+ * Telas de CONSULTA (todos os perfis): `GET /v1/units/accessible` (contrato novo:
+ * `{units:[{id,code,name,active}]}`, sem parâmetros, escopo do usuário) e erros
+ * forçados nas listagens de salas/pessoas. ADM sem AAL2 => 403 AAL2_REQUIRED.
+ */
+async function handleLookup(route: Route, state: MockState, method: string, path: string, url: URL): Promise<boolean> {
+  const isAccessible = path === "/v1/units/accessible" && method === "GET";
+  const isList = (path === "/v1/rooms" || path === "/v1/responsible-people") && method === "GET";
+  if (!isAccessible && !isList) return false;
+  const forced = isAccessible ? state.accessibleUnitsStatus : state.lookupListStatus;
+  if (forced && forced >= 400) return apiError(route, forced, forced === 403 ? "FORBIDDEN" : "INTERNAL", "SISPAT_BACKEND_MSG");
+  if (!isAccessible) return false; // listagens seguem para o handler do catálogo
+  if (state.role === "ADM" && state.aal !== "aal2") return apiError(route, 403, "AAL2_REQUIRED", "MFA obrigatório");
+  if ([...url.searchParams.keys()].length > 0) return apiError(route, 400, "validation_error");
+  await json(route, 200, {
+    units: Object.values(state.unitDetails).map((u) => ({ id: u.id, code: u.code, name: u.name, active: u.active })),
+  });
+  return true;
+}
+
 /** Rotas administrativas de usuários/unidades (ADM + AAL2). `true` = tratada. */
 async function handleUserAdmin(
   route: Route,
@@ -748,7 +905,26 @@ export async function installMocks(page: Page, opts: MockOptions = {}): Promise<
     meHasAvatar: opts.meHasAvatar ?? false,
     meStatus: opts.meStatus ?? null,
     usersRateLimitRetryAfter: opts.usersRateLimitRetryAfter ?? null,
+    alerts: opts.alerts ?? defaultAlerts(),
+    alertsStatus: opts.alertsStatus ?? null,
+    dashboard: { ...defaultDashboard(), ...opts.dashboard },
+    dashboardStatus: { ...opts.dashboardStatus },
+    aiInsights: opts.aiInsights ?? defaultAiInsights(),
+    aiInsightsStatus: opts.aiInsightsStatus ?? null,
+    aiAsk: opts.aiAsk ?? defaultAiAsk(),
+    aiAskStatus: opts.aiAskStatus ?? null,
+    aiAskDelayMs: opts.aiAskDelayMs ?? 0,
     factorNoticeStatus: opts.factorNoticeStatus ?? 204,
+    ...defaultCatalog(UNITS, { hidePhone: opts.catalogHidePhone, hideAddress: opts.catalogHideAddress }),
+    ...defaultAssets(UNITS),
+    forceListStatus: opts.assetsListStatus ?? null,
+    ...defaultMovements(UNITS),
+    forceMovementListStatus: opts.movementsListStatus ?? null,
+    ...defaultInventories(UNITS),
+    forceInventoryListStatus: opts.inventoriesListStatus ?? null,
+    catalogImport: defaultCatalogImport(opts.catalogImport),
+    accessibleUnitsStatus: opts.accessibleUnitsStatus ?? null,
+    lookupListStatus: opts.lookupListStatus ?? null,
     reauthVerified: false,
     calls: [],
   };
@@ -889,6 +1065,32 @@ export async function installMocks(page: Page, opts: MockOptions = {}): Promise<
       });
     }
 
+    if (await handleDashboard({ state, method, path, respond: (status, payload) => json(route, status, payload) })) {
+      return;
+    }
+
+    if (path === "/v1/dashboard/alerts" && method === "GET") {
+      if (state.alertsStatus && state.alertsStatus >= 400) {
+        return json(route, state.alertsStatus, { error: { code: "INTERNAL", message: "SISPAT_BACKEND_MSG" } });
+      }
+      return json(route, 200, state.alerts);
+    }
+
+    if (path === "/v1/ai/insights" && method === "GET") {
+      if (state.aiInsightsStatus && state.aiInsightsStatus >= 400) {
+        return json(route, state.aiInsightsStatus, { error: { code: "INTERNAL", message: "SISPAT_BACKEND_MSG" } });
+      }
+      return json(route, 200, state.aiInsights);
+    }
+
+    if (path === "/v1/ai/ask" && method === "POST") {
+      if (state.aiAskDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, state.aiAskDelayMs));
+      if (state.aiAskStatus && state.aiAskStatus >= 400) {
+        return json(route, state.aiAskStatus, { error: { code: "AI_ERROR", message: "SISPAT_BACKEND_MSG" } });
+      }
+      return json(route, 200, state.aiAsk);
+    }
+
     if (path === "/v1/me/preferences" && (method === "GET" || method === "PATCH")) {
       if (method === "GET") {
         if (state.prefsGetStatus && state.prefsGetStatus >= 400) {
@@ -917,8 +1119,72 @@ export async function installMocks(page: Page, opts: MockOptions = {}): Promise<
       return json(route, 200, state.prefs);
     }
 
+    if (await handleLookup(route, state, method, path, url)) return;
+    if (
+      await handleAssets({
+        state,
+        method,
+        path,
+        searchParams: url.searchParams,
+        rawKeys: [...url.searchParams.keys()],
+        body,
+        respond: (status, payload) => json(route, status, payload),
+      })
+    ) {
+      return;
+    }
+    if (
+      await handleMovements({
+        state,
+        method,
+        path,
+        searchParams: url.searchParams,
+        rawKeys: [...url.searchParams.keys()],
+        body,
+        respond: (status, payload) => json(route, status, payload),
+      })
+    ) {
+      return;
+    }
+    if (
+      await handleInventories({
+        state,
+        method,
+        path,
+        searchParams: url.searchParams,
+        rawKeys: [...url.searchParams.keys()],
+        body,
+        respond: (status, payload) => json(route, status, payload),
+      })
+    ) {
+      return;
+    }
     if (await handleMyAvatar(route, state, method, path)) return;
     if (await handleUserAdmin(route, state, method, path, url, body)) return;
+    if (
+      await handleCatalog({
+        state,
+        method,
+        path,
+        searchParams: url.searchParams,
+        body,
+        respond: (status, payload) => json(route, status, payload),
+      })
+    ) {
+      return;
+    }
+    if (
+      await handleCatalogImports({
+        state: { ...state.catalogImport, role: state.role, aal: state.aal },
+        method,
+        path,
+        searchParams: url.searchParams,
+        body,
+        respond: (status, payload) => json(route, status, payload),
+      })
+    ) {
+      return;
+    }
 
     if (path === "/v1/users/invite" && method === "POST") {
       const email = (body as { email?: string } | undefined)?.email ?? "";
@@ -1009,6 +1275,7 @@ export async function installMocks(page: Page, opts: MockOptions = {}): Promise<
           conflitante: count("CONFLITANTE"),
         },
         expires_at: new Date(Date.now() + 3_600_000).toISOString(),
+        pending_counts: PENDING_COUNTS_MOCK,
       });
     }
 

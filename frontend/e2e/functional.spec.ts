@@ -27,6 +27,23 @@ const PROTECTED = [
   "/configuracoes/inteligencia-artificial",
   "/administracao/usuarios",
   "/administracao/importacao/google-sheets",
+  "/administracao/importacao/cadastros",
+  "/administracao",
+  "/patrimonios",
+  "/unidades",
+  "/salas-localizacoes",
+  "/responsaveis",
+  "/inventarios",
+  "/movimentacoes",
+  "/relatorios",
+  "/dashboard",
+  "/dashboard/relatorio",
+  "/importacoes",
+  "/administracao/perfis-permissoes",
+  "/administracao/vinculos-unidades",
+  "/administracao/auditoria",
+  "/administracao/integracoes",
+  "/administracao/configuracoes-sistema",
 ];
 
 test.describe("proteção de rotas sem sessão", () => {
@@ -34,7 +51,8 @@ test.describe("proteção de rotas sem sessão", () => {
     test(`${path} → /login, sem renderizar conteúdo protegido`, async ({ page }) => {
       const state = await installMocks(page);
       await page.goto(path);
-      await expect(page).toHaveURL(/\/login$/);
+      // 1ª compilação da rota no `next dev` + hidratação sob carga da suíte.
+      await expect(page).toHaveURL(/\/login$/, { timeout: 60_000 });
       await expect(page.getByRole("heading", { level: 1, name: "Entrar" })).toBeVisible();
       // Nenhuma chamada à API patrimonial/administrativa sem sessão.
       expect(state.calls.filter((c) => c.url.startsWith("/api/v1/") && c.method !== "OPTIONS")).toEqual([]);
