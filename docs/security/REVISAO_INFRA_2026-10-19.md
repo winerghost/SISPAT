@@ -174,3 +174,25 @@ M1 (decisão de arquitetura da importação), M2 (cabeçalhos duplicados,
 especialmente Referrer-Policy em `/ativar-conta`), M3 e M4. Os demais podem
 seguir como pendências rastreadas. Não verifiquei o estado real da VPS,
 do Supabase nem executei os testes.
+
+## Adendo — implantação de 2026-10-20 (estado real da VPS)
+
+- **M2 confirmado na prática e resolvido:** o vhost padrão do CloudPanel inclui
+  `/etc/nginx/global_settings` (`Referrer-Policy same-origin`,
+  `X-Frame-Options SAMEORIGIN`, `X-Content-Type-Options`, `X-XSS-Protection`,
+  `X-Permitted-Cross-Domain-Policies`, `alt-svc`) e `Cache-Control
+  no-transform`. Ambos removidos do vhost do site
+  (`infra/cloudpanel/vhost.ueato-cloudpanel.conf`); verificado de fora que cada
+  cabeçalho aparece uma vez.
+- **Novo (MÉDIO, fora do escopo do SISPAT):** o `nginx.conf` global do
+  CloudPanel tem `set_real_ip_from 0.0.0.0/0` (cabeçalho padrão `X-Real-IP`).
+  Qualquer cliente que conecte direto no IP da VPS pode forjar `X-Real-IP` com
+  um IP da Cloudflare e passar pelo "Allow traffic from Cloudflare only". No
+  vhost do SISPAT isso foi anulado com `set_real_ip_from 127.0.0.1;`. Os
+  OUTROS sites da VPS continuam expostos; correção depende do responsável
+  (alterar o `nginx.conf` global afeta todos os sites).
+- **IP real:** com o filtro "Cloudflare only" (`deny all` para não-Cloudflare),
+  o vhost usa `$http_cf_connecting_ip` em `X-Forwarded-For`, `X-Real-IP` e nas
+  zonas de rate limit, em vez do módulo `real_ip`.
+- **Erro do modelo corrigido:** a regex com `{36}` no `location` do avatar
+  precisava de aspas (`nginx -t` falhava); corrigido no `vhost.conf.example`.

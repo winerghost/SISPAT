@@ -123,6 +123,32 @@ sudo nginx -t && sudo systemctl reload nginx
 ```
 Atenção: o CloudPanel pode regenerar o vhost; mantenha o conteúdo final salvo
 fora do painel e reconfira após alterações no site.
+
+### Como ficou na implantação de 2026-10-20 (vhost em uso)
+Vhost aplicado: `infra/cloudpanel/vhost.ueato-cloudpanel.conf` (portas 8110/3110).
+Diferenças em relação ao modelo, por causa do CloudPanel da Hostinger:
+- O site usa **"Allow traffic from Cloudflare only"** (`include
+  /etc/nginx/cloudflare/ips`, lista de `allow` terminando em `deny all`). Por
+  isso o vhost NÃO usa `set_real_ip_from` das faixas da Cloudflare: com o
+  `real_ip`, o `deny all` passaria a ver o IP do usuário e bloquearia todos. O
+  IP real vem de `$http_cf_connecting_ip` (confiável, pois só a Cloudflare
+  conecta) em `X-Forwarded-For`, `X-Real-IP` e nas zonas de rate limit. O
+  bloqueante do `grep -c set_real_ip_from` acima não se aplica neste modo.
+- O `nginx.conf` do CloudPanel tem `set_real_ip_from 0.0.0.0/0` (cabeçalho
+  `X-Real-IP` aceito de qualquer origem, o que permite burlar o "Cloudflare
+  only"). O vhost anula isso no site com `set_real_ip_from 127.0.0.1;`. Os
+  outros sites da VPS continuam expostos (pendência do responsável).
+- O modelo de proxy reverso do CloudPanel inclui `/etc/nginx/global_settings`
+  (`Referrer-Policy same-origin`, `X-Frame-Options SAMEORIGIN`...) e
+  `add_header Cache-Control no-transform`. Os dois foram REMOVIDOS do vhost
+  (duplicavam os cabeçalhos do Next/Flask). Não editar o `global_settings`:
+  ele é usado pelos outros sites.
+- Regex com `{36}` precisa de aspas no `location` (sem elas, `nginx -t` falha).
+- Copiar o vhost do terminal quebra espaços ("invalid number of arguments");
+  copiar de um arquivo aberto no Bloco de Notas.
+- Verificado de fora em 2026-10-20: `/api/health` -> `{"status":"ok"}`; em
+  `/ativar-conta` e `/api/health`, cada cabeçalho de segurança aparece uma vez
+  (`no-referrer` em `/ativar-conta`).
 Rollback do vhost: restaurar o `.bak`, `sudo nginx -t && sudo systemctl reload nginx`.
 
 ## 6. Verificação pós-subida

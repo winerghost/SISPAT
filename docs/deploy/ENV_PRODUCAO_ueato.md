@@ -55,6 +55,21 @@ GOOGLE_SHEETS_PEOPLE_SHEET_NAME / _GID    # idem, Pessoas
   (nenhum placeholder `<...>` restante) e `grep -c '^REDIS_URL=redis://:' .env`
   deve dar 1.
 
+## Valores usados na implantação (2026-10-20)
+
+- `BACKEND_PORT=8110` e `FRONTEND_PORT=3110`: a VPS roda outros sistemas nas
+  portas 3000/8000. Antes de escolher, confira com
+  `sudo ss -ltnp | grep -E ':(8110|3110)\b'` (deve voltar vazio). As mesmas
+  portas vão no vhost.
+- `GOOGLE_SHEETS_CREDENTIALS_HOST_PATH=/etc/google_sheets_credentials.json`
+  e `GOOGLE_SHEETS_CREDENTIALS_JSON=/run/secrets/google_sheets_credentials.json`
+  (caminho DENTRO do container; nunca um caminho do Windows).
+- Erros comuns ao copiar o `.env` local para a VPS: caminhos `C:/...`, URLs
+  `http://localhost`, variável repetida e espaço no fim da linha. Conferências:
+  `grep -nE '^[^#]*(localhost|C:/)' .env` vazio,
+  `grep -c '^INVITE_ALLOWED_REDIRECT_URLS=' .env` = 1,
+  `grep -n ' $' .env` vazio (corrigir com `sed -i 's/[[:space:]]*$//' .env`).
+
 ## Recomendados
 
 `DB_STATEMENT_TIMEOUT_MS=120000`, `AI_ENABLED=false`,
@@ -72,6 +87,9 @@ GOOGLE_SHEETS_PEOPLE_SHEET_NAME / _GID    # idem, Pessoas
 ## Cloudflare / CloudPanel
 
 - DNS `ueato` proxied; SSL/TLS em Full (strict).
+- **Vhost em uso:** `infra/cloudpanel/vhost.ueato-cloudpanel.conf` (modo
+  "Allow traffic from Cloudflare only", sem `set_real_ip_from` das faixas da
+  Cloudflare; ver ROTEIRO, seção 5). O texto abaixo descreve o modelo genérico.
 - Vhost a partir de `infra/cloudpanel/vhost.conf.example`: preencher
   `<BACKEND_PORT>`, `<FRONTEND_PORT>` e as faixas `set_real_ip_from` baixadas de
   cloudflare.com/ips. `nginx -t` antes de recarregar.

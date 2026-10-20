@@ -371,3 +371,32 @@ Ciclo de correção pré-deploy concluído; deploy ainda NÃO realizado.
   isoladamente, o spec passou 10/10. Total: 2209 testes, nenhuma falha real.
 - Deploy: o build do frontend muda (Nivo no `package-lock.json`), então
   a VPS precisa de `docker compose build frontend backend`.
+
+## Implantação concluída — 2026-10-20
+
+Executada pelo responsável na VPS (`/opt/SISPAT`), com autorização explícita e
+orientação passo a passo.
+
+- `.env` de produção: URLs `https://`, portas `BACKEND_PORT=8110` e
+  `FRONTEND_PORT=3110` (3000/8000 ocupadas por outros sistemas), credencial do
+  Sheets em `/etc/google_sheets_credentials.json` (0400, dono 10001).
+  Corrigidos na hora: caminhos do Windows (`C:/...`) copiados do `.env` local,
+  `INVITE_ALLOWED_REDIRECT_URLS` duplicada e espaço no fim de linha.
+- Imagens `backend` e `frontend` construídas na VPS.
+- Alembic: o primeiro `stamp` falhou (`StringDataRightTruncation`: ID com 38
+  caracteres em `varchar(32)`; transação desfeita, banco inalterado). IDs
+  0008/0009/0011 encurtados, com teste de regressão; novo `stamp` OK ->
+  `0011_dashboard_charts_prefs (head)`.
+- `docker compose up -d`: `backend`, `frontend` e `redis` healthy;
+  `/api/health` -> `{"status":"ok"}`; `/login` -> 200.
+- CloudPanel: o primeiro vhost era o padrão do painel (tudo para o frontend,
+  `/api/` caía no 404 do Next.js) e incluía `global_settings`
+  (`Referrer-Policy same-origin` duplicado). Substituído por
+  `infra/cloudpanel/vhost.ueato-cloudpanel.conf` (validado com `nginx -t`
+  antes). Detalhes no `ROTEIRO_VPS_ueato.md`, seção 5.
+- Verificação externa: `/api/health` ok; em `/ativar-conta` e `/api/health`
+  cada cabeçalho de segurança aparece uma única vez (`no-referrer` em
+  `/ativar-conta`).
+- Pendente: teste no navegador (login ADM + MFA, dashboard), itens de Supabase
+  Auth, trivy, limite de 100 s da Cloudflare, worker e
+  `set_real_ip_from 0.0.0.0/0` no `nginx.conf` global do CloudPanel.

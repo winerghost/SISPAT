@@ -123,6 +123,10 @@ Alembic; compare por conteúdo). O `alembic_version` do banco está em `0006`. P
    (esperado `0011_dashboard_charts_prefs (head)`).
 5. [ ] Registre data, autorizador e resultado em `docs/database/historico-migracoes.md`.
 
+> **Feito em 2026-10-20:** banco carimbado em `0011_dashboard_charts_prefs (head)`.
+> Em deploys futuros, use `alembic upgrade head` normalmente (o carimbo já está
+> correto) e só depois de autorização explícita.
+
 ## 4. Subida
 
 ```bash

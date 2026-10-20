@@ -134,9 +134,25 @@ autorização explícita. Documentos:
   `REVISAO_INFRA_2026-10-19.md` e `REVISAO_POS_CORRECOES_2026-10-19.md`.
 
 Nginx não emite cabeçalhos de segurança (Next.js e Flask emitem; tabela no
-vhost). Pendências conhecidas: gitleaks e trivy não executados, vhost sem
-`nginx -t`, limite de 100 s da Cloudflare na prévia do Sheets (decisão do
-responsável).
+vhost).
+
+### Implantado (2026-10-20)
+
+- Em produção em `https://ueato.revizzicar.com.br` (VPS Hostinger, CloudPanel,
+  Cloudflare com "Allow traffic from Cloudflare only"). Containers `backend`,
+  `frontend` e `redis` saudáveis; portas `127.0.0.1:8110` (API) e
+  `127.0.0.1:3110` (site).
+- Vhost em uso: [`infra/cloudpanel/vhost.ueato-cloudpanel.conf`](./infra/cloudpanel/vhost.ueato-cloudpanel.conf);
+  as diferenças em relação ao modelo estão no roteiro (seção 5).
+- Alembic carimbado em `0011_dashboard_charts_prefs` (IDs encurtados para
+  caber em `varchar(32)`; ver `docs/database/historico-migracoes.md`).
+- Verificado de fora: `/api/health` ok e cada cabeçalho de segurança emitido
+  uma única vez.
+- Pendências: teste completo no navegador (login ADM com MFA, dashboard);
+  Supabase Auth (template de convite, SMTP próprio, senhas vazadas, remover
+  Redirect URLs de localhost); trivy; limite de 100 s da Cloudflare na prévia
+  do Sheets; worker Celery; `set_real_ip_from 0.0.0.0/0` global do CloudPanel
+  (afeta os outros sites da VPS).
 
 ### Dashboard: gráficos personalizáveis (2026-10-20)
 
@@ -150,8 +166,7 @@ responsável).
   /api/v1/me/preferences`), validada no backend. Detalhes em
   `docs/ux/DASHBOARD_GRAFICOS.md`.
 - Migração Alembic `0011_dashboard_charts_prefs` (espelho
-  `sql/0014`) **já aplicada** no Supabase. No deploy, usar `alembic stamp
-  0011_dashboard_charts_prefs`, sem `upgrade`.
+  `sql/0014`) aplicada no Supabase e carimbada no deploy de 2026-10-20.
 - Revisão: `docs/security/REVISAO_DASHBOARD_NIVO_2026-10-20.md` (L-1 corrigido;
   L-2 e `npm dedupe` ficaram para depois do deploy).
 

@@ -1,6 +1,11 @@
 # Históricos de migração (Supabase x Alembic)
 
-Atualizado em 2026-10-14.
+Atualizado em 2026-10-20.
+
+> **Estado atual (2026-10-20):** `alembic_version` = `0011_dashboard_charts_prefs`
+> (head), carimbado no deploy da VPS com `alembic stamp` (sem DDL). O esquema
+> real já continha 0007-0011, aplicadas manualmente pelos espelhos `.sql`. A
+> seção "Estado em produção" abaixo é histórica (2026-10-15).
 
 ## Dois históricos distintos
 
@@ -23,7 +28,7 @@ Dependem de autorização explícita e de migração Alembic versionada + espelh
 1. `ALTER TABLE public.alembic_version ENABLE ROW LEVEL SECURITY;`
 2. `CREATE INDEX ix_invites_revoked_by ON invites (revoked_by);`
 
-## Estado em produção
+## Estado em produção (histórico, 2026-10-15)
 
 Alembic aplicado até `0005_settings_ai_users` (conforme registrado em
 2026-10-15). `0006_email_settings_permission` (head atual) está **escrita e
@@ -75,3 +80,11 @@ foram encurtados (os nomes de arquivo não mudaram):
 
 Regressão: `test_db_alembic_revision_ids_cabem_em_alembic_version` em
 `backend/tests/test_db_static.py` (todo ID com no máximo 32 caracteres).
+
+## Carimbo no deploy (2026-10-20)
+
+Na VPS, com autorização do responsável e após conferir o backup do Supabase:
+`alembic current` -> `0006_email_settings_permission`;
+`alembic stamp 0011_dashboard_charts_prefs` ->
+`Running stamp_revision 0006_email_settings_permission -> 0011_dashboard_charts_prefs`;
+`alembic current` -> `0011_dashboard_charts_prefs (head)`. Nenhum DDL executado.
