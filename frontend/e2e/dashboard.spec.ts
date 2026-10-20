@@ -100,10 +100,11 @@ test.describe("dashboard", () => {
     const legend = bars.getByRole("list", { name: /Legenda/ });
     await expect(legend.getByText("Mobiliario")).toBeVisible();
     await expect(legend.getByText("Outros (2)")).toBeVisible();
-    await expect(bars.locator("svg.recharts-surface")).toHaveCount(1);
+    await expect(bars.locator("[data-chart-surface=nivo] svg")).toHaveCount(1);
 
     const donut = block(page, "por-situacao");
-    await expect(donut.getByRole("img", { name: /Gráfico de rosca/ })).toBeVisible();
+    // Padrão da situação = pizza (preferência `dashboard_charts.status`).
+    await expect(donut.getByRole("img", { name: /Gráfico de pizza/ })).toBeVisible();
     await expect(donut.getByRole("list", { name: /Legenda/ })).toContainText("Nao localizado");
     await expect(donut.getByRole("list", { name: /Legenda/ })).toContainText("90");
 
@@ -115,7 +116,7 @@ test.describe("dashboard", () => {
     await expect(lineTable.getByRole("row", { name: /out.*37/i })).toHaveCount(1);
     await expect(lineTable.getByRole("row", { name: /jul.*0/i })).toHaveCount(1);
 
-    // Seleção por teclado na legenda da rosca (aria-pressed).
+    // Seleção por teclado na legenda da pizza (aria-pressed).
     const pick = donut.getByRole("button", { name: /Nao localizado/ });
     await pick.focus();
     await page.keyboard.press("Enter");
@@ -151,7 +152,7 @@ test.describe("dashboard", () => {
     await expect(block(page, "por-unidade")).toContainText("Nenhum bem cadastrado");
     await expect(block(page, "por-situacao")).toContainText("Nenhum bem para classificar");
     await expect(block(page, "aquisicoes-mensais")).toContainText("Nenhuma aquisição no período");
-    await expect(page.locator("svg.recharts-surface")).toHaveCount(0);
+    await expect(page.locator("[data-chart-surface]")).toHaveCount(0);
     await expect(page.locator("figure")).toHaveCount(0);
     // KPIs reais (zeros do backend) continuam exibidos; sem variação.
     await expect(block(page, "indicadores").locator("[data-stat-card=total-bens]")).toContainText("0");

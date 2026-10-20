@@ -16,7 +16,7 @@ from typing import Any, Callable, TypeVar
 from flask import g, request
 from werkzeug.exceptions import BadRequest
 
-from app.api.v1.schemas import parse_body, reject_unexpected_fields
+from app.api.v1.schemas import get_json_body, parse_body, reject_unexpected_fields
 from app.api.v1.user_admin_http import error_response, validation_error
 from app.authorization.rbac import require_aal2
 from app.authorization.security_events import (
@@ -81,11 +81,7 @@ def catalog_error_response(
 def read_body(model: type, context: str):
     """Corpo JSON obrigatório; devolve `(instância, None)` ou `(None, resposta 400)`."""
     try:
-        try:
-            payload = request.get_json(silent=True)
-        except RecursionError:  # SEC-REV-01: JSON profundamente aninhado
-            payload = None
-        return parse_body(model, payload, context=context), None
+        return parse_body(model, get_json_body(), context=context), None
     except BadRequest as exc:
         return None, validation_error(exc)
 

@@ -20,7 +20,7 @@ from werkzeug.exceptions import BadRequest, RequestEntityTooLarge
 from werkzeug.formparser import FormDataParser
 from werkzeug.wsgi import get_input_stream
 
-from app.api.v1.schemas import reject_unexpected_fields
+from app.api.v1.schemas import get_json_body, reject_unexpected_fields
 from app.authorization.security_events import (
     EVENT_ACCESS_DENIED,
     EVENT_UNIT_SCOPE_DENIED,
@@ -116,7 +116,7 @@ def reject_any_body(context: str):
     """Rotas sem corpo: qualquer corpo não vazio -> 400 (campos auditados)."""
     if not request.get_data(cache=True).strip():
         return None
-    body = request.get_json(silent=True)
+    body = get_json_body()
     if body == {}:
         return None
     if isinstance(body, dict):

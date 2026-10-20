@@ -92,7 +92,7 @@ def test_nome_de_objeto_fora_da_allowlist_nao_chega_a_rede(key):
         {"supabase_url": None},
         {"supabase_service_role_key": None},
         {"supabase_url": "http://localhost:54321", "flask_env": "production", "secret_key": "s" * 40,
-         "supabase_jwt_secret": "j" * 40},
+         "supabase_jwt_secret": "j" * 40, "cors_allowed_origins": "https://app.example.test"},
     ],
 )
 def test_configuracao_insegura_ou_ausente_falha_fechado(overrides):

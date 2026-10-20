@@ -336,13 +336,21 @@ usuário do JWT (nenhum id vem do cliente). Tabela `user_preferences` (migraçã
 
 ### `GET /api/v1/me/preferences`
 
-200 `{"density": "comfortable"|"compact", "font_scale": 100|112|125, "version": int}`.
-Sem linha: `comfortable` / `100` / `version: 0` (o GET não cria linha).
+200 `{"density": "comfortable"|"compact", "font_scale": 100|112|125, "dashboard_charts": {"units", "status", "monthly"}, "version": int}`.
+Sem linha: `comfortable` / `100` / gráficos padrão / `version: 0` (o GET não cria linha).
+
+`dashboard_charts` (tipo de gráfico por painel do dashboard; allowlist FECHADA, sempre devolvido
+com as 3 chaves resolvidas): `units` in {`grouped` (padrão), `stacked`, `horizontal`};
+`status` in {`pie` (padrão), `donut`, `bar`}; `monthly` in {`line` (padrão), `area`, `bar`}.
+Persistido em `user_preferences.dashboard_charts` (JSONB NOT NULL DEFAULT `{}`), só com as chaves
+não padrão.
 
 ### `PATCH /api/v1/me/preferences`
 
-Corpo `{"density"?, "font_scale"?, "version"}` (`extra="forbid"`). `version` é obrigatório
-(inteiro >= 0; `0` cria a primeira linha) e ao menos uma preferência deve vir. Resposta: mesmo
+Corpo `{"density"?, "font_scale"?, "dashboard_charts"?, "version"}` (`extra="forbid"`).
+`dashboard_charts` é parcial (merge por chave); `null` numa chave restaura o padrão dela (remove
+do JSON salvo); chave desconhecida, valor fora da allowlist, tipo errado ou objeto aninhado -> 400. `version` é obrigatório
+(inteiro >= 0; `0` cria a primeira linha) e ao menos uma preferência (ou uma chave de `dashboard_charts`) deve vir. Resposta: mesmo
 formato do GET. Erros no formato `{"error": {"code", "message"}}`:
 
 - 400 `validation_error`: valor fora da allowlist, tipo errado, `null`, nenhum campo de
@@ -357,7 +365,8 @@ formato do GET. Erros no formato `{"error": {"code", "message"}}`:
   em `api/v1/schemas.py`, rotas em `api/v1/me.py`. Testes: `backend/tests/test_preferences_api.py`.
 - `SELECT ... FOR UPDATE` + comparação de `version`; a primeira linha nasce com `version = 1`.
 - Auditoria `USER_PREFERENCES_UPDATED` (entidade `user_preferences`, `entity_id` = id do
-  usuário) na mesma transação, com `previous_values`/`new_values` = `{density, font_scale, version}`.
+  usuário) na mesma transação, com `previous_values`/`new_values` = `{density, font_scale, dashboard_charts, version}` (sem dados pessoais).
+  Testes dos gráficos: `backend/tests/test_dashboard_charts_preferences.py`.
 - Rate limit por usuário (falha fechada): leitura 600/h, escrita 60/h.
 - Matriz de permissões: sem permissão nova (rota AUTH, como `/me`); registrada em
   `test_sec_route_inventory.py`.

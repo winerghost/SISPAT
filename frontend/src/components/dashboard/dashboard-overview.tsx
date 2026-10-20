@@ -10,7 +10,7 @@ import { cn } from "@/lib/utils";
 
 import dynamic from "next/dynamic";
 
-// Recharts (~170 kB) só é baixado quando há dados para um gráfico; o estado
+// Nivo (gráficos) só é baixado quando há dados para um gráfico; o estado
 // vazio do dashboard não paga esse custo (Core Web Vitals / mobile).
 const AnimatedChart = dynamic(
   () => import("./animated-chart").then((mod) => mod.AnimatedChart),

@@ -31,10 +31,10 @@ Foto de perfil do PRÓPRIO usuário (Etapa 2; contrato em
 """
 from __future__ import annotations
 
-from flask import Blueprint, g, jsonify, request
+from flask import Blueprint, g, jsonify
 from werkzeug.exceptions import BadRequest
 
-from app.api.v1.schemas import PreferencesUpdateRequest, parse_body
+from app.api.v1.schemas import PreferencesUpdateRequest, get_json_body, parse_body
 from app.api.v1.user_admin_http import (
     StorageUnavailableError,
     admin_rate_limit_key,
@@ -111,7 +111,7 @@ def get_my_preferences():
 def update_my_preferences():
     try:
         changes = parse_body(
-            PreferencesUpdateRequest, request.get_json(silent=True), context="me.preferences.update"
+            PreferencesUpdateRequest, get_json_body(), context="me.preferences.update"
         )
     except BadRequest as exc:
         return validation_error(exc)

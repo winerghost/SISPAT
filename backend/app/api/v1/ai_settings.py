@@ -20,10 +20,10 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from flask import Blueprint, g, jsonify, request
+from flask import Blueprint, g, jsonify
 from werkzeug.exceptions import BadRequest
 
-from app.api.v1.schemas import AISettingsUpdate, parse_body, reject_unexpected_fields
+from app.api.v1.schemas import AISettingsUpdate, get_json_body, parse_body, reject_unexpected_fields
 from app.auth.supabase_auth import require_auth
 from app.authorization.rbac import require_aal2, require_permission, require_role
 from app.authorization.security_events import get_request_id
@@ -85,7 +85,7 @@ def get_ai_settings_endpoint():
 def update_ai_settings_endpoint():
     try:
         changes = parse_body(
-            AISettingsUpdate, request.get_json(silent=True), context="settings.ai.update"
+            AISettingsUpdate, get_json_body(), context="settings.ai.update"
         )
     except BadRequest as exc:
         return _validation_error(exc)
@@ -108,7 +108,7 @@ def update_ai_settings_endpoint():
 @require_permission(_PERMISSION)
 @rate_limit(_admin_rate_limit_key, limit=_TEST_LIMIT_PER_HOUR, window_seconds=_WINDOW_SECONDS)
 def test_ai_connection_endpoint():
-    body = request.get_json(silent=True)
+    body = get_json_body()
     if body is not None and body != {}:
         if isinstance(body, dict):
             try:

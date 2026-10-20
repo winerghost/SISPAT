@@ -1,6 +1,8 @@
 # Checklist de deploy — VPS Hostinger + CloudPanel + Cloudflare
 
-Atualizado em 2026-10-14. Complementa `hostinger-cloudpanel-cloudflare.md`; em caso de
+Atualizado em 2026-10-19. CHECKLIST CANÔNICO (substitui `docs/deploy/CHECKLIST.md`, cujo
+conteúdo virou os anexos ao final). Roteiro operacional do domínio:
+`docs/deploy/ROTEIRO_VPS_ueato.md`. Complementa `hostinger-cloudpanel-cloudflare.md`; em caso de
 conflito (ex.: ordem de migrações), **este checklist prevalece**. Nenhum valor real de
 segredo deve ser escrito aqui, em tickets ou em chats.
 
@@ -17,8 +19,15 @@ segredo deve ser escrito aqui, em tickets ou em chats.
       Cloudflare (https://www.cloudflare.com/ips/). Rode `nginx -t` antes de recarregar.
 - [ ] Cloudflare: proxy ligado ("nuvem laranja"), SSL/TLS **Full (Strict)**, redirecionamento
       HTTP→HTTPS. Nunca use o modo "Flexible".
-- [ ] Firewall da VPS: 22 (restrito por IP), 80 e 443 abertos, de preferência só para as faixas
-      da Cloudflare. Nenhuma porta de aplicação (8000/3000/6379) aberta externamente.
+- [ ] Firewall da VPS: 22 (restrito por IP); 80 e 443 SOMENTE para as faixas da Cloudflare.
+      8000/3000/6379 fechadas por fora, com TESTE EXTERNO (de outra máquina, `curl -m 5` ao IP).
+- [ ] Certificado de origem para Full (Strict): Cloudflare Origin Certificate ou Let's Encrypt
+      DNS-01 (HTTP-01 não funciona com o DNS proxied). "Always Use HTTPS" ligado; HSTS da
+      Cloudflare desligado (o origin já emite; evita cabeçalho duplicado).
+- [ ] Repositório privado: deploy key SOMENTE LEITURA na VPS.
+- [ ] Decisão do worker registrada: `--profile worker` (subir) ou não subir.
+- [ ] Risco M1 decidido (seção 4A).
+- [ ] Supabase Auth: remover Redirect URLs `http://localhost...` quando o dev local não precisar.
 - [ ] Supabase: confirme no painel o algoritmo de assinatura dos JWT (HS256 legado ou chaves
       assimétricas ES256/JWKS) e que a versão do backend a implantar suporta esse modo.
 - [ ] Supabase Auth: Site URL e Redirect URLs com `https://<dominio>/ativar-conta`; expiração do
@@ -31,6 +40,7 @@ segredo deve ser escrito aqui, em tickets ou em chats.
       leva somente o que estiver no commit.
 - [ ] `cd backend && python -m pytest -q`: sem falhas (xfail documentados são aceitos).
 - [ ] `cd frontend && npm run lint && npm run typecheck && npm run build`, e a suíte Playwright.
+- [ ] `gitleaks git` ANTES do push: histórico sem segredos.
 - [ ] `bash scripts/security-audit.sh --strict`: revise cada ferramenta. O gitleaks em modo
       diretório acusa o `.env` local, que não é versionado; confirme com `gitleaks git` que o
       histórico está limpo.
@@ -73,12 +83,15 @@ Use hex nas senhas que entram em URLs (ex.: Redis), para não precisar escapar c
 | `DB_SSLMODE`, `DB_SSLROOTCERT` | recomendado | `verify-full` + caminho da CA, **somente** se o arquivo for montado no container |
 | `DB_STATEMENT_TIMEOUT_MS`, `DB_CONNECT_TIMEOUT`, `DB_POOL_*` | não | ajuste fino do pool |
 | `GOOGLE_SHEETS_CREDENTIALS_HOST_PATH` | para importação | caminho no HOST do JSON da service account, **fora do repositório**; o Compose o monta como secret somente leitura em `/run/secrets/google_sheets_credentials.json` (e já sobrepõe `GOOGLE_SHEETS_CREDENTIALS_JSON` no container). Sem o arquivo, `docker compose up` falha |
-| `GOOGLE_SHEETS_SPREADSHEET_ID`, `GOOGLE_SHEETS_SHEET_NAME`/`_GID` | para importação | identificam a planilha/aba de origem |
+| `GOOGLE_SHEETS_SPREADSHEET_ID`, `GOOGLE_SHEETS_SHEET_NAME`/`_GID` (+ `_UNITS_`, `_ROOMS_`, `_PEOPLE_`) | para importação | identificam a planilha/abas de origem (nome OU gid) |
 | `N8N_INTEGRATION_ENABLED` (+ `N8N_*`) | não | `false` até haver n8n externo com HTTPS |
 | `AI_ENABLED` (+ `*_API_KEY`, `AI_*`) | não | `false` por padrão; chaves só no backend |
 | `*_CPUS`, `*_MEMORY` | não | limites por serviço; não use valores de dev |
 
 Notas:
+- Placeholders: `grep -nE '^[^#]*<' .env` deve voltar VAZIA (ignora comentários); troque também
+  `DATABASE_URL` e `NEXT_PUBLIC_API_URL` ilustrativos do `.env.example` (esta fica no bundle); `REDIS_URL` e
+  `GOOGLE_SHEETS_CREDENTIALS_HOST_PATH` vêm comentadas no `.env.example` (descomente com valor real).
 - As `NEXT_PUBLIC_*` são embutidas no bundle **no build**. Se mudarem, refaça o build do
   frontend (`docker compose up -d --build frontend`). Se ficarem vazias, o login não funciona.
 - Se faltar `REDIS_PASSWORD`, o Compose recusa subir. Se `SUPABASE_JWT_SECRET`/JWKS estiverem
@@ -93,33 +106,22 @@ Notas:
      `.env`, delete a chave da service account no console do Google Cloud) e **reative** a
      política `iam.disableServiceAccountKeyCreation`.
 
-## 3. Banco de dados: migrações (somente com autorização)
+## 3. Banco de dados: carimbo Alembic (sem upgrade)
 
-Estado documentado (README.md): Alembic em `0004_db_security_hardening`, com
-`0005_settings_ai_users` **pendente**. O backend atual depende das colunas e tabelas da 0005.
-**Aplique a 0005 ANTES de subir a imagem nova do backend.** A 0005 é aditiva, e o backend
-antigo continua funcionando com ela.
+Estado (docs/deploy/PRONTIDAO_2026-10-19.md): o repositório tem Alembic 0001 a 0010 e o
+Supabase JÁ contém o conteúdo das migrações 0007-0010 (numeração dos `.sql` difere da do
+Alembic; compare por conteúdo). O `alembic_version` do banco está em `0006`. Procedimento:
+**`alembic stamp 0011_user_preferences_dashboard_charts`; nenhum `alembic upgrade`.**
 
-1. [ ] Teste num **branch do Supabase** (nunca direto em produção):
-   - `alembic current` → esperado `0004_db_security_hardening`.
-     - Se não existir `alembic_version`: `alembic stamp 0001_initial_schema` e depois
-       `alembic upgrade 0004_db_security_hardening` na **mesma janela** (nunca 0002/0003 sem a
-       0004).
-   - Seeds SQL: confirme se `backend/migrations/sql/0005_seed_security_permissions.sql` já foi
-     aplicado (existem as permissões `users.invite` e `users.revoke_access`). Esse seed não tem
-     equivalente Alembic.
-   - `alembic upgrade 0005_settings_ai_users`.
-   - Verifique: colunas `version`, `sessions_revoked_at`, `avatar_object_key`,
-     `deactivated_at`, `deactivated_by` em `public.users`; tabelas `ai_settings` (1 linha,
-     desligada) e `user_preferences` com RLS habilitado e sem privilégios para
-     `anon`/`authenticated`; `alembic current` = `0005_settings_ai_users`.
-   - Suba a versão nova contra o branch e faça login real com MFA.
-2. [ ] Com nova autorização, repita o passo 1 em produção. Na VPS, use a própria imagem:
-   `docker compose run --rm --no-deps backend alembic current` e depois
-   `docker compose run --rm --no-deps backend alembic upgrade 0005_settings_ai_users`.
-   Para isso, a imagem precisa ter sido construída (`docker compose build backend`) sem
-   recriar o container em execução.
-3. [ ] Registre data, autorizador e resultado em `docs/database/historico-migracoes.md`.
+1. [ ] Backup/PITR do Supabase CONFIRMADO no painel (data/hora registradas) ANTES do stamp.
+2. [ ] Esquema real conferido contra 0007-0010 (`unit_aliases` e índices, `ai_settings`,
+   `user_preferences`, colunas em `users`, permissões, RLS sem privilégios a anon/authenticated);
+   resultado registrado. Se divergir, NÃO carimbe.
+3. [ ] Autorização explícita + janela combinada (base única: dev = prod).
+4. [ ] `docker compose run --rm --no-deps backend alembic current` (esperado `0006...`), depois
+   `... alembic stamp 0011_user_preferences_dashboard_charts`, depois `alembic current`
+   (esperado `0011_user_preferences_dashboard_charts (head)`).
+5. [ ] Registre data, autorizador e resultado em `docs/database/historico-migracoes.md`.
 
 ## 4. Subida
 
@@ -139,6 +141,21 @@ docker compose up -d --build
   `docker compose --profile worker up -d --build worker`.
 - Nunca use `docker-compose.dev.yml` na VPS.
 
+## 4A. Risco M1: Cloudflare 100 s (HTTP 524) na importação
+
+Com o DNS proxied, a Cloudflare corta respostas após 100 s (planos Free/Pro/Business). Prévia
+do Sheets > 100 s falha com 524 mesmo com nginx 190 s e gunicorn 180 s. Opções (decisão do
+responsável): (1) prévia assíncrona futura (Celery + polling); (2) rota de importação em
+subdomínio DNS-only com firewall; (3) aceitar no início (ainda não há bens importados) e
+monitorar. Registrar a decisão: __________. Sem mudança de código nesta etapa.
+
+## 4B. Nginx / vhost
+
+- [ ] Backup do vhost atual antes de editar (rollback = restaurar e `nginx -t && reload`).
+- [ ] Vhost sem `include` externo (blocos literais), zona própria `sispat_imports`, sem
+      `add_header` de segurança (Next e Flask são os emissores; tabela no vhost).
+- [ ] `sudo nginx -t && sudo systemctl reload nginx`.
+
 ## 5. Verificação pós-subida
 
 Na VPS:
@@ -151,13 +168,17 @@ Na VPS:
 Pelo domínio (outra máquina):
 - [ ] `curl -sI https://<dominio>/login` → 200 com `Content-Security-Policy` (com `nonce-`),
       `Strict-Transport-Security`, `X-Content-Type-Options: nosniff` e `X-Frame-Options`.
+- [ ] Cabeçalhos únicos (M2): `curl -sI https://<dominio>/ativar-conta` com exatamente UM
+      `Referrer-Policy` (`no-referrer`) e UM `Strict-Transport-Security`; idem em `/api/health`.
+- [ ] `NEXT_PUBLIC_*` presentes no bundle e nenhum segredo no bundle (`grep` no `.next`).
+- [ ] `trivy image` (backend/frontend) após o build; achados HIGH/CRITICAL avaliados.
 - [ ] `curl -s https://<dominio>/api/v1/me` → 401 JSON `unauthorized`.
 - [ ] `curl -sI https://<dominio>/.env` → 404.
 - [ ] Login real: USER sem MFA chega à home; ADM é levado ao desafio TOTP, e as páginas de
       administração só funcionam após o MFA. Logout volta ao `/login`.
 
 Logs (sem segredos):
-- [ ] `docker compose logs --since 15m backend frontend | grep -iE 'eyJ|service_role|secret|password|Bearer '`
+- [ ] `docker compose logs --since 15m backend frontend | grep -iE 'eyJ|service_role|secret|password|Bearer |token_hash'`
       → nenhuma linha com valor sensível.
 - [ ] `docker compose logs --since 15m backend | grep -E ' 500 |internal_error'` → vazio após o
       login de teste. Um 500 logo no login indica schema desatualizado: volte ao passo 3.
@@ -168,7 +189,28 @@ Logs (sem segredos):
 1. Código/imagens: `docker tag sispat-agu/backend:rollback sispat-agu/backend:latest` (idem
    frontend) e `docker compose up -d --no-build`. Também é possível `git checkout <commit
    anterior>` + `docker compose up -d --build`.
-2. Banco: **não** faça `alembic downgrade` sem autorização e análise de impacto. A 0005 é
-   aditiva e compatível com o backend anterior, então em geral basta reverter as imagens.
+2. Banco: **não** faça `alembic downgrade` sem autorização e análise de impacto. O stamp só
+   altera `alembic_version`; em geral basta reverter as imagens. Vhost: restaurar o backup.
 3. Configuração: mantenha uma cópia do `.env` anterior fora do repositório (`chmod 600`).
 4. Após o rollback, repita a seção 5 e registre o incidente.
+
+## Anexos por funcionalidade (vindos de `docs/deploy/CHECKLIST.md`)
+
+### Tela Perfis e Permissões (`/administracao/perfis-permissoes`)
+- [ ] Novas variáveis de ambiente, migrações e portas: **nenhuma**.
+- [ ] Backend publicado com `GET /api/v1/admin/roles` e `GET /api/v1/admin/permissions`
+      (ADM + AAL2 + `roles.manage`; sem query string).
+- [ ] Permissão `roles.manage` atribuída ao perfil ADM no banco alvo (seed existente).
+- [ ] CSP padrão (nonce) inalterada; sem scripts/estilos inline novos nem origens adicionais.
+- [ ] CORS: só `GET` (já permitido).
+- [ ] Pós-implantação: ADM com MFA (AAL2) vê perfis e matriz; USER e RH veem "Acesso
+      restrito"; nenhuma resposta de erro expõe detalhes.
+
+### Convite de usuários (e-mail e redirecionamento)
+- [ ] Supabase Auth > URL Configuration: Site URL e Redirect URLs no domínio final (HTTPS),
+      incluindo `https://<domínio>/ativar-conta`.
+- [ ] Template "Invite user" conforme `docs/deploy/email-template-convite.md` (token_hash;
+      exige autorização do dono do projeto Supabase).
+- [ ] SMTP próprio no Supabase (o embutido dá `429 email rate limit`); SPF/DKIM/DMARC.
+- [ ] `INVITE_ALLOWED_REDIRECT_URLS` com o 1º item `https://<domínio>/ativar-conta`.
+- [ ] Teste real: convidar e-mail de teste; o link só é consumido após o clique.

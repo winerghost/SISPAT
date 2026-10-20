@@ -68,8 +68,8 @@ def test_auditoria_sem_segredos_e_sem_pii(people):
     api.client.patch(URL, json={"version": 0, "density": "compact", "font_scale": 112}, headers=token)
     (audit,) = api.world.audits("USER_PREFERENCES_UPDATED")
     dumped = json.dumps([audit.previous_values, audit.new_values])
-    assert set(audit.new_values) == {"density", "font_scale", "version"}
-    assert set(audit.previous_values) == {"density", "font_scale", "version"}
+    assert set(audit.new_values) == {"density", "font_scale", "dashboard_charts", "version"}
+    assert set(audit.previous_values) == {"density", "font_scale", "dashboard_charts", "version"}
     assert token["Authorization"].split()[1] not in dumped
     assert "@" not in dumped and "Sec A" not in dumped
 
@@ -95,6 +95,35 @@ def test_mass_assignment_campos_privilegiados_extras(people, field):
     assert _rows(api) == []
 
 
+@pytest.mark.parametrize("field", ["role", "unit_id", "is_admin", "deleted_at"])
+def test_chave_privilegiada_aninhada_e_auditada_como_escalada(people, field):
+    """L-1: chave privilegiada dentro de dashboard_charts gera evento HIGH."""
+    api, _a, _b = people
+    response = api.client.patch(
+        URL,
+        json={"version": 0, "dashboard_charts": {"units": "grouped", field: "ADM"}},
+        headers=auth_headers(SUB_A, aal="aal1"),
+    )
+    assert response.status_code == 400
+    escaladas = [e for e in api.events if e["event_type"] == "PRIVILEGE_ESCALATION_ATTEMPT"]
+    assert len(escaladas) == 1
+    assert escaladas[0]["severity"] == "high"
+    assert escaladas[0]["details"]["fields"] == [f"dashboard_charts.{field}"]
+    assert not any(e["event_type"] == "MASS_ASSIGNMENT_REJECTED" for e in api.events)
+    assert _rows(api) == []
+
+
+def test_chave_comum_aninhada_continua_low(people):
+    api, _a, _b = people
+    response = api.client.patch(
+        URL, json={"version": 0, "dashboard_charts": {"foo": "bar"}}, headers=auth_headers(SUB_A, aal="aal1")
+    )
+    assert response.status_code == 400
+    (evento,) = api.events
+    assert evento["event_type"] == "MASS_ASSIGNMENT_REJECTED"
+    assert evento["details"]["fields"] == ["dashboard_charts.foo"]
+
+
 def test_corpo_nao_json_e_content_type_errado_400(people):
     api, _a, _b = people
     h = auth_headers(SUB_A, aal="aal1")
@@ -106,4 +135,4 @@ def test_corpo_nao_json_e_content_type_errado_400(people):
 def test_resposta_so_tem_campos_esperados(people):
     api, _a, _b = people
     body = api.client.get(URL, headers=auth_headers(SUB_A, aal="aal1")).get_json()
-    assert set(body) == {"density", "font_scale", "version"}
+    assert set(body) == {"density", "font_scale", "dashboard_charts", "version"}

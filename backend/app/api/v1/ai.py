@@ -18,11 +18,11 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from flask import Blueprint, g, jsonify, request
+from flask import Blueprint, g, jsonify
 from pydantic import BaseModel, ConfigDict, Field, StrictStr
 from werkzeug.exceptions import BadRequest
 
-from app.api.v1.schemas import parse_body
+from app.api.v1.schemas import get_json_body, parse_body
 from app.api.v1.user_admin_http import admin_rate_limit_key, error_response, validation_error
 from app.auth.supabase_auth import require_auth
 from app.authorization.rbac import get_accessible_unit_ids, require_aal2, require_permission
@@ -111,7 +111,7 @@ def get_insights():
 @rate_limit(admin_rate_limit_key, limit=_ASK_LIMIT, window_seconds=_WINDOW_SECONDS, fail_open=_FAIL_OPEN)
 def post_ask():
     try:
-        body = parse_body(AskRequest, request.get_json(silent=True), context="ai.ask")
+        body = parse_body(AskRequest, get_json_body(), context="ai.ask")
     except BadRequest as exc:
         return validation_error(exc)
 

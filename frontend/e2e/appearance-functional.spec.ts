@@ -257,7 +257,12 @@ test.describe("tela de Aparência", () => {
     await expect(page.getByText("Preferências de aparência salvas.")).toBeVisible();
     expect(await htmlAttrs(page)).toEqual({ density: "compact", scale: "112" });
     expect((await context.cookies()).find((c) => c.name === "sispat-ui")?.value).toBe("compact.112");
-    expect(state.prefs).toEqual({ density: "compact", font_scale: 112, version: 1 });
+    expect(state.prefs).toEqual({
+      density: "compact",
+      font_scale: 112,
+      dashboard_charts: { units: "grouped", status: "pie", monthly: "line" },
+      version: 1,
+    });
     await expect(page.getByRole("button", { name: "Salvar" })).toBeDisabled();
 
     // Recarregar: o servidor já devolve o atributo no HTML (sem flash).
@@ -269,7 +274,7 @@ test.describe("tela de Aparência", () => {
     const state = await openPath(page, PATH);
     await page.getByRole("radio", { name: "Compacta" }).check();
     // Outra sessão salvou no meio tempo.
-    state.prefs = { density: "comfortable", font_scale: 125, version: 5 };
+    state.prefs = { ...state.prefs, density: "comfortable", font_scale: 125, version: 5 };
     await page.getByRole("button", { name: "Salvar" }).click();
     await expect(page.getByText(/foram alteradas em outra sessão/)).toBeVisible();
     // Estado do servidor reaplicado; nada do rascunho vazou para a interface.

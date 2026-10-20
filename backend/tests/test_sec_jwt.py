@@ -179,6 +179,7 @@ def _settings_kwargs(**overrides):
         "secret_key": "s" * 40,
         "supabase_jwt_secret": "j" * 40,
         "flask_env": "production",
+        "cors_allowed_origins": "https://app.example.test",
         "_env_file": None,
     }
     base.update(overrides)

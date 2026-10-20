@@ -1405,6 +1405,32 @@ export const SCREENS: ScreenDef[] = [
       await expectDashboardLoaded(page);
     },
   },
+  {
+    id: "dashboard-graficos-alternativos",
+    title: "Dashboard — tipos de gráfico escolhidos (horizontal, rosca, área)",
+    path: "/dashboard",
+    session: {
+      role: "USER",
+      prefs: { dashboard_charts: { units: "horizontal", status: "donut", monthly: "area" } },
+    },
+    prepare: async (page) => {
+      await expectDashboardLoaded(page);
+      await expect(page.getByRole("img", { name: /Gráfico de barras horizontais/ })).toBeVisible();
+    },
+  },
+  {
+    id: "dashboard-graficos-empilhado-barras",
+    title: "Dashboard — tipos de gráfico escolhidos (empilhadas, barras, barras)",
+    path: "/dashboard",
+    session: {
+      role: "RH",
+      prefs: { dashboard_charts: { units: "stacked", status: "bar", monthly: "bar" } },
+    },
+    prepare: async (page) => {
+      await expectDashboardLoaded(page);
+      await expect(page.getByRole("img", { name: /Gráfico de barras empilhadas/ })).toBeVisible();
+    },
+  },
   // --- Menu sem 404: rotas pai e importações ----------------------------------
   {
     id: "importacoes-restrito",

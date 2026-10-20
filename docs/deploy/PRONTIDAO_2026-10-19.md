@@ -269,6 +269,8 @@ BLOQUEIA o deploy:
 
 Fazer antes, não bloqueia:
 - `alembic stamp 0010_seed_permission_corrections` (carimbo em 0006; esquema ok).
+  **Superado em 2026-10-20:** com a 0011 aplicada, o carimbo é
+  `alembic stamp 0011_user_preferences_dashboard_charts`.
 - Ligar leaked password protection no Supabase Auth.
 - Unificar os checklists e atualizar a seção 3 desatualizada.
 - Definir retenção/expurgo de `import_previews`/`import_preview_items` (PII).
@@ -308,7 +310,8 @@ OK:
 7. `docker compose config --quiet` e `docker compose build backend frontend`.
 8. Carimbo Alembic (com autorização, sem DDL):
    `docker compose run --rm --no-deps backend alembic current`
-   `docker compose run --rm --no-deps backend alembic stamp 0010_seed_permission_corrections`
+   `docker compose run --rm --no-deps backend alembic stamp 0011_user_preferences_dashboard_charts`
+   (0011 aplicada manualmente em 2026-10-19; ver atualização de 2026-10-20 abaixo)
    `docker compose run --rm --no-deps backend alembic current`
 9. `docker compose up -d` (acrescentar `--profile worker` apenas se for usar IA).
 10. Verificações pós-subida da seção 5 do checklist (health, 401, `ss -ltnp`,
@@ -322,3 +325,49 @@ SMTP, URLs); regras de Cloudflare/firewall; execução de testes e do
 security-audit; diff do `backend/Dockerfile` (sem git); equivalência linha a linha
 dos DDL dos `.py` com o banco (verifiquei existência de objetos); se os `.py`
 Alembic 0007 a 0010 são idempotentes.
+
+## Atualização — 2026-10-19 (fim do ciclo de correção)
+
+Ciclo de correção pré-deploy concluído; deploy ainda NÃO realizado.
+
+- Corrigidos: SEC-REV-01 a 04 (JSON aninhado agora tratado em todas as rotas por
+  `get_json_body()` e em `rbac.py`), M1/M2 (https obrigatório em produção para
+  CORS e redirects de convite), `nosemgrep` justificado, Referrer-Policy
+  `no-referrer` em `/ativar-conta`, `DB_POOL_*` no `.env.example`, redação de
+  inteiro de 11 dígitos em `safe_scalar`.
+- Infra: vhost sem `add_header` (Next/Flask emitem), blocos de proxy literais,
+  zona `sispat_imports`, location de importação com 190 s; roteiro e checklist
+  canônico unificados.
+- Contas fictícias RH e USER desativadas (`active=false`, banidas no Auth,
+  sessões revogadas) em 2026-10-19; ADM mantido.
+- Testes: pytest completo 10228 passaram, 0 falhas, 42 ignorados, 4 xfailed;
+  Playwright em 4 grupos 2162 passaram; frontend lint/typecheck/build ok.
+- `security-audit.sh --strict`: bandit, pip-audit, npm audit, semgrep e compose
+  OK; **gitleaks e trivy NÃO executados** (binários ausentes).
+- Revisões: authz e infra sem achados Críticos/Altos; pós-correções "COM
+  RESSALVAS".
+- Pendências: gitleaks (antes do push) e trivy (após build); `nginx -t` só na
+  VPS; limite de 100 s da Cloudflare (decisão do responsável); template de
+  convite, SMTP e senhas vazadas no Supabase; backup/PITR antes do `alembic
+  stamp`; `test_sec_json_depth.py` sem prova de falha sem a correção.
+
+## Atualização — 2026-10-20 (gráficos do dashboard + Nivo)
+
+- Gráficos personalizáveis por usuário e troca do Recharts pelo Nivo 0.99
+  (Tremor descartado por exigir React 18). Detalhes em
+  `docs/ux/DASHBOARD_GRAFICOS.md`.
+- Migração Alembic `0011_user_preferences_dashboard_charts` (espelho `sql/0014`)
+  aplicada manualmente no Supabase em 2026-10-19, com autorização; CHECKs
+  confirmados pelo responsável. **Carimbo no deploy:**
+  `alembic stamp 0011_user_preferences_dashboard_charts` (sem `upgrade`).
+- Revisão `docs/security/REVISAO_DASHBOARD_NIVO_2026-10-20.md`: APROVADO COM
+  RESSALVAS; L-1 e I-3 corrigidos; L-2 e I-4 (`npm dedupe`) adiados para depois
+  do deploy.
+- Testes finais: pytest completo **10269 passaram**, 0 falhas, 42 ignorados,
+  4 xfailed. Playwright em 4 grupos com `--workers=1`: e2e 631 + 1 falha,
+  a11y 386, unit/dashboard/motion 102, responsive 1089. A falha foi no 1º teste
+  da rodada (`activate-invite-functional.spec.ts`, timeout esperando a
+  hidratação durante a compilação a frio do `next dev`); reexecutado
+  isoladamente, o spec passou 10/10. Total: 2209 testes, nenhuma falha real.
+- Deploy: o build do frontend muda (Nivo no `package-lock.json`), então
+  a VPS precisa de `docker compose build frontend backend`.

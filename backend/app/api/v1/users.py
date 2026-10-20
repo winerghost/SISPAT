@@ -75,6 +75,7 @@ from app.api.v1.schemas import (
     UserListQuery,
     UserUpdateRequest,
     VersionRequest,
+    get_json_body,
     parse_body,
     parse_query,
     reject_unexpected_fields,
@@ -236,7 +237,7 @@ def invite_user_endpoint():
     `intended_role_code='ADM'`), 409 (já existe convite pendente para o
     e-mail), 502 (falha ao falar com o Supabase Auth).
     """
-    payload_in = parse_body(InviteRequest, request.get_json(silent=True), context="users.invite")
+    payload_in = parse_body(InviteRequest, get_json_body(), context="users.invite")
     email = payload_in.email
     name = payload_in.name
     intended_role_code = payload_in.intended_role_code
@@ -325,7 +326,7 @@ def activate_invite_endpoint():
     rejeitado com 400 e registrado em `audit_logs` (tentativa de
     escalonamento). Limitado a 10 chamadas/hora por usuário.
     """
-    body = request.get_json(silent=True)
+    body = get_json_body()
     if body is not None and body != {}:
         if isinstance(body, dict):
             reject_unexpected_fields(set(body.keys()), context="users.activate_invite")
@@ -440,7 +441,7 @@ def revoke_user_access_endpoint(user_id: uuid.UUID):
     for o último administrador (ADM) ativo do sistema (revogação bloqueada
     para nunca deixar o sistema sem nenhum ADM); 429 acima de 10/hora.
     """
-    body = request.get_json(silent=True)
+    body = get_json_body()
     reason = None
     if body is not None:
         reason = parse_body(RevokeRequest, body, context="users.revoke").reason or None
@@ -565,7 +566,7 @@ def update_user_endpoint(user_id: uuid.UUID):
     unidades (`users.assign_unit`); a permissão de cada campo é checada
     ANTES de tocar o banco (além de `users.manage`, exigida no decorator)."""
     try:
-        body = parse_body(UserUpdateRequest, request.get_json(silent=True), context="users.update")
+        body = parse_body(UserUpdateRequest, get_json_body(), context="users.update")
     except BadRequest as exc:
         return validation_error(exc)
     actor = g.current_user
@@ -600,7 +601,7 @@ def update_user_endpoint(user_id: uuid.UUID):
 @rate_limit(admin_rate_limit_key, limit=_ACCOUNT_ACTION_LIMIT, window_seconds=_WINDOW)
 def deactivate_user_endpoint(user_id: uuid.UUID):
     try:
-        body = parse_body(DeactivateRequest, request.get_json(silent=True), context="users.deactivate")
+        body = parse_body(DeactivateRequest, get_json_body(), context="users.deactivate")
     except BadRequest as exc:
         return validation_error(exc)
     actor = g.current_user
@@ -631,7 +632,7 @@ def deactivate_user_endpoint(user_id: uuid.UUID):
 @rate_limit(admin_rate_limit_key, limit=_ACCOUNT_ACTION_LIMIT, window_seconds=_WINDOW)
 def activate_user_endpoint(user_id: uuid.UUID):
     try:
-        body = parse_body(VersionRequest, request.get_json(silent=True), context="users.activate")
+        body = parse_body(VersionRequest, get_json_body(), context="users.activate")
     except BadRequest as exc:
         return validation_error(exc)
     actor = g.current_user

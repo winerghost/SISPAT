@@ -35,7 +35,7 @@ export interface ChartDatum {
   value: number;
 }
 
-export type ChartKind = "bar" | "donut";
+export type ChartKind = "bar" | "donut" | "pie";
 
 /**
  * Dados de gráficos com várias séries (barras agrupadas e linhas).

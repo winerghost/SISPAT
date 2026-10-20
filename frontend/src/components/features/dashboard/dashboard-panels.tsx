@@ -5,6 +5,7 @@ import dynamic from "next/dynamic";
 import { AlertTriangle, BarChart3, RefreshCw } from "lucide-react";
 import type { UseQueryResult } from "@tanstack/react-query";
 
+import { FadeIn } from "@/components/animations";
 import { chartClasses, type ChartThemeName } from "@/components/dashboard/chart-theme";
 import { StatCard } from "@/components/dashboard/stat-card";
 import type { DashboardStat } from "@/components/dashboard/types";
@@ -19,8 +20,11 @@ import {
   type DashboardSummary,
   type UnitBreakdownRow,
 } from "@/lib/dashboard-api";
+import type { DashboardChartPanel } from "@/lib/preferences-api";
 import { cn } from "@/lib/utils";
 
+import { ChartTypeMenu } from "./chart-type-menu";
+import { useDashboardChartPrefs, type DashboardChartPrefs } from "./use-dashboard-chart-prefs";
 import {
   buildMonthlyData,
   buildSituationData,
@@ -36,24 +40,97 @@ import {
 // - Cada bloco tem skeleton, erro com "Tentar novamente" e estado vazio
 //   honesto, de forma independente (uma consulta que falha não derruba as
 //   outras).
-// - Recharts (~170 kB) só é baixado no cliente (import dinâmico, ssr:false).
-// - `theme="paper"`: relatório (figura clara); cores em chart-theme.ts.
+// - Gráficos Nivo só são baixados no cliente (next/dynamic, ssr:false — o
+//   Responsive* mede o DOM), um chunk por módulo: barras (@nivo/bar),
+//   pizza/rosca (@nivo/pie) e linhas/áreas (@nivo/line). O módulo de pizza
+//   não é baixado se o usuário escolheu "Barras" na situação, etc.
+// - `theme="paper"`: relatório (figura clara); cores e tema Nivo em chart-theme.ts.
 // =============================================================================
 
 const chartLoading = () => <LoadingSkeleton variant="cards" count={1} label="Carregando gráfico" />;
 
-const AnimatedChart = dynamic(() => import("@/components/dashboard/animated-chart").then((m) => m.AnimatedChart), {
+const PieChart = dynamic(() => import("@/components/dashboard/nivo-pie-chart").then((m) => m.PieChart), {
   ssr: false,
   loading: chartLoading,
 });
-const AnimatedGroupedBarChart = dynamic(
-  () => import("@/components/dashboard/animated-chart").then((m) => m.AnimatedGroupedBarChart),
-  { ssr: false, loading: chartLoading },
-);
-const AnimatedLineChart = dynamic(
-  () => import("@/components/dashboard/animated-chart").then((m) => m.AnimatedLineChart),
-  { ssr: false, loading: chartLoading },
-);
+const CategoryBarChart = dynamic(() => import("@/components/dashboard/nivo-bar-charts").then((m) => m.CategoryBarChart), {
+  ssr: false,
+  loading: chartLoading,
+});
+const AnimatedGroupedBarChart = dynamic(() => import("@/components/dashboard/nivo-bar-charts").then((m) => m.AnimatedGroupedBarChart), {
+  ssr: false,
+  loading: chartLoading,
+});
+const AnimatedStackedBarChart = dynamic(() => import("@/components/dashboard/nivo-bar-charts").then((m) => m.AnimatedStackedBarChart), {
+  ssr: false,
+  loading: chartLoading,
+});
+const AnimatedHorizontalBarChart = dynamic(() => import("@/components/dashboard/nivo-bar-charts").then((m) => m.AnimatedHorizontalBarChart), {
+  ssr: false,
+  loading: chartLoading,
+});
+const AnimatedLineChart = dynamic(() => import("@/components/dashboard/nivo-line-charts").then((m) => m.AnimatedLineChart), {
+  ssr: false,
+  loading: chartLoading,
+});
+const AnimatedAreaChart = dynamic(() => import("@/components/dashboard/nivo-line-charts").then((m) => m.AnimatedAreaChart), {
+  ssr: false,
+  loading: chartLoading,
+});
+
+// ---------------------------------------------------------------------------
+// Seletor do tipo de gráfico (tema "screen"; no relatório impresso não há controles)
+// ---------------------------------------------------------------------------
+
+function PanelNotice({ prefs, panel }: { prefs: DashboardChartPrefs; panel: DashboardChartPanel }) {
+  if (prefs.savingPanel === panel) {
+    return (
+      <p role="status" data-chart-saving className="px-4 pt-2 text-caption text-warm-granite sm:px-5">
+        Salvando tipo de gráfico…
+      </p>
+    );
+  }
+  if (prefs.notice?.panel === panel) {
+    return (
+      <p role="alert" data-chart-notice={prefs.notice.kind} className="px-4 pt-2 text-body-sm text-bone sm:px-5">
+        {prefs.notice.text}
+      </p>
+    );
+  }
+  return null;
+}
+
+function panelControls<P extends DashboardChartPanel>(
+  prefs: DashboardChartPrefs,
+  panel: P,
+  panelTitle: string,
+  theme: ChartThemeName,
+): { controls: ReactNode; notice: ReactNode } {
+  if (theme === "paper" || prefs.status !== "ready") return { controls: null, notice: null };
+  return {
+    controls: (
+      <ChartTypeMenu
+        panel={panel}
+        panelTitle={panelTitle}
+        value={prefs.charts[panel]}
+        busy={prefs.busy}
+        saving={prefs.savingPanel === panel}
+        onSelect={(value) => prefs.select(panel, value)}
+        onRestore={() => prefs.restore(panel)}
+      />
+    ),
+    notice: <PanelNotice prefs={prefs} panel={panel} />,
+  };
+}
+
+/** Troca de tipo com entrada por opacidade (200 ms; sem movimento sob reduced motion). */
+function ChartSwap({ type, children }: { type: string; children: ReactNode }) {
+  return (
+    <FadeIn key={type} data-chart-type={type} className="min-w-0">
+      {children}
+    </FadeIn>
+  );
+}
 
 const nf = new Intl.NumberFormat("pt-BR");
 const formatInt = (n: number) => nf.format(n);
@@ -72,6 +149,10 @@ interface BlockProps<T> {
   emptyDescription: string;
   skeleton?: ReactNode;
   className?: string;
+  /** Seletor de tipo de gráfico (só aparece quando há dados para exibir). */
+  controls?: ReactNode;
+  /** Estado do salvamento / erro do seletor. */
+  notice?: ReactNode;
   children: (data: T) => ReactNode;
 }
 
@@ -85,19 +166,26 @@ function Block<T>({
   emptyDescription,
   skeleton,
   className,
+  controls,
+  notice,
   children,
 }: BlockProps<T>) {
   const cls = chartClasses(theme);
   const headingId = `dash-${id}`;
+  const showControls = !query.isPending && !query.isError && !isEmpty(query.data as T);
   return (
     <section
       aria-labelledby={headingId}
       data-dashboard-block={id}
       className={cn("flex min-w-0 flex-col rounded-cards border print:break-inside-avoid", cls.figure, className)}
     >
-      <h2 id={headingId} className={cn("px-4 pt-4 text-eyebrow sm:px-5", cls.legendLabel)}>
-        {title}
-      </h2>
+      <div className="flex items-start justify-between gap-2 px-4 pt-4 sm:px-5">
+        <h2 id={headingId} className={cn("min-w-0 pt-1 text-eyebrow", cls.legendLabel)}>
+          {title}
+        </h2>
+        {showControls ? controls : null}
+      </div>
+      {showControls ? notice : null}
       {query.isPending ? (
         <div className="p-4 sm:p-5">
           {skeleton ?? <LoadingSkeleton variant="lines" count={4} label={`Carregando ${title}`} />}
@@ -228,36 +316,57 @@ function KpiBlock({ theme }: { theme: ChartThemeName }) {
 // Gráficos e tabela
 // ---------------------------------------------------------------------------
 
+const UNIT_CHARTS = {
+  grouped: AnimatedGroupedBarChart,
+  stacked: AnimatedStackedBarChart,
+  horizontal: AnimatedHorizontalBarChart,
+} as const;
+
+function chartPlaceholder(label: string) {
+  return <LoadingSkeleton variant="cards" count={1} label={label} />;
+}
+
 function UnitChartBlock({
   theme,
   model,
   query,
+  prefs,
 }: {
   theme: ChartThemeName;
   model: UnitModel | undefined;
   query: UseQueryResult<UnitBreakdownRow[], unknown>;
+  prefs: DashboardChartPrefs;
 }) {
+  const title = "Bens por unidade";
+  const Chart = UNIT_CHARTS[prefs.charts.units];
   return (
     <Block
       id="por-unidade"
-      title="Bens por unidade"
+      title={title}
       query={query}
       theme={theme}
       isEmpty={(rows) => rows.length === 0 || rows.every((r) => r.total === 0)}
       emptyTitle="Nenhum bem cadastrado"
       emptyDescription="Não há bens nas unidades visíveis para o seu perfil. Nenhum gráfico de exemplo é exibido."
-      skeleton={<LoadingSkeleton variant="cards" count={1} label="Carregando bens por unidade" />}
+      skeleton={chartPlaceholder("Carregando bens por unidade")}
       className="lg:col-span-2"
+      {...panelControls(prefs, "units", title, theme)}
     >
       {() =>
-        model && (
-          <AnimatedGroupedBarChart
-            title="Quantidade de bens por tipo em cada unidade"
-            data={model.chart}
-            valueFormatter={formatInt}
-            theme={theme}
-            className="border-0 p-4 sm:p-5"
-          />
+        prefs.status === "loading" ? (
+          <div className="p-4 sm:p-5">{chartPlaceholder("Carregando preferências do gráfico")}</div>
+        ) : (
+          model && (
+            <ChartSwap type={prefs.charts.units}>
+              <Chart
+                title="Quantidade de bens por tipo em cada unidade"
+                data={model.chart}
+                valueFormatter={formatInt}
+                theme={theme}
+                className="border-0 p-4 sm:p-5"
+              />
+            </ChartSwap>
+          )
         )
       }
     </Block>
@@ -326,58 +435,78 @@ function UnitTable({ rows, model, theme }: { rows: UnitBreakdownRow[]; model: Un
   );
 }
 
-function SituationBlock({ theme }: { theme: ChartThemeName }) {
+function SituationBlock({ theme, prefs }: { theme: ChartThemeName; prefs: DashboardChartPrefs }) {
   const query = useDashboardBySituation();
   const [selected, setSelected] = useState<string | null>(null);
+  const title = "Bens por situação";
+  const Chart = prefs.charts.status === "bar" ? CategoryBarChart : PieChart;
   return (
     <Block
       id="por-situacao"
-      title="Bens por situação"
+      title={title}
       query={query}
       theme={theme}
       isEmpty={(slices) => slices.every((s) => s.value === 0)}
       emptyTitle="Nenhum bem para classificar"
       emptyDescription="Ainda não há bens com situação registrada nas unidades visíveis para o seu perfil."
-      skeleton={<LoadingSkeleton variant="cards" count={1} label="Carregando bens por situação" />}
+      skeleton={chartPlaceholder("Carregando bens por situação")}
+      {...panelControls(prefs, "status", title, theme)}
     >
-      {(slices) => (
-        <AnimatedChart
-          kind="donut"
-          title="Distribuição por situação"
-          data={buildSituationData(slices)}
-          valueLabel="Bens"
-          selectedKey={selected}
-          onSelectKey={setSelected}
-          theme={theme}
-          className="border-0 p-4 sm:p-5"
-        />
-      )}
+      {(slices) =>
+        prefs.status === "loading" ? (
+          <div className="p-4 sm:p-5">{chartPlaceholder("Carregando preferências do gráfico")}</div>
+        ) : (
+          <ChartSwap type={prefs.charts.status}>
+            <Chart
+              kind={prefs.charts.status}
+              title="Distribuição por situação"
+              data={buildSituationData(slices)}
+              valueLabel="Bens"
+              selectedKey={selected}
+              onSelectKey={setSelected}
+              theme={theme}
+              className="border-0 p-4 sm:p-5"
+            />
+          </ChartSwap>
+        )
+      }
     </Block>
   );
 }
 
-function MonthlyBlock({ theme }: { theme: ChartThemeName }) {
+function MonthlyBlock({ theme, prefs }: { theme: ChartThemeName; prefs: DashboardChartPrefs }) {
   const query = useDashboardMonthlyAcquisitions();
+  const title = "Aquisições mensais";
+  const type = prefs.charts.monthly;
+  const Chart = type === "line" ? AnimatedLineChart : type === "area" ? AnimatedAreaChart : AnimatedGroupedBarChart;
   return (
     <Block
       id="aquisicoes-mensais"
-      title="Aquisições mensais"
+      title={title}
       query={query}
       theme={theme}
       isEmpty={(series) => series.every((s) => s.data.length === 0)}
       emptyTitle="Nenhuma aquisição no período"
       emptyDescription="Não há aquisições registradas nos últimos meses para as unidades visíveis ao seu perfil."
-      skeleton={<LoadingSkeleton variant="cards" count={1} label="Carregando aquisições mensais" />}
+      skeleton={chartPlaceholder("Carregando aquisições mensais")}
+      {...panelControls(prefs, "monthly", title, theme)}
     >
-      {(series) => (
-        <AnimatedLineChart
-          title="Bens adquiridos por mês"
-          data={buildMonthlyData(series)}
-          valueFormatter={formatInt}
-          theme={theme}
-          className="border-0 p-4 sm:p-5"
-        />
-      )}
+      {(series) =>
+        prefs.status === "loading" ? (
+          <div className="p-4 sm:p-5">{chartPlaceholder("Carregando preferências do gráfico")}</div>
+        ) : (
+          <ChartSwap type={type}>
+            <Chart
+              title="Bens adquiridos por mês"
+              data={buildMonthlyData(series)}
+              valueFormatter={formatInt}
+              kindLabel={type === "bar" ? "Gráfico de barras" : undefined}
+              theme={theme}
+              className="border-0 p-4 sm:p-5"
+            />
+          </ChartSwap>
+        )
+      }
     </Block>
   );
 }
@@ -385,13 +514,14 @@ function MonthlyBlock({ theme }: { theme: ChartThemeName }) {
 export function DashboardPanels({ theme = "screen", className }: { theme?: ChartThemeName; className?: string }) {
   const unitQuery = useDashboardByUnit();
   const model = useMemo(() => (unitQuery.data ? buildUnitModel(unitQuery.data) : undefined), [unitQuery.data]);
+  const chartPrefs = useDashboardChartPrefs();
 
   return (
     <div data-dashboard-panels className={cn("grid grid-cols-1 gap-4 lg:grid-cols-2 lg:gap-6", className)}>
       <KpiBlock theme={theme} />
-      <UnitChartBlock theme={theme} model={model} query={unitQuery} />
-      <SituationBlock theme={theme} />
-      <MonthlyBlock theme={theme} />
+      <UnitChartBlock theme={theme} model={model} query={unitQuery} prefs={chartPrefs} />
+      <SituationBlock theme={theme} prefs={chartPrefs} />
+      <MonthlyBlock theme={theme} prefs={chartPrefs} />
       <Block
         id="detalhamento"
         title="Detalhamento por unidade"

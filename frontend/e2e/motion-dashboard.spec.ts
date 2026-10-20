@@ -31,7 +31,7 @@ test.describe("dashboard", () => {
     const text = (await frame.innerText()) ?? "";
     expect(text, "nenhum dígito (número fictício) no painel").not.toMatch(/\d/);
     await expect(frame.locator("[data-stat-card]")).toHaveCount(0);
-    await expect(frame.locator("svg.recharts-surface, figure")).toHaveCount(0);
+    await expect(frame.locator("[data-chart-surface], figure")).toHaveCount(0);
     await expect(frame.getByRole("status")).toHaveCount(0);
     await expect(frame.getByRole("group", { name: "Período" })).toHaveCount(0);
   });

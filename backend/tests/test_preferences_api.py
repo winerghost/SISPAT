@@ -37,7 +37,7 @@ def test_get_sem_linha_devolve_padroes_sem_criar(people):
     api, _a, _b = people
     response = _get(api)
     assert response.status_code == 200
-    assert response.get_json() == {"density": "comfortable", "font_scale": 100, "version": 0}
+    assert response.get_json() == {"density": "comfortable", "font_scale": 100, "dashboard_charts": {"units": "grouped", "status": "pie", "monthly": "line"}, "version": 0}
     assert _rows(api) == []
 
 
@@ -51,9 +51,9 @@ def test_upsert_cria_e_atualiza(people):
     api, a, _b = people
     first = _patch(api, {"version": 0, "density": "compact"})
     assert first.status_code == 200
-    assert first.get_json() == {"density": "compact", "font_scale": 100, "version": 1}
+    assert first.get_json() == {"density": "compact", "font_scale": 100, "dashboard_charts": {"units": "grouped", "status": "pie", "monthly": "line"}, "version": 1}
     second = _patch(api, {"version": 1, "font_scale": 125})
-    assert second.get_json() == {"density": "compact", "font_scale": 125, "version": 2}
+    assert second.get_json() == {"density": "compact", "font_scale": 125, "dashboard_charts": {"units": "grouped", "status": "pie", "monthly": "line"}, "version": 2}
     assert _get(api).get_json() == second.get_json()
     (row,) = _rows(api)
     assert row.user_id == a
@@ -128,9 +128,9 @@ def test_mass_assignment_rejeitado_e_auditado(people, field):
 def test_isolamento_entre_usuarios(people):
     api, a, b = people
     _patch(api, {"version": 0, "density": "compact", "font_scale": 125}, sub=SUB_A)
-    assert _get(api, SUB_B).get_json() == {"density": "comfortable", "font_scale": 100, "version": 0}
+    assert _get(api, SUB_B).get_json() == {"density": "comfortable", "font_scale": 100, "dashboard_charts": {"units": "grouped", "status": "pie", "monthly": "line"}, "version": 0}
     assert _patch(api, {"version": 0, "font_scale": 112}, sub=SUB_B).status_code == 200
-    assert _get(api, SUB_A).get_json() == {"density": "compact", "font_scale": 125, "version": 1}
+    assert _get(api, SUB_A).get_json() == {"density": "compact", "font_scale": 125, "dashboard_charts": {"units": "grouped", "status": "pie", "monthly": "line"}, "version": 1}
     assert {r.user_id for r in _rows(api)} == {a, b}
 
 
@@ -141,10 +141,10 @@ def test_auditoria_na_mesma_transacao_com_previous_new(people):
     first, second = api.world.audits("USER_PREFERENCES_UPDATED")
     assert first.entity_type == "user_preferences" and first.entity_id == str(a)
     assert first.actor_user_id == a
-    assert first.previous_values == {"density": "comfortable", "font_scale": 100, "version": 0}
-    assert first.new_values == {"density": "compact", "font_scale": 100, "version": 1}
+    assert first.previous_values == {"density": "comfortable", "font_scale": 100, "dashboard_charts": {"units": "grouped", "status": "pie", "monthly": "line"}, "version": 0}
+    assert first.new_values == {"density": "compact", "font_scale": 100, "dashboard_charts": {"units": "grouped", "status": "pie", "monthly": "line"}, "version": 1}
     assert second.previous_values == first.new_values
-    assert second.new_values == {"density": "compact", "font_scale": 112, "version": 2}
+    assert second.new_values == {"density": "compact", "font_scale": 112, "dashboard_charts": {"units": "grouped", "status": "pie", "monthly": "line"}, "version": 2}
 
 
 def test_qualquer_perfil_pode_usar(people):

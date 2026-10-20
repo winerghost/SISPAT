@@ -9,7 +9,10 @@ Regras:
     - Concorrência: `SELECT ... FOR UPDATE` + comparação de `version`;
       inserção concorrente da primeira linha -> IntegrityError -> 409.
     - Auditoria `USER_PREFERENCES_UPDATED` (previous/new) na MESMA transação;
-      só densidade, escala e versão (sem dados pessoais).
+      só densidade, escala, tipos de gráfico (allowlist) e versão (sem dados
+      pessoais).
+    - `dashboard_charts`: persiste só chaves não padrão; a resposta traz
+      sempre as 3 chaves resolvidas.
 """
 from __future__ import annotations
 
@@ -40,12 +43,47 @@ class PreferencesVersionConflictError(Exception):
     message = "As preferências foram alteradas em outra sessão. Recarregue e tente novamente."
 
 
+# Allowlist FECHADA por painel do dashboard; o primeiro item é o padrão.
+DASHBOARD_CHART_OPTIONS: dict[str, tuple[str, ...]] = {
+    "units": ("grouped", "stacked", "horizontal"),
+    "status": ("pie", "donut", "bar"),
+    "monthly": ("line", "area", "bar"),
+}
+DEFAULT_DASHBOARD_CHARTS: dict[str, str] = {
+    panel: options[0] for panel, options in DASHBOARD_CHART_OPTIONS.items()
+}
+
+
+def _stored_charts(row: UserPreferences | None) -> dict[str, str]:
+    """Só chaves/valores válidos e não padrão (defesa contra dado legado)."""
+    raw = row.dashboard_charts if row is not None else None
+    if not isinstance(raw, dict):
+        return {}
+    return {
+        panel: value
+        for panel, value in raw.items()
+        if panel in DASHBOARD_CHART_OPTIONS
+        and value in DASHBOARD_CHART_OPTIONS[panel]
+        and value != DEFAULT_DASHBOARD_CHARTS[panel]
+    }
+
+
+def _resolved_charts(stored: dict[str, str]) -> dict[str, str]:
+    return {**DEFAULT_DASHBOARD_CHARTS, **stored}
+
+
 def _snapshot(row: UserPreferences | None) -> dict[str, Any]:
     if row is None:
-        return {"density": DEFAULT_DENSITY, "font_scale": DEFAULT_FONT_SCALE, "version": 0}
+        return {
+            "density": DEFAULT_DENSITY,
+            "font_scale": DEFAULT_FONT_SCALE,
+            "dashboard_charts": dict(DEFAULT_DASHBOARD_CHARTS),
+            "version": 0,
+        }
     return {
         "density": row.density,
         "font_scale": int(row.font_scale),
+        "dashboard_charts": _resolved_charts(_stored_charts(row)),
         "version": int(row.version),
     }
 
@@ -73,12 +111,23 @@ class PreferencesService:
         density = changes.density if changes.density is not None else previous["density"]
         font_scale = changes.font_scale if changes.font_scale is not None else previous["font_scale"]
 
+        stored = _stored_charts(row)
+        patch = changes.dashboard_charts
+        if patch is not None:
+            for panel in patch.model_fields_set:
+                value = getattr(patch, panel)
+                if value is None or value == DEFAULT_DASHBOARD_CHARTS[panel]:
+                    stored.pop(panel, None)  # null/padrão -> remove do JSON salvo
+                else:
+                    stored[panel] = value
+
         now = utcnow()
         if row is None:
             row = UserPreferences(user_id=user_id, created_at=now)
             self._db.add(row)
         row.density = density
         row.font_scale = int(font_scale)
+        row.dashboard_charts = stored
         row.version = previous["version"] + 1
         row.updated_at = now
 

@@ -43,7 +43,7 @@ from typing import Any
 
 from flask import Blueprint, abort, g, jsonify, request
 
-from app.api.v1.schemas import ConfirmImportRequest, ImportItemsQuery, parse_body, parse_query
+from app.api.v1.schemas import ConfirmImportRequest, ImportItemsQuery, get_json_body, parse_body, parse_query
 from app.api.v1.user_admin_http import admin_rate_limit_key, reject_any_body
 from app.auth.supabase_auth import require_auth
 from app.authorization.rbac import require_aal2, require_permission, require_role
@@ -217,7 +217,7 @@ def confirm_preview_endpoint():
     `app.services.import_service.ImportService.confirm_preview`).
     """
     body_in = parse_body(
-        ConfirmImportRequest, request.get_json(silent=True), context="imports.confirm"
+        ConfirmImportRequest, get_json_body(), context="imports.confirm"
     )
     preview_id = body_in.preview_id
     selected_item_ids: list[uuid.UUID] = list(body_in.selected_item_ids)

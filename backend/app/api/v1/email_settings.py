@@ -22,7 +22,7 @@ from typing import Any
 from flask import Blueprint, g, jsonify, request
 from werkzeug.exceptions import BadRequest
 
-from app.api.v1.schemas import EmptyBody, parse_body
+from app.api.v1.schemas import EmptyBody, get_json_body, parse_body
 from app.api.v1.user_admin_http import admin_rate_limit_key, validation_error
 from app.auth.supabase_auth import require_auth
 from app.authorization.rbac import require_aal2, require_permission, require_role
@@ -56,7 +56,7 @@ def _body_or_empty() -> Any:
     """Sem corpo -> `{}`; corpo presente é validado por `parse_body`."""
     if not request.get_data(cache=True).strip():
         return {}
-    return request.get_json(silent=True)
+    return get_json_body()
 
 
 def _audit(actor_id: Any, result: str) -> None:

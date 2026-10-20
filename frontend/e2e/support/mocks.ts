@@ -211,14 +211,51 @@ export function defaultAiAsk(): AiAskMock {
 export interface PreferencesMock {
   density: "comfortable" | "compact";
   font_scale: 100 | 112 | 125;
+  /** Tipo de gráfico de cada painel do dashboard (sempre as 3 chaves resolvidas). */
+  dashboard_charts: DashboardChartsMock;
   version: number;
 }
 
-export function defaultPreferences(): PreferencesMock {
-  return { density: "comfortable", font_scale: 100, version: 0 };
+export interface DashboardChartsMock {
+  units: "grouped" | "stacked" | "horizontal";
+  status: "pie" | "donut" | "bar";
+  monthly: "line" | "area" | "bar";
 }
 
-const PREFS_PATCH_FIELDS = new Set(["density", "font_scale", "version"]);
+export const DASHBOARD_CHARTS_ALLOWED: Record<keyof DashboardChartsMock, readonly string[]> = {
+  units: ["grouped", "stacked", "horizontal"],
+  status: ["pie", "donut", "bar"],
+  monthly: ["line", "area", "bar"],
+};
+
+export function defaultDashboardCharts(): DashboardChartsMock {
+  return { units: "grouped", status: "pie", monthly: "line" };
+}
+
+export function defaultPreferences(): PreferencesMock {
+  return { density: "comfortable", font_scale: 100, dashboard_charts: defaultDashboardCharts(), version: 0 };
+}
+
+const PREFS_PATCH_FIELDS = new Set(["density", "font_scale", "dashboard_charts", "version"]);
+
+/** Aplica `dashboard_charts` do PATCH (null restaura o padrão); `null` retornado = corpo inválido (400). */
+function applyDashboardChartsPatch(current: DashboardChartsMock, raw: unknown): DashboardChartsMock | null {
+  if (raw === undefined) return { ...current };
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return null;
+  const next: DashboardChartsMock = { ...current };
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (!(key in DASHBOARD_CHARTS_ALLOWED)) return null;
+    const panel = key as keyof DashboardChartsMock;
+    if (value === null) {
+      (next[panel] as string) = defaultDashboardCharts()[panel];
+    } else if (typeof value === "string" && DASHBOARD_CHARTS_ALLOWED[panel].includes(value)) {
+      (next[panel] as string) = value;
+    } else {
+      return null;
+    }
+  }
+  return next;
+}
 
 export interface MockState extends CatalogMockState, AssetMockState, MovementMockState, InventoryMockState {
   catalogImport: CatalogImportMockState;
@@ -1126,7 +1163,9 @@ export async function installMocks(page: Page, opts: MockOptions = {}): Promise<
       const patch = (body ?? {}) as Record<string, unknown>;
       const density = patch.density ?? state.prefs.density;
       const fontScale = patch.font_scale ?? state.prefs.font_scale;
+      const charts = applyDashboardChartsPatch(state.prefs.dashboard_charts, patch.dashboard_charts);
       if (
+        charts === null ||
         Object.keys(patch).some((key) => !PREFS_PATCH_FIELDS.has(key)) ||
         !["comfortable", "compact"].includes(density as string) ||
         ![100, 112, 125].includes(fontScale as number)
@@ -1139,6 +1178,7 @@ export async function installMocks(page: Page, opts: MockOptions = {}): Promise<
       state.prefs = {
         density: density as PreferencesMock["density"],
         font_scale: fontScale as PreferencesMock["font_scale"],
+        dashboard_charts: charts,
         version: state.prefs.version + 1,
       };
       return json(route, 200, state.prefs);

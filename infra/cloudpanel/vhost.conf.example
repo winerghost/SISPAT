@@ -8,23 +8,55 @@
 # `nginx -t` antes de recarregar. Implantação só com autorização explícita.
 #
 # Contexto (ver docker-compose.yml e .env.example):
-#   - O Nginx do CloudPanel é o ÚNICO proxy público (80/443, TLS Let's Encrypt).
+#   - O Nginx do CloudPanel é o ÚNICO proxy público (80/443, TLS).
 #   - Backend Flask: 127.0.0.1:<BACKEND_PORT> (padrão 8000).
 #   - Frontend Next.js: 127.0.0.1:<FRONTEND_PORT> (padrão 3000).
 #   - Cloudflare (DNS/HTTPS/proteção) fica na frente do CloudPanel.
-#   Substitua <BACKEND_PORT>/<FRONTEND_PORT>/<DOMINIO> por valores literais —
-#   o CloudPanel não interpreta variáveis de ambiente neste editor.
+#   Substitua <BACKEND_PORT>/<FRONTEND_PORT> por valores literais — o
+#   CloudPanel não interpreta variáveis de ambiente neste editor.
+#   Este modelo NÃO usa `include` de arquivos externos: todos os blocos de proxy
+#   são literais, então `nginx -t` não depende de nenhum snippet.
 #
 # Endurecimento aplicado neste modelo (docs/security/evidence/devsecops.md):
 #   - IP real do cliente SOMENTE a partir de faixas confiáveis da Cloudflare
 #     (real_ip); X-Forwarded-For é SOBRESCRITO (não concatenado) para que o
 #     ProxyFix(x_for=1) do Flask enxergue o IP real e não um valor forjado.
-#   - HSTS, nosniff, frame-ancestors, Referrer-Policy, Permissions-Policy.
+#   - Cabeçalhos de segurança com UM ÚNICO emissor por cabeçalho (tabela abaixo).
 #   - Limite de corpo (client_max_body_size) coerente com
 #     MAX_CONTENT_LENGTH_BYTES do Flask; timeouts e buffers limitados.
-#   - Rate limit por IP (geral da API e mais restrito em rotas sensíveis).
+#   - Rate limit por IP (geral da API, rotas sensíveis e importação).
 #   - Bloqueio de arquivos ocultos (.env, .git) e métodos não usados.
 # =============================================================================
+
+# -----------------------------------------------------------------------------
+# QUEM EMITE O QUÊ (M2). Regra: cada cabeçalho tem exatamente um emissor.
+# add_header em um location SUBSTITUI os do nível server, por isso este modelo
+# NÃO usa add_header de segurança em lugar nenhum (opção mais simples).
+#
+# Cabeçalho                    /api/ (Flask, app/__init__.py)  demais rotas (Next.js)         Nginx
+# Strict-Transport-Security    Flask (31536000)                Next (next.config.ts, 63072000) nunca
+# X-Content-Type-Options       Flask                           Next                            nunca
+# X-Frame-Options              Flask                           Next                            nunca
+# Referrer-Policy              Flask (no-referrer)             Next (no-referrer em            nunca
+#                                                              /ativar-conta; nas demais
+#                                                              strict-origin-when-cross-origin)
+# Content-Security-Policy      Flask (default-src 'none')      Next middleware (com nonce)     nunca
+# Permissions-Policy / COOP    Flask                           Next                            nunca
+# Cache-Control / Pragma       Flask (no-store)                Next                            nunca
+#
+# Limitação aceita: respostas geradas pelo próprio Nginx (429, 502, 504) saem
+# sem esses cabeçalhos. NÃO ative "HSTS" nas configurações da Cloudflare: seria
+# um segundo emissor (duplicaria o HSTS da origem).
+#
+# CRITÉRIO DE ACEITAÇÃO (de outra máquina, após o deploy; cada contagem = 1):
+#   curl -sI https://ueato.revizzicar.com.br/ativar-conta | grep -ic '^referrer-policy'
+#   curl -sI https://ueato.revizzicar.com.br/ativar-conta | grep -i  '^referrer-policy'   # no-referrer
+#   curl -sI https://ueato.revizzicar.com.br/ativar-conta | grep -ic '^strict-transport-security'
+#   curl -sI https://ueato.revizzicar.com.br/api/health   | grep -ic '^strict-transport-security'
+#   curl -sI https://ueato.revizzicar.com.br/api/health   | grep -ic '^referrer-policy'
+# Qualquer contagem diferente de 1 (ou valor diferente de no-referrer em
+# /ativar-conta) reprova o deploy.
+# -----------------------------------------------------------------------------
 
 # -----------------------------------------------------------------------------
 # (Contexto http) Zonas de rate limit. No CloudPanel, o arquivo de vhost é
@@ -33,13 +65,15 @@
 # -----------------------------------------------------------------------------
 limit_req_zone  $binary_remote_addr zone=sispat_api:10m       rate=10r/s;
 limit_req_zone  $binary_remote_addr zone=sispat_sensitive:10m rate=10r/m;
+# B2: zona PRÓPRIA da importação (prévia + consultas); não reutiliza a sensível.
+limit_req_zone  $binary_remote_addr zone=sispat_imports:10m   rate=30r/m;
 limit_conn_zone $binary_remote_addr zone=sispat_conn:10m;
 
 server {
     # listen / server_name / ssl_certificate* : mantenha os valores gerados
-    # pelo CloudPanel para <DOMINIO>. Exemplo ilustrativo:
+    # pelo CloudPanel para o domínio. Exemplo ilustrativo:
     # listen 443 ssl; listen [::]:443 ssl; http2 on;
-    # server_name <DOMINIO>;
+    # server_name ueato.revizzicar.com.br;
 
     # TLS moderno (se o CloudPanel permitir sobrescrever no vhost).
     ssl_protocols TLSv1.2 TLSv1.3;
@@ -50,8 +84,8 @@ server {
     # IP real do cliente via Cloudflare. Mantenha a lista ATUALIZADA a partir de
     # https://www.cloudflare.com/ips/ (IPv4 e IPv6). Requisições que NÃO vêm
     # dessas faixas mantêm $remote_addr = IP de conexão (sem confiar no header).
-    # Recomenda-se também restringir no firewall da VPS as portas 80/443 às
-    # faixas da Cloudflare (evita bypass do WAF acessando o IP de origem).
+    # Restrinja também no firewall da VPS as portas 80/443 às faixas da
+    # Cloudflare (evita bypass do WAF acessando o IP de origem).
     # -------------------------------------------------------------------------
     # OBRIGATÓRIO: descomente e preencha com TODAS as faixas atuais de
     # https://www.cloudflare.com/ips-v4 e /ips-v6 (uma diretiva por faixa).
@@ -82,17 +116,10 @@ server {
     limit_conn_status 429;
 
     # -------------------------------------------------------------------------
-    # Cabeçalhos de segurança (always = inclusive em respostas de erro).
-    # A CSP com nonce é emitida pelo Next.js (src/middleware.ts); para a API,
-    # uma CSP restritiva é definida no location /api/.
-    # HSTS sem "preload" (exige decisão do dono do domínio).
+    # Cabeçalhos de segurança: NENHUM add_header aqui (ver tabela no topo).
+    # Next.js emite os do frontend (CSP com nonce em src/middleware.ts) e o
+    # Flask emite os da API. HSTS sem "preload" (decisão do dono do domínio).
     # -------------------------------------------------------------------------
-    add_header Strict-Transport-Security "max-age=63072000; includeSubDomains" always;
-    add_header X-Content-Type-Options "nosniff" always;
-    add_header X-Frame-Options "DENY" always;
-    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
-    add_header Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=()" always;
-    add_header Cross-Origin-Opener-Policy "same-origin" always;
 
     # Nunca servir arquivos ocultos (.env, .git, .htpasswd...).
     location ~ /\.(?!well-known/) {
@@ -102,10 +129,24 @@ server {
 
     # -------------------------------------------------------------------------
     # Rotas sensíveis da API (convites/ativação/MFA): rate limit mais estrito.
+    # Bloco de proxy LITERAL (B1): sem include de arquivo externo.
     # -------------------------------------------------------------------------
     location ~ ^/api/v1/(users/invite|users/activate-invite|security/mfa/) {
         limit_req zone=sispat_sensitive burst=5 nodelay;
-        include /etc/nginx/snippets/sispat-api-proxy.conf;  # ver bloco abaixo
+
+        proxy_pass http://127.0.0.1:<BACKEND_PORT>;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $remote_addr;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-Host  $host;
+        proxy_connect_timeout 5s;
+        proxy_send_timeout    60s;
+        proxy_read_timeout    60s;
+        proxy_hide_header X-Powered-By;
+        proxy_hide_header Server;
     }
 
     # -------------------------------------------------------------------------
@@ -115,18 +156,33 @@ server {
     location ~ ^/api/v1/(me|users/[0-9a-fA-F-]{36})/avatar$ {
         client_max_body_size 3m;
         limit_req zone=sispat_api burst=10 nodelay;
-        include /etc/nginx/snippets/sispat-api-proxy.conf;
+
+        proxy_pass http://127.0.0.1:<BACKEND_PORT>;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $remote_addr;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-Host  $host;
+        proxy_connect_timeout 5s;
+        proxy_send_timeout    60s;
+        proxy_read_timeout    60s;
+        proxy_hide_header X-Powered-By;
+        proxy_hide_header Server;
     }
 
     # -------------------------------------------------------------------------
     # Importação (Google Sheets -> prévia): pode levar até ~180 s no gunicorn
-    # (--timeout 180). O Nginx precisa esperar MAIS que o backend (>= 190 s),
-    # senão devolve 504 antes da resposta. Só esta rota recebe o timeout longo
-    # (docs/deployment/timeouts-gunicorn.md).
+    # (--timeout 180). O Nginx espera 190 s (> backend), senão devolve 504.
+    # ATENÇÃO (M1): com a Cloudflare proxied o limite de leitura é 100 s
+    # (HTTP 524); o 190 s do Nginx nunca é atingido nesse caminho. Ver
+    # docs/deploy/ROTEIRO_VPS_ueato.md ("Risco M1").
+    # Zona própria (B2): 30 req/min, burst 10 (GET e POST).
     # -------------------------------------------------------------------------
     location ^~ /api/v1/imports/ {
         limit_except GET POST OPTIONS { deny all; }
-        limit_req zone=sispat_sensitive burst=5 nodelay;
+        limit_req zone=sispat_imports burst=10 nodelay;
 
         proxy_pass http://127.0.0.1:<BACKEND_PORT>;
         proxy_http_version 1.1;
@@ -142,32 +198,23 @@ server {
         proxy_read_timeout    190s;
         proxy_hide_header X-Powered-By;
         proxy_hide_header Server;
-
-        add_header Cache-Control "no-store" always;
-        add_header Content-Security-Policy "default-src 'none'; frame-ancestors 'none'" always;
-        add_header Strict-Transport-Security "max-age=63072000; includeSubDomains" always;
-        add_header X-Content-Type-Options "nosniff" always;
-        add_header X-Frame-Options "DENY" always;
-        add_header Referrer-Policy "strict-origin-when-cross-origin" always;
     }
 
     # -------------------------------------------------------------------------
     # API do backend Flask — tudo sob /api/ vai para o backend.
+    # Cabeçalhos de segurança e Cache-Control: emitidos pelo Flask.
     # -------------------------------------------------------------------------
     location /api/ {
         limit_except GET POST PUT PATCH DELETE OPTIONS { deny all; }
         limit_req zone=sispat_api burst=40 nodelay;
 
-        # (conteúdo equivalente a /etc/nginx/snippets/sispat-api-proxy.conf;
-        # se o CloudPanel não permitir "include", duplique este bloco também
-        # no location de rotas sensíveis acima e remova a linha include.)
         proxy_pass http://127.0.0.1:<BACKEND_PORT>;
         proxy_http_version 1.1;
         proxy_set_header Connection "";
 
-        # Cabeçalhos de proxy confiável: X-Forwarded-For é SOBRESCRITO com o
-        # IP real já resolvido (real_ip) — nunca concatenado ao valor enviado
-        # pelo cliente. Coerente com ProxyFix(x_for=1, x_proto=1, x_host=1).
+        # X-Forwarded-For é SOBRESCRITO com o IP real já resolvido (real_ip) —
+        # nunca concatenado ao valor enviado pelo cliente. Coerente com
+        # ProxyFix(x_for=1, x_proto=1, x_host=1).
         proxy_set_header Host              $host;
         proxy_set_header X-Real-IP         $remote_addr;
         proxy_set_header X-Forwarded-For   $remote_addr;
@@ -180,19 +227,10 @@ server {
         proxy_buffering on;
         proxy_hide_header X-Powered-By;
         proxy_hide_header Server;
-
-        # Respostas da API nunca devem ser cacheadas por intermediários.
-        add_header Cache-Control "no-store" always;
-        add_header Content-Security-Policy "default-src 'none'; frame-ancestors 'none'" always;
-        # add_header em location substitui os do server: repetir os essenciais.
-        add_header Strict-Transport-Security "max-age=63072000; includeSubDomains" always;
-        add_header X-Content-Type-Options "nosniff" always;
-        add_header X-Frame-Options "DENY" always;
-        add_header Referrer-Policy "strict-origin-when-cross-origin" always;
     }
 
     # -------------------------------------------------------------------------
-    # Frontend Next.js — demais rotas.
+    # Frontend Next.js — demais rotas. Cabeçalhos: emitidos pelo Next.js.
     # -------------------------------------------------------------------------
     location / {
         limit_except GET HEAD POST { deny all; }
@@ -216,22 +254,4 @@ server {
         proxy_hide_header X-Powered-By;
     }
 }
-
-# -----------------------------------------------------------------------------
-# /etc/nginx/snippets/sispat-api-proxy.conf (opcional, para evitar duplicação):
-#   proxy_pass http://127.0.0.1:<BACKEND_PORT>;
-#   proxy_http_version 1.1;
-#   proxy_set_header Connection "";
-#   proxy_set_header Host $host;
-#   proxy_set_header X-Real-IP $remote_addr;
-#   proxy_set_header X-Forwarded-For $remote_addr;
-#   proxy_set_header X-Forwarded-Proto https;
-#   proxy_set_header X-Forwarded-Host $host;
-#   proxy_connect_timeout 5s; proxy_send_timeout 60s; proxy_read_timeout 60s;
-#   proxy_hide_header X-Powered-By;
-#   add_header Cache-Control "no-store" always;
-#   add_header Content-Security-Policy "default-src 'none'; frame-ancestors 'none'" always;
-#   add_header Strict-Transport-Security "max-age=63072000; includeSubDomains" always;
-#   add_header X-Content-Type-Options "nosniff" always;
-#   add_header X-Frame-Options "DENY" always;
 # =============================================================================

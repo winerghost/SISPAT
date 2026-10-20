@@ -36,7 +36,7 @@ mais de 2 semanas de publicação e versões fixas; `npm audit --omit=dev` = 0. 
 | `src/app/template.tsx` | Transição entre rotas (fade + 4 px, 200 ms; foco e skip link fora do wrapper) |
 | `src/components/carousel/` | `Carousel` (base Embla, WAI-ARIA), `InfoSlider`, `ImageCarousel`, `CarouselImage` |
 | `src/components/features/assets/asset-gallery.tsx` | Galeria de patrimônio (miniaturas, ampliação, zoom por botões, placeholder); **ainda sem uso** |
-| `src/components/dashboard/` | `DashboardOverview`, `StatCard`, `AnimatedChart` (Recharts, carregado sob demanda), `DashboardEmptyState` |
+| `src/components/dashboard/` | `DashboardOverview`, `StatCard`, `AnimatedChart` (Nivo 0.99, carregado sob demanda, `animate={false}`; Recharts removido em 2026-10-20), `DashboardEmptyState` |
 | `src/components/ui/` | `Dialog` animado, `Button loading`, `Skeleton`/`LoadingSkeleton`, `FormField`, `EmptyState`, `StatusIndicator`, `Table` com destaque de linha e seleção |
 | Classes CSS | `transition-factory`, `transition-factory-press`, `ease-factory`, `animate-*` |
 

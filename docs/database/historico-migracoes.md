@@ -44,3 +44,17 @@ JOIN permissions p ON p.id = rp.permission_id
 WHERE p.code = 'settings.email.manage';   -- esperado: 1 linha, role = ADM
 SELECT version_num FROM alembic_version;  -- esperado: 0006_email_settings_permission
 ```
+
+## Alembic 0011 – user_preferences.dashboard_charts (APLICADA)
+
+`0011_user_preferences_dashboard_charts` (head atual no código) foi aplicada
+manualmente no Supabase (projeto único, dev = prod) pelo responsável em
+2026-10-19, com autorização explícita, via SQL Editor (conteúdo do espelho
+abaixo). O carimbo `alembic_version` NÃO foi alterado na aplicação: no deploy,
+usar `alembic stamp 0011_user_preferences_dashboard_charts` (sem `upgrade`).
+Aditiva e idempotente: coluna
+`dashboard_charts jsonb NOT NULL DEFAULT '{}'` em `user_preferences`, com
+CHECKs `ck_user_preferences_dashboard_charts_object` (objeto JSON) e
+`ck_user_preferences_dashboard_charts_size` (texto <= 512 bytes). Espelho SQL:
+`backend/migrations/sql/0014_user_preferences_dashboard_charts.sql`. Downgrade
+remove os CHECKs e a coluna.

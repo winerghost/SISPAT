@@ -132,7 +132,7 @@ def test_db_alembic_revision_chain_is_linear() -> None:
     down_targets = [d for d in revisions.values() if d is not None]
     assert len(down_targets) == len(set(down_targets)), "ramificação (branch) de revisões"
     heads = set(revisions) - set(down_targets)
-    assert heads == {"0010_seed_permission_corrections"}, heads
+    assert heads == {"0011_user_preferences_dashboard_charts"}, heads
 
 
 # ---------------------------------------------------------------------------

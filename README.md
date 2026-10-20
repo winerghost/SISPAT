@@ -4,8 +4,7 @@ Sistema de Gestão Patrimonial da **Advocacia-Geral da União (AGU)** — unidad
 **Palmas/TO**.
 
 > **Status atual: Fase 1 — banco de dados, modelagem e permissionamento em
-> andamento.** Frontend e demais fases ainda não foram iniciados (ver
-> `CLAUDE.md`, mantido localmente — ver
+> andamento.** Frontend e demais fases ainda não foram iniciados
 > [Documentação local](#documentação-local-não-versionada)).
 
 ## Visão geral
@@ -38,13 +37,6 @@ O SISPAT-AGU controla o inventário patrimonial da unidade, com:
 - **Permissões:** RBAC com perfis `ADM`, `USER` e `RH`, com escopo por
   unidade e, quando aplicável, por campo. O backend valida autorização em
   toda operação; nega por padrão.
-
-## Documentos de governança
-
-- `DESIGN.md` — fonte oficial do Design System ("Factory",
-  tema dark) para quando o frontend for implementado.
-- `CLAUDE.md` — regras de arquitetura, segurança, permissões
-  e fases do projeto.
 
 **Estes dois arquivos são documentos de governança imutáveis: não devem ser
 substituídos, recriados ou modificados sem autorização explícita.** Qualquer
@@ -97,6 +89,7 @@ Para verificar o status/healthcheck dos serviços:
 ```powershell
 .\scripts\verify.ps1      # Windows
 ```
+
 ```bash
 ./scripts/verify.sh       # Linux/macOS/Git Bash
 ```
@@ -124,6 +117,43 @@ essas portas locais. Veja o modelo de configuração do vhost em
 [`infra/cloudpanel/vhost.conf.example`](./infra/cloudpanel/vhost.conf.example)
 — um exemplo de referência para quando o site for cadastrado no CloudPanel,
 **não** uma configuração real de servidor.
+
+### Preparo de implantação (domínio `ueato.revizzicar.com.br`, 2026-10-19)
+
+Implantação feita pelo responsável, passo a passo; nada é implantado sem
+autorização explícita. Documentos:
+
+- [`docs/deploy/ROTEIRO_VPS_ueato.md`](./docs/deploy/ROTEIRO_VPS_ueato.md) —
+  comandos em ordem, verificações pós-subida e rollback.
+- [`docs/deploy/ENV_PRODUCAO_ueato.md`](./docs/deploy/ENV_PRODUCAO_ueato.md) —
+  variáveis de produção (só nomes; em produção CORS e redirects de convite
+  precisam ser `https://`, senão o backend não inicia).
+- [`docs/deployment/checklist-deploy-vps.md`](./docs/deployment/checklist-deploy-vps.md) —
+  checklist canônico.
+- Revisões: `docs/security/REVISAO_AUTHZ_2026-10-19.md`,
+  `REVISAO_INFRA_2026-10-19.md` e `REVISAO_POS_CORRECOES_2026-10-19.md`.
+
+Nginx não emite cabeçalhos de segurança (Next.js e Flask emitem; tabela no
+vhost). Pendências conhecidas: gitleaks e trivy não executados, vhost sem
+`nginx -t`, limite de 100 s da Cloudflare na prévia do Sheets (decisão do
+responsável).
+
+### Dashboard: gráficos personalizáveis (2026-10-20)
+
+- Gráficos com **Nivo 0.99** (`@nivo/bar`, `@nivo/pie`, `@nivo/line`), que
+  substituiu o Recharts. O Tremor foi avaliado e descartado porque exige React 18.
+  O tema único fica em `frontend/src/components/dashboard/chart-theme.ts`
+  (cores do DESIGN.md), com `animate={false}`.
+- Cada usuário escolhe o tipo de cada painel (unidades: agrupado/empilhado/
+  horizontal; situação: pizza/rosca/barras; mensal: linha/área/barras). A
+  escolha fica em `user_preferences.dashboard_charts` (`GET`/`PATCH
+  /api/v1/me/preferences`), validada no backend. Detalhes em
+  `docs/ux/DASHBOARD_GRAFICOS.md`.
+- Migração Alembic `0011_user_preferences_dashboard_charts` (espelho
+  `sql/0014`) **já aplicada** no Supabase. No deploy, usar `alembic stamp
+  0011_user_preferences_dashboard_charts`, sem `upgrade`.
+- Revisão: `docs/security/REVISAO_DASHBOARD_NIVO_2026-10-20.md` (L-1 corrigido;
+  L-2 e `npm dedupe` ficaram para depois do deploy).
 
 ## Estrutura de pastas
 
@@ -173,13 +203,13 @@ frente em `docs/security/evidence/` — ambos mantidos localmente, fora do
 repositório (ver [Documentação local](#documentação-local-não-versionada)).
 Scripts (Git Bash/Linux):
 
-| Script | O que faz |
-|---|---|
-| `scripts/test-backend.sh [--venv]` | pytest + cobertura (use `--venv` para um ambiente isolado) |
-| `scripts/test-frontend.sh` | lint, typecheck e build do Next |
-| `scripts/test-responsive.sh` | Playwright: 9 resoluções + axe (WCAG 2.2 AA) |
-| `scripts/security-audit.sh [--strict]` | bandit, pip-audit, npm audit, gitleaks, semgrep, trivy fs |
-| `scripts/check-dependencies.sh` | dependências desatualizadas/vulneráveis |
+| Script                                 | O que faz                                                  |
+| -------------------------------------- | ---------------------------------------------------------- |
+| `scripts/test-backend.sh [--venv]`     | pytest + cobertura (use `--venv` para um ambiente isolado) |
+| `scripts/test-frontend.sh`             | lint, typecheck e build do Next                            |
+| `scripts/test-responsive.sh`           | Playwright: 9 resoluções + axe (WCAG 2.2 AA)               |
+| `scripts/security-audit.sh [--strict]` | bandit, pip-audit, npm audit, gitleaks, semgrep, trivy fs  |
+| `scripts/check-dependencies.sh`        | dependências desatualizadas/vulneráveis                    |
 
 Dependências Python: `backend/requirements.txt` (pins exatos), `backend/requirements.lock`
 (hashes, usado no Docker) e `backend/requirements-dev.txt` (testes/ferramentas). Para
@@ -306,4 +336,4 @@ A IA é **consultiva e somente leitura**: nunca altera dados nem executa ações
    `/ai/insights` e assistente `/ai/ask`, ADM + AAL2) concluídas. Evidências em
    `docs/security/evidence/settings-module-etapa*.md`.
    API de importação dos cadastros (`/api/v1/catalog-imports`, ADM + AAL2) e `GET
-   /imports/google-sheets/<id>/pending`: ver `docs/architecture/cadastros-apoio-api.md`.
+/imports/google-sheets/<id>/pending`: ver `docs/architecture/cadastros-apoio-api.md`.

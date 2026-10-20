@@ -301,6 +301,7 @@ def _prod_kwargs(**overrides: Any) -> dict[str, Any]:
         "supabase_jwt_secret": "j" * 40,
         "supabase_url": "https://projeto-ficticio.supabase.co",
         "flask_env": "production",
+        "cors_allowed_origins": "https://app.example.test",
         "_env_file": None,
     }
     base.update(overrides)

@@ -214,6 +214,19 @@ class DeactivateRequest(VersionRequest):
     reason: str | None = Field(default=None, max_length=1000)
 
 
+class DashboardChartsPatch(_StrictModel):
+    """`dashboard_charts` parcial: allowlist FECHADA por painel.
+
+    Ausente = manter; `null` = restaurar o padrão da chave (via
+    `model_fields_set`). Chave desconhecida/valor fora da allowlist/objeto
+    aninhado -> 400.
+    """
+
+    units: Literal["grouped", "stacked", "horizontal"] | None = None
+    status: Literal["pie", "donut", "bar"] | None = None
+    monthly: Literal["line", "area", "bar"] | None = None
+
+
 class PreferencesUpdateRequest(_NoExplicitNullsModel):
     """Corpo de `PATCH /api/v1/me/preferences` (Etapa 3 — Aparência).
 
@@ -224,11 +237,13 @@ class PreferencesUpdateRequest(_NoExplicitNullsModel):
     version: StrictInt = Field(ge=0, le=2_147_483_647)
     density: Literal["comfortable", "compact"] | None = None
     font_scale: Literal[100, 112, 125] | None = None
+    dashboard_charts: "DashboardChartsPatch | None" = None
 
     @model_validator(mode="after")
     def _require_change(self) -> "PreferencesUpdateRequest":
-        if self.density is None and self.font_scale is None:
-            raise ValueError("informe density e/ou font_scale")
+        charts_changed = bool(self.dashboard_charts and self.dashboard_charts.model_fields_set)
+        if self.density is None and self.font_scale is None and not charts_changed:
+            raise ValueError("informe density, font_scale e/ou dashboard_charts")
         return self
 
 
@@ -307,7 +322,11 @@ def reject_unexpected_fields(
     """Registra evento de segurança e aborta com 400 por campos não permitidos."""
     # SEC-REV-02: nomes vêm do cliente; neutraliza controles (CR/LF) antes de log/mensagem.
     names = sorted(_CONTROL_CHARS_RE.sub("?", str(name)[:64]) for name in field_names)
-    privileged = sorted(set(names) & PRIVILEGED_FIELD_NAMES)
+    # L-1: nomes aninhados chegam como caminho ("dashboard_charts.role"); o
+    # último segmento também é checado contra os campos privilegiados.
+    privileged = sorted(
+        name for name in set(names) if name.rsplit(".", 1)[-1] in PRIVILEGED_FIELD_NAMES
+    )
     if privileged:
         record_security_event(
             EVENT_PRIVILEGE_ESCALATION_ATTEMPT,
@@ -324,6 +343,21 @@ def reject_unexpected_fields(
     abort(400, description=f"Campo(s) não permitido(s) {location}: {shown}.")
 
 
+def get_json_body() -> Any:
+    """`request.get_json(silent=True)` tolerante a JSON profundamente aninhado.
+
+    SEC-REV-01 / M-1: o parser estoura `RecursionError` (-> 500). Nesse caso
+    devolve `[]`: valor não nulo, não-objeto e diferente de `{}`, que todas as
+    rotas já rejeitam com o mesmo 400 de corpo inválido.
+    """
+    from flask import request
+
+    try:
+        return request.get_json(silent=True)
+    except RecursionError:
+        return []
+
+
 def parse_body(model: type[ModelT], body: Any, *, context: str) -> ModelT:
     """Valida `body` contra `model`; 400 padronizado em qualquer falha.
 
@@ -337,7 +371,9 @@ def parse_body(model: type[ModelT], body: Any, *, context: str) -> ModelT:
     except ValidationError as exc:
         errors = exc.errors(include_input=False, include_url=False)
         extra_fields = [
-            str(err["loc"][0]) for err in errors if err.get("type") == "extra_forbidden" and err.get("loc")
+            ".".join(str(part) for part in err["loc"])
+            for err in errors
+            if err.get("type") == "extra_forbidden" and err.get("loc")
         ]
         if extra_fields:
             reject_unexpected_fields(extra_fields, context=context)

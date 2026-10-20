@@ -122,6 +122,9 @@ def safe_scalar(value: Any) -> Any:
     if value is None or isinstance(value, bool):
         return value
     if isinstance(value, int):
+        # B-3: inteiro de 11 dígitos pode ser um CPF sem máscara.
+        if len(str(abs(value))) == 11:
+            return REDACTED
         return value
     if isinstance(value, str):
         if _CPF_LIKE_RE.match(value):  # SEC-REV-04: formato de CPF (11 dígitos)

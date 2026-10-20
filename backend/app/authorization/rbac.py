@@ -362,7 +362,10 @@ def require_unit_access(
             if source == "view_args":
                 raw_unit_id = kwargs.get(unit_id_arg)
             elif source == "json":
-                body = request.get_json(silent=True)
+                try:
+                    body = request.get_json(silent=True)
+                except RecursionError:  # M-1: JSON profundamente aninhado
+                    body = None
                 raw_unit_id = body.get(unit_id_arg) if isinstance(body, dict) else None
             else:
                 raw_unit_id = request.args.get(unit_id_arg)

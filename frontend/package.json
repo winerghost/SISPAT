@@ -14,6 +14,10 @@
     "test:a11y": "playwright test --project=a11y"
   },
   "dependencies": {
+    "@nivo/bar": "0.99.0",
+    "@nivo/core": "0.99.0",
+    "@nivo/line": "0.99.0",
+    "@nivo/pie": "0.99.0",
     "@radix-ui/react-dialog": "1.1.23",
     "@radix-ui/react-slot": "1.5.0",
     "@supabase/supabase-js": "2.117.3",
@@ -29,7 +33,6 @@
     "next": "15.5.27",
     "react": "19.3.0",
     "react-dom": "19.3.0",
-    "recharts": "2.15.4",
     "sonner": "2.0.8",
     "tailwind-merge": "3.7.0"
   },

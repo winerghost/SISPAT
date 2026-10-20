@@ -101,4 +101,8 @@ class UserPreferences(TimestampMixin, Base):
     font_scale: Mapped[int] = mapped_column(
         SmallInteger, nullable=False, server_default=text("100")
     )
+    # Só chaves NÃO padrão (units/status/monthly); allowlist no schema/serviço.
+    dashboard_charts: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'")
+    )
     version: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("1"))
