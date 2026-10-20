@@ -111,7 +111,7 @@ Notas:
 Estado (docs/deploy/PRONTIDAO_2026-10-19.md): o repositório tem Alembic 0001 a 0010 e o
 Supabase JÁ contém o conteúdo das migrações 0007-0010 (numeração dos `.sql` difere da do
 Alembic; compare por conteúdo). O `alembic_version` do banco está em `0006`. Procedimento:
-**`alembic stamp 0011_user_preferences_dashboard_charts`; nenhum `alembic upgrade`.**
+**`alembic stamp 0011_dashboard_charts_prefs`; nenhum `alembic upgrade`.**
 
 1. [ ] Backup/PITR do Supabase CONFIRMADO no painel (data/hora registradas) ANTES do stamp.
 2. [ ] Esquema real conferido contra 0007-0010 (`unit_aliases` e índices, `ai_settings`,
@@ -119,8 +119,8 @@ Alembic; compare por conteúdo). O `alembic_version` do banco está em `0006`. P
    resultado registrado. Se divergir, NÃO carimbe.
 3. [ ] Autorização explícita + janela combinada (base única: dev = prod).
 4. [ ] `docker compose run --rm --no-deps backend alembic current` (esperado `0006...`), depois
-   `... alembic stamp 0011_user_preferences_dashboard_charts`, depois `alembic current`
-   (esperado `0011_user_preferences_dashboard_charts (head)`).
+   `... alembic stamp 0011_dashboard_charts_prefs`, depois `alembic current`
+   (esperado `0011_dashboard_charts_prefs (head)`).
 5. [ ] Registre data, autorizador e resultado em `docs/database/historico-migracoes.md`.
 
 ## 4. Subida

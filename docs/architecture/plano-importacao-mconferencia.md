@@ -85,7 +85,7 @@ preservado em `source_record_id`; duplicata por e-mail → manter a 1ª e relata
 `responsible_person_id`; `USUARIO` (e-mail) → pessoa resolvida em
 `normalized_values` (`assigned_user_id` referencia contas do sistema, fica NULL).
 
-Etapas novas: (A) migração (PRONTA, não aplicada: `0007_unit_aliases` com 4 siglas e `0008_catalog_source_ids_permissions`, espelhos `sql/0010` e `sql/0011`; aplicar com `cd backend && alembic upgrade head`): seed das 4 siglas, `source_record_id` em
+Etapas novas: (A) migração (PRONTA, não aplicada: `0007_unit_aliases` com 4 siglas e `0008_catalog_source_ids_perms`, espelhos `sql/0010` e `sql/0011`; aplicar com `cd backend && alembic upgrade head`): seed das 4 siglas, `source_record_id` em
 `rooms`/`responsible_people`/`units`, unicidade (unidade+nome da sala, e-mail
 da pessoa), permissões `responsible.manage`/`units.update` (backend-platform);
 (B) API CRUD + serviços + importação dos cadastros (backend-domain) —
@@ -178,7 +178,7 @@ para identidade sem chave.
 - Importação inicial (roteiro 3.3) e decisão da data de virada.
 - Decidir SEC-CAT-06 (USER vê cadastro completo de pessoas ou só vínculo) e
   SEC-CAT-07 (purga de prévias expiradas; proposta: 30 dias).
-- Antes do VPS: `alembic stamp 0008_catalog_source_ids_permissions`,
+- Antes do VPS: `alembic stamp 0008_catalog_source_ids_perms`,
   `# nosemgrep` justificado em `email/templates.py:75`, instalar gitleaks e
   trivy, rodar `scripts/security-audit.sh` de novo.
 - Resolvido: siglas PF/PU/CJU/UEA; leitura de RESPONSAVEL (1ª = vínculo,

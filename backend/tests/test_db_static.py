@@ -132,7 +132,17 @@ def test_db_alembic_revision_chain_is_linear() -> None:
     down_targets = [d for d in revisions.values() if d is not None]
     assert len(down_targets) == len(set(down_targets)), "ramificação (branch) de revisões"
     heads = set(revisions) - set(down_targets)
-    assert heads == {"0011_user_preferences_dashboard_charts"}, heads
+    assert heads == {"0011_dashboard_charts_prefs"}, heads
+
+
+def test_db_alembic_revision_ids_cabem_em_alembic_version() -> None:
+    """`alembic_version.version_num` é varchar(32): ID maior quebra stamp/upgrade.
+
+    Regressão do deploy de 2026-10-20 (StringDataRightTruncation no stamp da 0011).
+    """
+    for path in VERSIONS_DIR.glob("*.py"):
+        module = _load_module(path)
+        assert len(module.revision) <= 32, f"{path.name}: revision com {len(module.revision)} caracteres"
 
 
 # ---------------------------------------------------------------------------
@@ -482,7 +492,7 @@ def test_db_unit_alias_model_matches_migration() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Migração 0008_catalog_source_ids_permissions
+# Migração 0008_catalog_source_ids_perms
 # ---------------------------------------------------------------------------
 
 
@@ -492,7 +502,7 @@ def catalog_migration() -> ModuleType:
 
 
 def test_db_0008_revises_0007(catalog_migration) -> None:
-    assert catalog_migration.revision == "0008_catalog_source_ids_permissions"
+    assert catalog_migration.revision == "0008_catalog_source_ids_perms"
     assert catalog_migration.down_revision == "0007_unit_aliases"
 
 
@@ -579,7 +589,7 @@ def test_db_0008_phone_models_match_migration() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Migração 0009_unique_indexes_assets_movements
+# Migração 0009_uniq_idx_assets_movements
 # ---------------------------------------------------------------------------
 
 
@@ -589,8 +599,8 @@ def unique_migration() -> ModuleType:
 
 
 def test_db_0009_revises_0008(unique_migration) -> None:
-    assert unique_migration.revision == "0009_unique_indexes_assets_movements"
-    assert unique_migration.down_revision == "0008_catalog_source_ids_permissions"
+    assert unique_migration.revision == "0009_uniq_idx_assets_movements"
+    assert unique_migration.down_revision == "0008_catalog_source_ids_perms"
 
 
 def test_db_0009_partial_unique_indexes(unique_migration) -> None:
@@ -669,7 +679,7 @@ def permfix_migration() -> ModuleType:
 
 def test_db_0010_revises_0009(permfix_migration) -> None:
     assert permfix_migration.revision == "0010_seed_permission_corrections"
-    assert permfix_migration.down_revision == "0009_unique_indexes_assets_movements"
+    assert permfix_migration.down_revision == "0009_uniq_idx_assets_movements"
 
 
 def test_db_0010_revokes_only_two_permissions_from_user(permfix_migration) -> None:

@@ -149,9 +149,9 @@ responsável).
   escolha fica em `user_preferences.dashboard_charts` (`GET`/`PATCH
   /api/v1/me/preferences`), validada no backend. Detalhes em
   `docs/ux/DASHBOARD_GRAFICOS.md`.
-- Migração Alembic `0011_user_preferences_dashboard_charts` (espelho
+- Migração Alembic `0011_dashboard_charts_prefs` (espelho
   `sql/0014`) **já aplicada** no Supabase. No deploy, usar `alembic stamp
-  0011_user_preferences_dashboard_charts`, sem `upgrade`.
+  0011_dashboard_charts_prefs`, sem `upgrade`.
 - Revisão: `docs/security/REVISAO_DASHBOARD_NIVO_2026-10-20.md` (L-1 corrigido;
   L-2 e `npm dedupe` ficaram para depois do deploy).
 

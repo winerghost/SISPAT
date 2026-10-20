@@ -23,7 +23,7 @@ Espelho SQL: backend/migrations/sql/0011_catalog_source_ids_permissions.sql.
 Downgrade: remove índices, constraints e colunas criados aqui e as duas
 permissões (com seus vínculos).
 
-Revision ID: 0008_catalog_source_ids_permissions
+Revision ID: 0008_catalog_source_ids_perms
 Revises: 0007_unit_aliases
 Create Date: 2026-10-16
 
@@ -34,7 +34,7 @@ from typing import Sequence, Union
 
 from alembic import op
 
-revision: str = "0008_catalog_source_ids_permissions"
+revision: str = "0008_catalog_source_ids_perms"
 down_revision: Union[str, None] = "0007_unit_aliases"
 branch_labels: Union[Sequence[str], None] = None
 depends_on: Union[Sequence[str], None] = None

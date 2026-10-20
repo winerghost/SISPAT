@@ -526,7 +526,7 @@ Supabase sem antes alinhar o `alembic_version`**; prefira colar os `.sql`.
 
 | Alembic | Espelho SQL (colar nesta ordem) | Efeito |
 |---|---|---|
-| `0009_unique_indexes_assets_movements` | `backend/migrations/sql/0012_unique_indexes_assets_movements.sql` | SEC-AST-01: `uq_assets_patrimony_number_active` em `assets (lower(btrim(patrimony_number))) WHERE deleted_at IS NULL`. SEC-MOV-02: `uq_asset_movements_one_pending` em `asset_movements (asset_id) WHERE status = 'PENDENTE'`. |
+| `0009_uniq_idx_assets_movements` | `backend/migrations/sql/0012_unique_indexes_assets_movements.sql` | SEC-AST-01: `uq_assets_patrimony_number_active` em `assets (lower(btrim(patrimony_number))) WHERE deleted_at IS NULL`. SEC-MOV-02: `uq_asset_movements_one_pending` em `asset_movements (asset_id) WHERE status = 'PENDENTE'`. |
 | `0010_seed_permission_corrections` | `backend/migrations/sql/0013_seed_permission_corrections.sql` | Revoga do perfil USER `rooms.manage` e `inventory.create` (a matriz as reserva ao ADM). |
 
 - 0009: cada índice é precedido de verificação que aborta com contagem (sem dados pessoais) se
@@ -540,7 +540,7 @@ Supabase sem antes alinhar o `alembic_version`**; prefira colar os `.sql`.
 Aplicar (após autorização explícita), uma das opções:
 
 - SQL Editor do Supabase: colar `0012_...sql`; depois, se desejado, `0013_...sql`.
-- Alembic (só com `alembic_version` correto): `cd backend && alembic upgrade 0009_unique_indexes_assets_movements`
+- Alembic (só com `alembic_version` correto): `cd backend && alembic upgrade 0009_uniq_idx_assets_movements`
   e depois `alembic upgrade 0010_seed_permission_corrections` (ou `alembic upgrade head`).
 
 Reverter (nesta ordem inversa):
@@ -558,8 +558,8 @@ DROP INDEX IF EXISTS public.uq_asset_movements_one_pending;
 DROP INDEX IF EXISTS public.uq_assets_patrimony_number_active;
 ```
 
-Alembic: `alembic downgrade 0009_unique_indexes_assets_movements` e
-`alembic downgrade 0008_catalog_source_ids_permissions`.
+Alembic: `alembic downgrade 0009_uniq_idx_assets_movements` e
+`alembic downgrade 0008_catalog_source_ids_perms`.
 
 Nota: o índice `uq_assets_patrimony_number_active` existe só na migração (não no modelo
 SQLAlchemy), porque testes existentes (`test_alerts_api`, `test_sec_alerts`, importação) criam

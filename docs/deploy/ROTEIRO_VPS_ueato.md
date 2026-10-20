@@ -85,10 +85,10 @@ passa a "mentir". A base Supabase é única (dev = prod). Exigir, nesta ordem:
 - [ ] Autorização explícita e janela combinada para o stamp.
 ```
 docker compose run --rm --no-deps backend alembic current
-docker compose run --rm --no-deps backend alembic stamp 0011_user_preferences_dashboard_charts
+docker compose run --rm --no-deps backend alembic stamp 0011_dashboard_charts_prefs
 docker compose run --rm --no-deps backend alembic current
 ```
-Esperado: `0006...` antes e `0011_user_preferences_dashboard_charts (head)` depois.
+Esperado: `0006...` antes e `0011_dashboard_charts_prefs (head)` depois.
 Nenhum `alembic upgrade`. Se o esquema divergir, PARE e não carimbe.
 
 ## 4. Subir

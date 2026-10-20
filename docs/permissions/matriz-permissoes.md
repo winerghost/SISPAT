@@ -71,7 +71,7 @@ restrito (unidade e/ou campo — ver coluna "Escopo").
 | Gerenciar integrações | `integrations.manage` | `✔` | `—` | `—` | Global (n8n, credenciais de integração com Google Sheets). |
 | Configurações de sistema | `system.manage` | `✔` | `—` | `—` | Global. |
 | Gerenciar/testar configuração de e-mail (SMTP) | `settings.email.manage` | `✔` | `—` | `—` | Global; exige AAL2; teste limitado a 3/h por ADM. Semeada pela migração Alembic `0006_email_settings_permission` (espelho `sql/0009`), somente ADM. |
-| Gerenciar pessoas responsáveis (criar/alterar/inativar) | `responsible.manage` | `✔` | `—` | `—` | Escopo de unidade; exclusão = inativação. Migração Alembic `0008_catalog_source_ids_permissions` (espelho `sql/0011`), somente ADM; pendente de aplicação. |
+| Gerenciar pessoas responsáveis (criar/alterar/inativar) | `responsible.manage` | `✔` | `—` | `—` | Escopo de unidade; exclusão = inativação. Migração Alembic `0008_catalog_source_ids_perms` (espelho `sql/0011`), somente ADM; pendente de aplicação. |
 | Telefone (`phone`) de usuários e pessoas responsáveis | `responsible.manage` / `users.update` | `✔` | `—` | `—` | Campo de dado pessoal (LGPD) restrito a ADM por campo: leitura e escrita negadas a USER/RH e omitidas das respostas; somente dígitos (10 a 13). Coluna criada pela migração `0008` (pendente de aplicação); imposição no backend implementada em `catalog_service` (pessoas responsáveis: coluna não consultada e chave omitida para USER/RH; ver `docs/architecture/cadastros-apoio-api.md`). Leitura de salas/unidades usa `units.read`; de pessoas, `responsible.read`. |
 | Alterar dados cadastrais de unidades | `units.update` | `✔` | `—` | `—` | Migração `0008` (espelho `sql/0011`), somente ADM; pendente de aplicação. |
 

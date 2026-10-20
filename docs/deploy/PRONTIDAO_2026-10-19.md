@@ -21,8 +21,8 @@ Repositório: Alembic em `backend/migrations/versions` (0001 a 0010) e espelhos
 | 0005_settings_ai_users | 0007 | SIM | `ai_settings` (1 linha, desligada), `user_preferences`, colunas `version`, `sessions_revoked_at`, `avatar_object_key`, `deactivated_*` em `users`, permissões `settings.ai.manage`, `ai.use`, `users.reset_*` |
 | 0006_email_settings_permission | 0009 | SIM | permissão `settings.email.manage` |
 | 0007_unit_aliases | 0010 | SIM | tabela `unit_aliases` (4), `uq_unit_aliases_alias_lower`, `ix_unit_aliases_unit_id` |
-| 0008_catalog_source_ids_permissions | 0011 | SIM | colunas `source_record_id` (units/rooms/responsible_people), `phone`, 5 constraints `ck_*`, 5 índices únicos, permissões `responsible.manage`, `units.update` |
-| 0009_unique_indexes_assets_movements | 0012 | SIM | `uq_assets_patrimony_number_active`, `uq_asset_movements_one_pending`; registrada também em `list_migrations` (20261017113052) |
+| 0008_catalog_source_ids_perms | 0011 | SIM | colunas `source_record_id` (units/rooms/responsible_people), `phone`, 5 constraints `ck_*`, 5 índices únicos, permissões `responsible.manage`, `units.update` |
+| 0009_uniq_idx_assets_movements | 0012 | SIM | `uq_assets_patrimony_number_active`, `uq_asset_movements_one_pending`; registrada também em `list_migrations` (20261017113052) |
 | 0010_seed_permission_corrections | 0013 | SIM | USER não possui `rooms.manage` nem `inventory.create` |
 | (sem Alembic) | 0008_storage_avatars | SIM | bucket `avatars` privado, 1 MiB, `image/webp`; policy RESTRICTIVE `sispat_avatars_deny_client_roles`; 3 objetos |
 
@@ -270,7 +270,7 @@ BLOQUEIA o deploy:
 Fazer antes, não bloqueia:
 - `alembic stamp 0010_seed_permission_corrections` (carimbo em 0006; esquema ok).
   **Superado em 2026-10-20:** com a 0011 aplicada, o carimbo é
-  `alembic stamp 0011_user_preferences_dashboard_charts`.
+  `alembic stamp 0011_dashboard_charts_prefs`.
 - Ligar leaked password protection no Supabase Auth.
 - Unificar os checklists e atualizar a seção 3 desatualizada.
 - Definir retenção/expurgo de `import_previews`/`import_preview_items` (PII).
@@ -310,7 +310,7 @@ OK:
 7. `docker compose config --quiet` e `docker compose build backend frontend`.
 8. Carimbo Alembic (com autorização, sem DDL):
    `docker compose run --rm --no-deps backend alembic current`
-   `docker compose run --rm --no-deps backend alembic stamp 0011_user_preferences_dashboard_charts`
+   `docker compose run --rm --no-deps backend alembic stamp 0011_dashboard_charts_prefs`
    (0011 aplicada manualmente em 2026-10-19; ver atualização de 2026-10-20 abaixo)
    `docker compose run --rm --no-deps backend alembic current`
 9. `docker compose up -d` (acrescentar `--profile worker` apenas se for usar IA).
@@ -356,10 +356,10 @@ Ciclo de correção pré-deploy concluído; deploy ainda NÃO realizado.
 - Gráficos personalizáveis por usuário e troca do Recharts pelo Nivo 0.99
   (Tremor descartado por exigir React 18). Detalhes em
   `docs/ux/DASHBOARD_GRAFICOS.md`.
-- Migração Alembic `0011_user_preferences_dashboard_charts` (espelho `sql/0014`)
+- Migração Alembic `0011_dashboard_charts_prefs` (espelho `sql/0014`)
   aplicada manualmente no Supabase em 2026-10-19, com autorização; CHECKs
   confirmados pelo responsável. **Carimbo no deploy:**
-  `alembic stamp 0011_user_preferences_dashboard_charts` (sem `upgrade`).
+  `alembic stamp 0011_dashboard_charts_prefs` (sem `upgrade`).
 - Revisão `docs/security/REVISAO_DASHBOARD_NIVO_2026-10-20.md`: APROVADO COM
   RESSALVAS; L-1 e I-3 corrigidos; L-2 e I-4 (`npm dedupe`) adiados para depois
   do deploy.

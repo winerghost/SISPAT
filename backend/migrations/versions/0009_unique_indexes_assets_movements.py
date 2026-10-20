@@ -1,7 +1,7 @@
 """indices unicos parciais: numero patrimonial ativo e uma movimentacao PENDENTE por bem
 
 PENDENTE DE APLICAÇÃO MEDIANTE AUTORIZAÇÃO EXPLÍCITA. Esta migração NÃO foi
-aplicada em banco algum. Depende de 0008_catalog_source_ids_permissions
+aplicada em banco algum. Depende de 0008_catalog_source_ids_perms
 (que também está pendente no alembic_version do banco).
 
 Aditiva e idempotente (SEC-AST-01 e SEC-MOV-02):
@@ -19,8 +19,8 @@ Espelho SQL: backend/migrations/sql/0012_unique_indexes_assets_movements.sql.
 
 Downgrade: remove apenas os dois índices (DROP INDEX IF EXISTS).
 
-Revision ID: 0009_unique_indexes_assets_movements
-Revises: 0008_catalog_source_ids_permissions
+Revision ID: 0009_uniq_idx_assets_movements
+Revises: 0008_catalog_source_ids_perms
 Create Date: 2026-10-17
 
 """
@@ -30,8 +30,8 @@ from typing import Sequence, Union
 
 from alembic import op
 
-revision: str = "0009_unique_indexes_assets_movements"
-down_revision: Union[str, None] = "0008_catalog_source_ids_permissions"
+revision: str = "0009_uniq_idx_assets_movements"
+down_revision: Union[str, None] = "0008_catalog_source_ids_perms"
 branch_labels: Union[Sequence[str], None] = None
 depends_on: Union[Sequence[str], None] = None
 

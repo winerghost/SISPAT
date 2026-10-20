@@ -69,7 +69,7 @@ class Asset(TimestampMixin, Base):
         ),
         # SEC-AST-01: o índice único parcial `uq_assets_patrimony_number_active`
         # (lower(btrim(patrimony_number)) WHERE deleted_at IS NULL) existe só na
-        # migração 0009_unique_indexes_assets_movements. NÃO é declarado aqui
+        # migração 0009_uniq_idx_assets_movements. NÃO é declarado aqui
         # porque testes existentes (alertas de duplicidade, importação)
         # constroem duplicatas ativas no SQLite; ver docs/architecture.
     )
@@ -162,7 +162,7 @@ class AssetMovement(Base):
             "status IN ('PENDENTE','APROVADA','REJEITADA','CONCLUIDA','CANCELADA')",
             name="ck_asset_movements_status",
         ),
-        # SEC-MOV-02 (migração 0009_unique_indexes_assets_movements): no
+        # SEC-MOV-02 (migração 0009_uniq_idx_assets_movements): no
         # máximo UMA movimentação PENDENTE por bem.
         Index(
             "uq_asset_movements_one_pending",

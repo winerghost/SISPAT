@@ -1,7 +1,7 @@
 """correção de menor privilégio: USER perde rooms.manage e inventory.create
 
 PENDENTE DE APLICAÇÃO MEDIANTE AUTORIZAÇÃO EXPLÍCITA. Esta migração NÃO foi
-aplicada em banco algum. Depende de 0009_unique_indexes_assets_movements
+aplicada em banco algum. Depende de 0009_uniq_idx_assets_movements
 (independente em conteúdo, mas a cadeia Alembic é linear).
 
 O seed 0002 concedeu `rooms.manage` e `inventory.create` ao perfil USER, mas a
@@ -19,7 +19,7 @@ Espelho SQL: backend/migrations/sql/0013_seed_permission_corrections.sql.
 Downgrade: devolve os dois vínculos ao USER (INSERT ... ON CONFLICT DO NOTHING).
 
 Revision ID: 0010_seed_permission_corrections
-Revises: 0009_unique_indexes_assets_movements
+Revises: 0009_uniq_idx_assets_movements
 Create Date: 2026-10-17
 
 """
@@ -30,7 +30,7 @@ from typing import Sequence, Union
 from alembic import op
 
 revision: str = "0010_seed_permission_corrections"
-down_revision: Union[str, None] = "0009_unique_indexes_assets_movements"
+down_revision: Union[str, None] = "0009_uniq_idx_assets_movements"
 branch_labels: Union[Sequence[str], None] = None
 depends_on: Union[Sequence[str], None] = None
 

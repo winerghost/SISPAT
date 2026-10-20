@@ -2,7 +2,7 @@
 
 APLICADA manualmente no Supabase (projeto único) em 2026-10-19, com
 autorização explícita, via o espelho sql/0014; no deploy usar
-`alembic stamp 0011_user_preferences_dashboard_charts` (sem upgrade). Depende de
+`alembic stamp 0011_dashboard_charts_prefs` (sem upgrade). Depende de
 0010_seed_permission_corrections (a cadeia Alembic é linear).
 
 Aditiva e idempotente: adiciona a `user_preferences` a coluna
@@ -15,7 +15,7 @@ Espelho SQL: backend/migrations/sql/0014_user_preferences_dashboard_charts.sql.
 
 Downgrade: remove os dois CHECKs e a coluna (perde só esta preferência).
 
-Revision ID: 0011_user_preferences_dashboard_charts
+Revision ID: 0011_dashboard_charts_prefs
 Revises: 0010_seed_permission_corrections
 Create Date: 2026-10-19
 
@@ -26,7 +26,7 @@ from typing import Sequence, Union
 
 from alembic import op
 
-revision: str = "0011_user_preferences_dashboard_charts"
+revision: str = "0011_dashboard_charts_prefs"
 down_revision: Union[str, None] = "0010_seed_permission_corrections"
 branch_labels: Union[Sequence[str], None] = None
 depends_on: Union[Sequence[str], None] = None
