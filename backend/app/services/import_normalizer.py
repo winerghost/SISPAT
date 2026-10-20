@@ -195,6 +195,29 @@ def parse_datetime_utc(value: Any, warnings: list[str]) -> datetime | None:
     return None
 
 
+BOND_STATUS_MAX = 64
+_INVISIBLE_CATEGORIES = frozenset({"Cc", "Cf"})
+
+
+def normalize_bond_status(value: Any) -> str | None:
+    """Vínculo do bem (1ª ``RESPONSAVEL``) -> valor de ``assets.bond_status``.
+
+    Mesma regra do backfill SQL da migração ``0012_asset_bond_status``
+    (``NULLIF(btrim(left(regexp_replace(btrim(v), '\\s+', ' ', 'g'), 64)), '')``):
+    NFC, espaços colapsados, corte em 64 e trim POR ÚLTIMO; vazio -> None.
+    Caracteres de controle/formatação invisível (Cc/Cf: NUL, bidi, largura
+    zero) são REMOVIDOS antes do corte -- não há como exibi-los nem filtrar por
+    eles. O resultado sempre satisfaz ``ck_assets_bond_status_len``.
+    """
+    if value is None:
+        return None
+    text = " ".join(unicodedata.normalize("NFC", str(value)).split())
+    if any(unicodedata.category(ch) in _INVISIBLE_CATEGORIES for ch in text):
+        text = "".join(ch for ch in text if unicodedata.category(ch) not in _INVISIBLE_CATEGORIES)
+        text = " ".join(text.split())
+    return text[:BOND_STATUS_MAX].strip() or None
+
+
 def _bounded_text(value: Any, field: str, warnings: list[str]) -> str | None:
     text = _clean(value)
     if text is not None and len(text) > _MAX_TEXT:

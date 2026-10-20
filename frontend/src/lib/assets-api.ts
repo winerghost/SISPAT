@@ -44,6 +44,12 @@ export interface AssetRecord {
   location_id: string | null;
   location: AssetNamedRef | null;
   located: LocatedStatus;
+  /**
+   * Vínculo do bem (1ª coluna RESPONSAVEL da planilha: "Servidor",
+   * "Terceirizado", "Ocioso"...). Somente leitura: vem da importação, nunca do
+   * formulário. Texto livre importado — exibido só como texto (React escapa).
+   */
+  bond_status: string | null;
   /** AAAA-MM-DD (data de calendário, sem fuso). */
   registration_date: string | null;
   created_at: string | null;
@@ -59,6 +65,8 @@ export type AssetSort =
   | "-patrimony_number"
   | "description"
   | "-description"
+  | "bond_status"
+  | "-bond_status"
   | "created_at"
   | "-created_at"
   | "updated_at"
@@ -70,6 +78,8 @@ export interface AssetListParams {
   room_id?: string;
   responsible_person_id?: string;
   located?: LocatedStatus;
+  /** Vínculo (sem distinguir caixa no backend); `BOND_STATUS_NONE` = sem vínculo. */
+  bond_status?: string;
   /** Só ADM (USER/RH recebem 403). */
   include_deleted?: boolean;
   sort?: AssetSort;
@@ -151,6 +161,7 @@ export function listAssets(params: AssetListParams = {}): Promise<AssetsListResp
       room_id: params.room_id || undefined,
       responsible_person_id: params.responsible_person_id || undefined,
       located: params.located,
+      bond_status: params.bond_status || undefined,
       // Padrão do backend é `false`: só envia quando verdadeiro.
       include_deleted: params.include_deleted ? "true" : undefined,
       sort: params.sort,
@@ -158,6 +169,60 @@ export function listAssets(params: AssetListParams = {}): Promise<AssetsListResp
       page_size: params.page_size,
     },
   });
+}
+
+// -----------------------------------------------------------------------------
+// Opções do filtro "Vínculo" (`GET /v1/assets/bond-statuses`, escopo do usuário)
+// -----------------------------------------------------------------------------
+
+/** Valor reservado do filtro: bens sem vínculo (`bond_status` nulo). */
+export const BOND_STATUS_NONE = "__none__";
+
+export interface AssetBondStatusOption {
+  value: string;
+  count: number;
+}
+
+export interface AssetBondStatusesResponse {
+  items: AssetBondStatusOption[];
+}
+
+/** Limites defensivos: resposta fora do formato é REJEITADA (o filtro fica indisponível). */
+const BOND_STATUS_MAX_ITEMS = 200;
+const BOND_STATUS_MAX_TEXT = 100;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isBondStatusOption(value: unknown): value is AssetBondStatusOption {
+  if (!isRecord(value)) return false;
+  const { value: text, count } = value;
+  return (
+    typeof text === "string" &&
+    text.trim().length > 0 &&
+    text.length <= BOND_STATUS_MAX_TEXT &&
+    text !== BOND_STATUS_NONE &&
+    typeof count === "number" &&
+    Number.isSafeInteger(count) &&
+    count >= 0
+  );
+}
+
+export function isAssetBondStatusesResponse(value: unknown): value is AssetBondStatusesResponse {
+  return (
+    isRecord(value) &&
+    Array.isArray(value.items) &&
+    value.items.length <= BOND_STATUS_MAX_ITEMS &&
+    value.items.every(isBondStatusOption)
+  );
+}
+
+export async function fetchAssetBondStatuses(): Promise<AssetBondStatusesResponse> {
+  const data = await apiClient.get<unknown>(`${ASSETS}/bond-statuses`);
+  if (!isAssetBondStatusesResponse(data)) throw new Error("Resposta de vínculos inválida.");
+  // Cópia só com as chaves conhecidas (nada além do contrato chega à UI).
+  return { items: data.items.map(({ value, count }) => ({ value, count })) };
 }
 
 export function getAsset(id: string, options: { includeDeleted?: boolean } = {}): Promise<AssetRecord> {

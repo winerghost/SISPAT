@@ -1,6 +1,6 @@
-import { expect, test, type Page, type Request } from "@playwright/test";
+import { expect, test, type Locator, type Page, type Request } from "@playwright/test";
 
-import { ASSET_IDS, LOCATION_ID, type AssetMock } from "./support/asset-mocks";
+import { ASSET_IDS, BOND_XSS, LOCATION_ID, type AssetMock } from "./support/asset-mocks";
 import { PERSON_IDS, ROOM_IDS } from "./support/catalog-mocks";
 import {
   API_URL,
@@ -31,9 +31,12 @@ async function open(
   page: Page,
   opts: MockOptions = { role: "ADM" },
   prepare?: (state: MockState) => void,
+  /** Rotas extras registradas depois dos mocks (têm prioridade no Playwright). */
+  afterInstall?: () => Promise<void>,
 ): Promise<MockState> {
   const state = await installMocks(page, opts);
   prepare?.(state);
+  await afterInstall?.();
   await seedSession(page, opts);
   await page.goto(PATH);
   await waitForHydration(page);
@@ -74,7 +77,7 @@ function asset(state: MockState, id: string): AssetMock {
 test.describe("patrimônios — lista", () => {
   test("colunas, número como TEXTO (zeros preservados), data em America/Araguaina e XSS inerte", async ({ page }) => {
     await open(page);
-    for (const header of ["Patrimônio", "Descrição", "Unidade", "Sala", "Responsável", "Localizado", "Atualizado em"]) {
+    for (const header of ["Patrimônio", "Descrição", "Unidade", "Sala", "Responsável", "Vínculo", "Localizado", "Atualizado em"]) {
       await expect(table(page).getByRole("columnheader", { name: new RegExp(header) })).toBeVisible();
     }
     await expect(page.getByText("Página 1 de 1 · 6 bem(ns)")).toBeVisible();
@@ -150,7 +153,18 @@ test.describe("patrimônios — lista", () => {
     await page.getByRole("columnheader", { name: /Descrição/ }).getByRole("button").click();
     expect(new URL((await byDescription).url()).searchParams.get("sort")).toBe("description");
 
-    const allowed = new Set(["q", "unit_id", "room_id", "responsible_person_id", "located", "include_deleted", "sort", "page", "page_size"]);
+    const allowed = new Set([
+      "q",
+      "unit_id",
+      "room_id",
+      "responsible_person_id",
+      "located",
+      "bond_status",
+      "include_deleted",
+      "sort",
+      "page",
+      "page_size",
+    ]);
     for (const call of state.calls.filter((c) => c.method === "GET" && /\/v1\/assets\?/.test(c.url))) {
       for (const key of new URL(call.url, "http://x").searchParams.keys()) expect(allowed.has(key)).toBe(true);
     }
@@ -243,6 +257,144 @@ test.describe("patrimônios — lista", () => {
     await open(page, { role: "USER", accessibleUnitsStatus: 500 });
     await expect(page.getByRole("alert").filter({ hasText: "A listagem continua disponível." })).toBeVisible({ timeout: 15_000 });
     await expect(rows(page)).toHaveCount(6);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Vínculo (bond_status): coluna, filtro e detalhe — só leitura, texto escapado
+// ---------------------------------------------------------------------------
+
+test.describe("patrimônios — vínculo", () => {
+  const bondSelect = (page: Page) => page.getByLabel("Vínculo", { exact: true });
+  const bondField = (scope: Locator) => scope.locator("dl > div").filter({ has: scope.page().locator("dt", { hasText: /^Vínculo$/ }) });
+
+  test("coluna Vínculo: valor como texto; vazio = '—' com rótulo 'sem vínculo'", async ({ page }) => {
+    await open(page, { role: "USER" });
+    const vinculoIndex = await table(page)
+      .locator("thead th")
+      .evaluateAll((ths) => ths.findIndex((th) => th.textContent?.trim().startsWith("Vínculo")));
+    expect(vinculoIndex).toBeGreaterThan(0);
+    const cell = (number: string) =>
+      rows(page)
+        .filter({ has: page.getByText(number, { exact: true }) })
+        .first()
+        .locator("td")
+        .nth(vinculoIndex);
+    await expect(cell("000123")).toHaveText("Servidor");
+    await expect(cell("007")).toHaveText("Terceirizado");
+    // A-2025/007 não tem vínculo: traço visual + texto acessível.
+    const empty = cell("A-2025/007");
+    await expect(empty.locator("[aria-hidden=true]")).toHaveText("—");
+    await expect(empty.locator(".sr-only")).toHaveText("sem vínculo");
+  });
+
+  test("opções do endpoint com contagem; filtrar por Ocioso envia bond_status=Ocioso e mostra só os ociosos", async ({ page }) => {
+    const state = await open(page, { role: "USER" });
+    await expect(rows(page)).toHaveCount(6);
+    const select = bondSelect(page);
+    await expect(select).toBeEnabled();
+    const labels = await select.locator("option").allTextContents();
+    expect(labels).toEqual(["Todos", "Sem vínculo", `${BOND_XSS} (1)`, "Ocioso (2)", "Servidor (1)", "Terceirizado (1)"]);
+    expect(calls(state, "GET", /\/v1\/assets\/bond-statuses$/).length).toBeGreaterThan(0);
+
+    const request = waitApi(page, "GET", "/v1/assets");
+    await select.selectOption("Ocioso");
+    expect(new URL((await request).url()).searchParams.get("bond_status")).toBe("Ocioso");
+    await expect(rows(page)).toHaveCount(2);
+    for (const number of ["0000456", "00123"]) {
+      await expect(rows(page).filter({ has: page.getByText(number, { exact: true }) })).toHaveCount(1);
+    }
+
+    await page.getByRole("button", { name: "Limpar filtros" }).click();
+    await expect(select).toHaveValue("");
+    await expect(rows(page)).toHaveCount(6);
+  });
+
+  test("ordenar pela coluna Vínculo envia sort=bond_status e depois -bond_status", async ({ page }) => {
+    await open(page, { role: "USER" });
+    await expect(rows(page)).toHaveCount(6);
+    const header = page.getByRole("columnheader", { name: /^Vínculo/ });
+    await expect(header).toHaveAttribute("aria-sort", "none");
+    const asc = waitApi(page, "GET", "/v1/assets");
+    await header.getByRole("button").click();
+    expect(new URL((await asc).url()).searchParams.get("sort")).toBe("bond_status");
+    await expect(header).toHaveAttribute("aria-sort", "ascending");
+    const desc = waitApi(page, "GET", "/v1/assets");
+    await header.getByRole("button").click();
+    expect(new URL((await desc).url()).searchParams.get("sort")).toBe("-bond_status");
+    await expect(header).toHaveAttribute("aria-sort", "descending");
+    await expect(rows(page)).toHaveCount(6);
+  });
+
+  test("'Sem vínculo' envia __none__ e mostra só bens sem vínculo", async ({ page }) => {
+    await open(page, { role: "ADM" });
+    const request = waitApi(page, "GET", "/v1/assets");
+    await bondSelect(page).selectOption({ label: "Sem vínculo" });
+    expect(new URL((await request).url()).searchParams.get("bond_status")).toBe("__none__");
+    await expect(rows(page)).toHaveCount(1);
+    await expect(rows(page).first()).toContainText("A-2025/007");
+  });
+
+  test("detalhe mostra a linha Vínculo (e '—' acessível quando vazio)", async ({ page }) => {
+    await open(page, { role: "RH" });
+    const sheet = await openSheet(page, "000123");
+    await expect(bondField(sheet).locator("dd")).toHaveText("Servidor");
+    await page.getByRole("button", { name: "Fechar painel" }).click();
+    await expect(sheet).toBeHidden();
+
+    const empty = await openSheet(page, "A-2025/007");
+    await expect(bondField(empty).locator("dd .sr-only")).toHaveText("sem vínculo");
+  });
+
+  test("vínculo com marcador XSS é texto literal e não executa (lista, filtro e detalhe)", async ({ page }) => {
+    await open(page, { role: "ADM" });
+    await expect(table(page).getByText(BOND_XSS, { exact: true }).first()).toBeVisible();
+    await expect(bondSelect(page).locator("option", { hasText: BOND_XSS })).toHaveCount(1);
+    const request = waitApi(page, "GET", "/v1/assets");
+    await bondSelect(page).selectOption(BOND_XSS);
+    expect(new URL((await request).url()).searchParams.get("bond_status")).toBe(BOND_XSS);
+    await expect(rows(page)).toHaveCount(1);
+    const sheet = await openSheet(page, "XSS-001");
+    await expect(bondField(sheet).locator("dd")).toHaveText(BOND_XSS);
+    expect(await expectNoXss(page)).toEqual({ executed: undefined, injectedImgs: 0 });
+  });
+
+  test("falha no endpoint de opções: filtro desativado com aviso e a lista continua", async ({ page }) => {
+    const state = await open(page, { role: "USER", assetBondStatusesStatus: 500 });
+    await expect(rows(page)).toHaveCount(6);
+    await expect(bondSelect(page)).toBeDisabled();
+    await expect(page.getByText("o filtro está indisponível")).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText("SISPAT_BACKEND_MSG")).toHaveCount(0);
+    // Os demais filtros seguem funcionando.
+    const request = waitApi(page, "GET", "/v1/assets");
+    await page.getByLabel("Localizado", { exact: true }).selectOption("NAO");
+    expect(new URL((await request).url()).searchParams.get("bond_status")).toBeNull();
+    await expect(rows(page)).toHaveCount(1);
+    expect(state.calls.some((c) => /bond_status=/.test(c.url))).toBe(false);
+  });
+
+  test("resposta de opções fora do formato é rejeitada (filtro indisponível)", async ({ page }) => {
+    await open(page, { role: "USER" }, () => undefined, async () => {
+      await page.route(/\/v1\/assets\/bond-statuses$/, (route) =>
+        route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ items: [{ value: "Ocioso", count: -1 }] }),
+        }),
+      );
+    });
+    await expect(rows(page)).toHaveCount(6);
+    await expect(bondSelect(page)).toBeDisabled();
+    await expect(page.getByText("o filtro está indisponível")).toBeVisible({ timeout: 15_000 });
+  });
+
+  test("Vínculo é só leitura: não aparece no formulário de edição", async ({ page }) => {
+    await open(page);
+    const sheet = await openSheet(page, "000123");
+    await sheet.getByRole("button", { name: "Editar" }).click();
+    const dialog = page.getByRole("dialog", { name: "Editar bem" });
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByLabel("Vínculo")).toHaveCount(0);
   });
 });
 

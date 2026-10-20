@@ -22,10 +22,11 @@ import { formatDateTime, LOCATED_LABEL } from "./asset-labels";
 // =============================================================================
 // Tabela de bens. Colunas priorizadas por largura (sem rolagem da página, 320 a
 // 1920 px): até `md` só Patrimônio + Descrição (com resumo de unidade e situação
-// embaixo) + Ações; `md` soma Unidade e Localizado; `lg` soma Sala e
-// Responsável; `xl` soma "Atualizado em". Chaves ausentes (ex.: RH) não geram
+// embaixo) + Ações; `md` soma Unidade e Localizado; `lg` soma Sala,
+// Responsável e Vínculo (abaixo de `lg` o vínculo vai no resumo da descrição);
+// `xl` soma "Atualizado em". O vínculo é texto importado: só texto, escapado. Chaves ausentes (ex.: RH) não geram
 // coluna. O número patrimonial é TEXTO (`translate="no"`), nunca formatado.
-// Ordenação só pelas colunas da allowlist do backend. Datas em America/Araguaina.
+// Ordenação só pelas colunas da allowlist do backend (inclui `bond_status`). Datas em America/Araguaina.
 // =============================================================================
 
 const WRAP = "min-w-0 break-words [overflow-wrap:anywhere]";
@@ -58,6 +59,19 @@ export function LocatedBadge({ located, surface = "dark" }: { located: LocatedSt
       {LOCATED_LABEL[located]}
     </Badge>
   );
+}
+
+/** Vínculo como TEXTO; vazio = "—" visual com rótulo acessível "sem vínculo". */
+export function BondStatusText({ value }: { value: string | null | undefined }) {
+  if (!value) {
+    return (
+      <>
+        <span aria-hidden="true">—</span>
+        <span className="sr-only">sem vínculo</span>
+      </>
+    );
+  }
+  return <>{value}</>;
 }
 
 export function DeletedBadge({ surface = "dark" }: { surface?: "dark" | "light" }) {
@@ -95,6 +109,13 @@ export function AssetsTable({
           <TableHead className={FROM_MD}>Unidade</TableHead>
           <TableHead className={FROM_LG}>Sala</TableHead>
           <TableHead className={FROM_LG}>Responsável</TableHead>
+          <SortableHead
+            field="bond_status"
+            label="Vínculo"
+            sort={sort}
+            onSortChange={onSortChange}
+            className={FROM_LG}
+          />
           <TableHead className={FROM_MD}>Localizado</TableHead>
           <SortableHead
             field="updated_at"
@@ -111,7 +132,7 @@ export function AssetsTable({
       <AnimatedTableBody key={pageKey}>
         {assets.length === 0 ? (
           <TableEmpty
-            colSpan={8}
+            colSpan={9}
             icon={Package}
             title={filtered ? "Nenhum bem encontrado para os filtros atuais." : "Nenhum bem no seu escopo."}
             description={
@@ -137,6 +158,9 @@ export function AssetsTable({
                   <span translate="no">{asset.unit.code}</span>
                   <LocatedBadge located={asset.located} />
                 </span>
+                <span className="mt-1 block text-caption text-warm-granite lg:hidden">
+                  Vínculo: <BondStatusText value={asset.bond_status} />
+                </span>
               </TableCell>
               <TableCell className={cn(FROM_MD, "min-w-[8rem] align-top text-body-sm", WRAP)}>
                 <span translate="no">{asset.unit.code}</span>
@@ -145,6 +169,9 @@ export function AssetsTable({
               <TableCell className={cn(FROM_LG, "align-top text-body-sm", WRAP)}>{asset.room?.name ?? "—"}</TableCell>
               <TableCell className={cn(FROM_LG, "align-top text-body-sm", WRAP)}>
                 {asset.responsible_person?.name ?? "—"}
+              </TableCell>
+              <TableCell className={cn(FROM_LG, "align-top text-body-sm", WRAP)}>
+                <BondStatusText value={asset.bond_status} />
               </TableCell>
               <TableCell className={cn(FROM_MD, "align-top")}>
                 <LocatedBadge located={asset.located} />

@@ -18,9 +18,12 @@ export default function PublicLayout({ children }: { children: ReactNode }) {
 
   return (
     <div className="flex min-h-dvh w-full flex-col bg-obsidian-canvas">
-      {/* Marca centralizada (logo sobre painel claro + nome do sistema). */}
+      {/* Marca centralizada (logo sobre o canvas + unidade + nome do sistema). */}
       <header className="mx-auto flex w-full max-w-[1200px] flex-col items-center gap-3 px-4 pt-4 sm:px-8 sm:pt-8">
         <AguLogo />
+        <p className="max-w-full text-balance text-center text-eyebrow text-bone">
+          Unidade Estadual de Administração em Tocantins
+        </p>
         <span className="text-eyebrow text-pale-stone">SISPAT-AGU</span>
       </header>
 

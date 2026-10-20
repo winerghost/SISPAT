@@ -10,7 +10,7 @@ import { Sheet } from "@/components/ui/sheet";
 import { Tabs, type TabItem } from "@/components/ui/tabs";
 import { getAsset, type AssetRecord } from "@/lib/assets-api";
 import type { AccessibleUnit } from "@/lib/catalog-api";
-import { DeletedBadge, LocatedBadge, PatrimonyNumber } from "./assets-table";
+import { BondStatusText, DeletedBadge, LocatedBadge, PatrimonyNumber } from "./assets-table";
 import {
   assetErrorMessage,
   ASSET_VERSION_CONFLICT_MESSAGE,
@@ -195,6 +195,9 @@ export function AssetDetailSheet({ asset: listAsset, open, onOpenChange, isAdmin
                 <Field label="Sala">{asset.room?.name ?? "—"}</Field>
                 <Field label="Local">{asset.location?.name ?? "—"}</Field>
                 <Field label="Responsável">{asset.responsible_person?.name ?? "—"}</Field>
+                <Field label="Vínculo">
+                  <BondStatusText value={asset.bond_status} />
+                </Field>
                 <Field label="Data de registro">{formatCalendarDate(asset.registration_date) ?? "—"}</Field>
                 {"notes" in asset ? <Field label="Observações">{asset.notes ?? "—"}</Field> : null}
                 <Field label="Criado em">{formatDateTime(asset.created_at) ?? "—"}</Field>

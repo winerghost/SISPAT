@@ -7,9 +7,17 @@ import { Button } from "@/components/ui/button";
 import { selectControlClassName } from "@/components/ui/form-field";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
+import { BOND_STATUS_NONE, type AssetBondStatusOption } from "@/lib/assets-api";
 import type { AccessibleUnit } from "@/lib/catalog-api";
 import { unitLabel } from "@/components/features/users/unit-checkbox-list";
-import { ASSET_SEARCH_MAX, LOCATED_LABEL, LOCATED_OPTIONS } from "./asset-labels";
+import {
+  ASSET_SEARCH_MAX,
+  BOND_STATUS_NONE_LABEL,
+  BOND_STATUS_UNAVAILABLE_MESSAGE,
+  bondStatusOptionLabel,
+  LOCATED_LABEL,
+  LOCATED_OPTIONS,
+} from "./asset-labels";
 import type { LocatedFilter, useAssetFilters } from "./use-asset-filters";
 
 // =============================================================================
@@ -17,7 +25,10 @@ import type { LocatedFilter, useAssetFilters } from "./use-asset-filters";
 // dependências novas). Sala e responsável pertencem a uma unidade: ficam
 // desativados até escolher a unidade (evita listas truncadas em 100 itens).
 // "Incluir excluídos" só aparece para ADM (UX; o backend responde 403 aos
-// demais). Tudo vira parâmetro de consulta; o backend valida e aplica o escopo.
+// demais). "Vínculo" lista as opções de `GET /assets/bond-statuses` (contagem do
+// backend) + "Sem vínculo"; se o endpoint falhar, o filtro fica desativado com
+// aviso e a lista segue. Tudo vira parâmetro de consulta; o backend valida e
+// aplica o escopo.
 // =============================================================================
 
 type Filters = ReturnType<typeof useAssetFilters>;
@@ -76,12 +87,17 @@ export function AssetsToolbar({
   units,
   rooms,
   people,
+  bondStatuses,
+  bondStatusesFailed,
   isAdmin,
 }: {
   filters: Filters;
   units: AccessibleUnit[] | undefined;
   rooms: Option[] | undefined;
   people: Option[] | undefined;
+  /** `undefined` enquanto carrega. */
+  bondStatuses: AssetBondStatusOption[] | undefined;
+  bondStatusesFailed: boolean;
   isAdmin: boolean;
 }) {
   const needUnit = filters.unitId === "";
@@ -103,7 +119,7 @@ export function AssetsToolbar({
         />
       </div>
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
         <SelectField
           id="patrimonios-filtro-unidade"
           label="Unidade"
@@ -158,6 +174,22 @@ export function AssetsToolbar({
           {LOCATED_OPTIONS.map((status) => (
             <option key={status} value={status}>
               {LOCATED_LABEL[status]}
+            </option>
+          ))}
+        </SelectField>
+        <SelectField
+          id="patrimonios-filtro-vinculo"
+          label="Vínculo"
+          value={filters.bondStatus}
+          onChange={filters.chooseBondStatus}
+          disabled={bondStatusesFailed || !bondStatuses}
+          placeholder="Todos"
+          hint={bondStatusesFailed ? BOND_STATUS_UNAVAILABLE_MESSAGE : undefined}
+        >
+          <option value={BOND_STATUS_NONE}>{BOND_STATUS_NONE_LABEL}</option>
+          {bondStatuses?.map((option, index) => (
+            <option key={`${index}:${option.value}`} value={option.value}>
+              {bondStatusOptionLabel(option)}
             </option>
           ))}
         </SelectField>

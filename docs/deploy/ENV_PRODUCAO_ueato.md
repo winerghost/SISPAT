@@ -69,6 +69,22 @@ GOOGLE_SHEETS_PEOPLE_SHEET_NAME / _GID    # idem, Pessoas
   `grep -nE '^[^#]*(localhost|C:/)' .env` vazio,
   `grep -c '^INVITE_ALLOWED_REDIRECT_URLS=' .env` = 1,
   `grep -n ' $' .env` vazio (corrigir com `sed -i 's/[[:space:]]*$//' .env`).
+- **Senha do Redis igual nas duas variáveis.** Em 2026-10-20 o `REDIS_URL`
+  ficou com a senha antiga depois de gerar um `REDIS_PASSWORD` novo: o backend
+  subiu "healthy", mas toda rota com rate limit respondeu 503 (log:
+  `Redis indisponível (AuthenticationError)`), inclusive a prévia de
+  importação. Conferência sem exibir a senha:
+  `P=$(grep '^REDIS_PASSWORD=' .env | cut -d= -f2-); U=$(grep '^REDIS_URL=' .env | sed -E 's#^REDIS_URL=redis://:([^@]*)@.*#\1#'); [ "$P" = "$U" ] && echo IGUAIS || echo DIFERENTES`
+  Correção: `sed -i "s#^REDIS_URL=.*#REDIS_URL=redis://:${P}@redis:6379/0#" .env`
+  e `docker compose up -d` (sem `--build`).
+- **Credencial do Sheets: enviar com `scp`, nunca colar no `nano`.** Em
+  2026-10-20 o JSON colado perdeu a `}` final (2428 de 2430 bytes) e a prévia
+  falhou com 502 (log: `JSONDecodeError`). Conferir o tamanho com o original e
+  validar sem exibir a chave:
+  `sudo python3 -c "import json;b=open('/etc/google_sheets_credentials.json','rb').read();print(len(b));json.loads(b);print('JSON OK')"`.
+  Depois de substituir o arquivo, o container mantém o antigo:
+  `docker compose up -d --force-recreate backend` e, em seguida,
+  `docker compose up -d` (recriar o backend derruba o frontend, que depende dele).
 
 ## Recomendados
 

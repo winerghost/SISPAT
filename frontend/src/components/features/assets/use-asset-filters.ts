@@ -21,6 +21,8 @@ export function useAssetFilters() {
   const [roomId, setRoomId] = useState("");
   const [personId, setPersonId] = useState("");
   const [located, setLocated] = useState<LocatedFilter>("");
+  /** "" = todos; `BOND_STATUS_NONE` = sem vínculo; demais = valor vindo do backend. */
+  const [bondStatus, setBondStatus] = useState("");
   const [includeDeleted, setIncludeDeleted] = useState(false);
   const [sort, setSort] = useState<AssetSort>("patrimony_number");
   const [page, setPage] = useState(1);
@@ -54,6 +56,7 @@ export function useAssetFilters() {
     setRoomId("");
     setPersonId("");
     setLocated("");
+    setBondStatus("");
     setPage(1);
   }
 
@@ -65,6 +68,7 @@ export function useAssetFilters() {
     roomId,
     personId,
     located,
+    bondStatus,
     includeDeleted,
     sort,
     page,
@@ -73,10 +77,11 @@ export function useAssetFilters() {
     chooseRoom: resetPage(setRoomId),
     choosePerson: resetPage(setPersonId),
     chooseLocated: resetPage(setLocated),
+    chooseBondStatus: resetPage(setBondStatus),
     chooseIncludeDeleted: resetPage(setIncludeDeleted),
     chooseSort: resetPage(setSort),
     clear,
     /** "Incluir excluídos" é uma visão, não um filtro de refino: fica fora de `filtered`. */
-    filtered: !!q || !!unitId || !!roomId || !!personId || !!located,
+    filtered: !!q || !!unitId || !!roomId || !!personId || !!located || !!bondStatus,
   };
 }

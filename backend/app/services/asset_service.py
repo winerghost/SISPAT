@@ -88,7 +88,12 @@ _SORTS = {
     "-created_at": (Asset.created_at.desc(), Asset.id),
     "updated_at": (Asset.updated_at, Asset.id),
     "-updated_at": (Asset.updated_at.desc(), Asset.id),
+    # Vínculo: sem caixa; bens sem vínculo ("") primeiro em ordem crescente.
+    "bond_status": (func.lower(func.coalesce(Asset.bond_status, "")), Asset.patrimony_number, Asset.id),
+    "-bond_status": (func.lower(func.coalesce(Asset.bond_status, "")).desc(), Asset.patrimony_number, Asset.id),
 }
+BOND_STATUS_NONE = "__none__"  # filtro `bond_status=__none__` => sem vínculo
+BOND_STATUS_GROUPS_MAX = 100
 
 
 # ---------------------------------------------------------------------------
@@ -193,6 +198,38 @@ def asset_scope_clause(actor_id: Any, db: Session) -> Any:
     if not accessible:
         return false()
     return or_(Asset.unit_id.in_(accessible), Asset.owner_unit_id.in_(accessible))
+
+
+ASSET_EQ_FILTERS = ("unit_id", "owner_unit_id", "room_id", "responsible_person_id", "located")
+
+
+def bond_status_clause(bond: str | None) -> Any:
+    """Filtro de vínculo: `__none__` => sem vínculo; senão exato e sem caixa."""
+    if bond is None:
+        return None
+    if bond == BOND_STATUS_NONE:
+        return Asset.bond_status.is_(None)
+    # `lower()` dos DOIS lados no banco (mesma regra de caixa) e o lado da
+    # coluna usa `ix_assets_bond_status_lower`.
+    return func.lower(Asset.bond_status) == func.lower(bond)
+
+
+def asset_filter_clauses(query: Any) -> list[Any]:
+    """Filtros comuns da lista de bens e do dashboard (fonte única => paridade).
+
+    Lê, por nome, os atributos opcionais de `query` (`None` = sem filtro):
+    `unit_id`, `owner_unit_id`, `room_id`, `responsible_person_id`, `located`
+    (igualdade) e `bond_status`. Não aplica escopo nem `deleted_at`.
+    """
+    clauses = [
+        getattr(Asset, field) == getattr(query, field)
+        for field in ASSET_EQ_FILTERS
+        if getattr(query, field, None) is not None
+    ]
+    bond = bond_status_clause(getattr(query, "bond_status", None))
+    if bond is not None:
+        clauses.append(bond)
+    return clauses
 
 
 class _Lookups:
@@ -354,6 +391,7 @@ class AssetService:
             "location_id": str(asset.location_id) if asset.location_id else None,
             "location": look.locations.get(asset.location_id),
             "located": asset.located,
+            "bond_status": asset.bond_status,  # vínculo (da planilha); não é dado pessoal
             "registration_date": _iso(asset.registration_date),
             "created_at": _iso(asset.created_at),
             "updated_at": _iso(asset.updated_at),
@@ -385,10 +423,7 @@ class AssetService:
                 or_(_like(Asset.patrimony_number, query.q),
                     _like(func.coalesce(Asset.description, ""), query.q))
             )
-        for field in ("unit_id", "owner_unit_id", "room_id", "responsible_person_id", "located"):
-            value = getattr(query, field)
-            if value is not None:
-                scoped = scoped.filter(getattr(Asset, field) == value)
+        scoped = scoped.filter(*asset_filter_clauses(query))
         total = scoped.with_entities(func.count(Asset.id)).order_by(None).scalar()
         rows = (
             scoped.order_by(*_SORTS[query.sort])
@@ -400,6 +435,38 @@ class AssetService:
             "total": int(total), "page": query.page, "page_size": query.page_size,
             "assets": self._serialize_many(list(rows)),
         }
+
+    def bond_statuses(self, actor_id: Any) -> dict[str, Any]:
+        """Opções do filtro "Vínculo": grupos sem caixa dos bens NO ESCOPO.
+
+        Só bens não excluídos e com vínculo. `value` = grafia mais frequente do
+        grupo (desempate alfabético); no máximo `BOND_STATUS_GROUPS_MAX` grupos
+        (os primeiros em ordem alfabética sem caixa). Duas consultas agregadas,
+        sem carregar bens.
+        """
+        key = func.lower(Asset.bond_status)
+        base = (Asset.deleted_at.is_(None), Asset.bond_status.is_not(None), self._scope(actor_id))
+        keys = [
+            row[0] for row in self._db.execute(
+                select(key).where(*base).group_by(key).order_by(key).limit(BOND_STATUS_GROUPS_MAX)
+            ).all()
+        ]
+        if not keys:
+            return {"items": []}
+        groups: dict[str, dict[str, int]] = {}
+        rows = self._db.execute(
+            select(key, Asset.bond_status, func.count(Asset.id))
+            .where(*base, key.in_(keys))
+            .group_by(key, Asset.bond_status)
+        ).all()
+        for group_key, spelling, count in rows:
+            groups.setdefault(group_key, {})[spelling] = int(count)
+        items = []
+        for spellings in groups.values():
+            value = min(spellings, key=lambda s: (-spellings[s], s))
+            items.append({"value": value, "count": sum(spellings.values())})
+        items.sort(key=lambda item: (item["value"].casefold(), item["value"]))
+        return {"items": items}
 
     def get(self, actor_id: Any, asset_id: uuid.UUID, *, include_deleted: bool = False) -> dict[str, Any]:
         asset = self._load(actor_id, asset_id, include_deleted=include_deleted)

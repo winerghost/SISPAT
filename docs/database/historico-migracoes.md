@@ -5,7 +5,9 @@ Atualizado em 2026-10-20.
 > **Estado atual (2026-10-20):** `alembic_version` = `0011_dashboard_charts_prefs`
 > (head), carimbado no deploy da VPS com `alembic stamp` (sem DDL). O esquema
 > real já continha 0007-0011, aplicadas manualmente pelos espelhos `.sql`. A
-> seção "Estado em produção" abaixo é histórica (2026-10-15).
+> seção "Estado em produção" abaixo é histórica (2026-10-15). A head do código
+> passou a ser `0012_asset_bond_status`, **aplicada no SQL Editor em
+> 2026-10-20**; falta o `alembic stamp 0012_asset_bond_status` na VPS.
 
 ## Dois históricos distintos
 
@@ -63,6 +65,60 @@ CHECKs `ck_user_preferences_dashboard_charts_object` (objeto JSON) e
 `ck_user_preferences_dashboard_charts_size` (texto <= 512 bytes). Espelho SQL:
 `backend/migrations/sql/0014_user_preferences_dashboard_charts.sql`. Downgrade
 remove os CHECKs e a coluna.
+
+## Alembic 0012 – assets.bond_status (APLICADA)
+
+**Aplicada em 2026-10-20** pelo responsável, com autorização, pelo SQL Editor
+(espelho `0015`). Antes da importação de bens, portanto o backfill não tinha
+linhas a preencher. Pendente: na VPS, `alembic stamp 0012_asset_bond_status`
+(sem `upgrade`), junto do deploy do backend que usa a coluna.
+
+`0012_asset_bond_status` (head no código; o banco segue em
+`0011_dashboard_charts_prefs`) cria o campo "Vínculo" do bem: valor da 1ª
+coluna `RESPONSAVEL` da planilha (ex.: Servidor, Terceirizado, Ocioso), que
+até aqui só existia em `raw_import_records.normalized_values->>'vinculo_situacao'`.
+Aditiva e idempotente:
+
+- coluna `assets.bond_status text NULL` (sem default);
+- CHECK `ck_assets_bond_status_len`: NULL ou 1..64 caracteres, sem espaços nas pontas;
+- índice `ix_assets_bond_status_lower` em `lower(bond_status)` `WHERE deleted_at IS NULL`;
+- backfill só onde `bond_status IS NULL`, a partir do registro bruto
+  `IMPORTADO` mais recente (`created_at DESC, id DESC`) do mesmo
+  `source_record_id`, origem `google_sheets`. O texto é normalizado (espaços
+  colapsados, truncado em 64 caracteres, `btrim` por último); vazio não grava.
+  Não incrementa `assets.version`.
+
+Espelho SQL: `backend/migrations/sql/0015_asset_bond_status.sql`. Downgrade
+remove índice, CHECK e coluna (o valor de origem continua em
+`raw_import_records`).
+
+**Aplicar somente com autorização explícita** (Supabase é projeto único,
+dev = prod), após conferir o backup:
+
+- SQL Editor do Supabase com o conteúdo do espelho `0015` e, depois, na VPS,
+  `alembic stamp 0012_asset_bond_status` (sem `upgrade`); **ou**
+- na VPS: `cd backend; alembic upgrade head` (executa DDL + backfill e grava a
+  versão).
+
+Verificação pós-aplicação:
+
+```sql
+SELECT column_name, data_type, is_nullable, column_default
+FROM information_schema.columns
+WHERE table_schema = 'public' AND table_name = 'assets'
+  AND column_name = 'bond_status';          -- text, YES, NULL
+SELECT conname, pg_get_constraintdef(oid)
+FROM pg_constraint
+WHERE conrelid = 'public.assets'::regclass
+  AND conname = 'ck_assets_bond_status_len'; -- 1 linha
+SELECT indexdef FROM pg_indexes
+WHERE schemaname = 'public' AND indexname = 'ix_assets_bond_status_lower';
+SELECT bond_status, count(*) AS bens
+FROM public.assets
+WHERE deleted_at IS NULL
+GROUP BY bond_status ORDER BY bens DESC;    -- distribuição por vínculo (NULL = sem valor)
+SELECT version_num FROM alembic_version;    -- esperado: 0012_asset_bond_status
+```
 
 ## IDs de revisão encurtados (2026-10-20)
 

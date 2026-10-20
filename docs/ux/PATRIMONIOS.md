@@ -15,16 +15,30 @@ UX, nunca segurança.
   (`GET /responsible-people?unit_id=`) e "Localizado" (SIM/NAO/DESCONHECIDO).
   Sala e responsável ficam desativados até escolher a unidade (evita listas
   truncadas em 100 itens e respeita o vínculo à unidade). "Limpar filtros".
+- **Vínculo** (`bond_status`, 1ª coluna RESPONSAVEL da planilha: "Servidor",
+  "Terceirizado", "Ocioso"...): somente leitura (vem da importação; não existe no
+  formulário de criar/editar). Filtro "Vínculo" com "Todos", "Sem vínculo"
+  (`bond_status=__none__`) e as opções de `GET /assets/bond-statuses` no formato
+  "Ocioso (12)" (contagem do backend, escopo do usuário); escolher envia
+  `bond_status=<valor>` (o backend compara sem distinguir caixa). Resposta de
+  opções fora do formato (texto >100, contagem não inteira/negativa, >200 itens)
+  é rejeitada em `assets-api.ts`. Se o endpoint falhar, o filtro fica desativado
+  com aviso e a lista continua. Como os demais filtros, fica só no estado da
+  tela (não vai para a URL).
 - ADM: switch "Incluir excluídos" (`include_deleted=true`). USER/RH nunca enviam o
   parâmetro (o backend responde 403 se enviado). Excluídos ganham selo com ícone
   + texto "Excluído".
-- Ordenação só pela allowlist (`patrimony_number`, `description`, `updated_at`;
+- Ordenação só pela allowlist (`patrimony_number`, `description`, `bond_status`
+  — cabeçalho "Vínculo", visível a partir de `lg` —, `updated_at`;
   `aria-sort` + botão), paginação "Página X de Y · N bem(ns)" (25 por página),
   estados carregando (skeleton), vazio (com e sem filtro) e erro com "Tentar
   novamente". Falha só dos seletores de apoio avisa e mantém a lista.
 - Responsivo 320–1920 sem rolagem da página: colunas priorizadas por largura
   (até `md`: Patrimônio + Descrição com resumo de unidade e situação + Detalhes;
-  `md`: + Unidade e Localizado; `lg`: + Sala e Responsável; `xl`: + Atualizado em).
+  `md`: + Unidade e Localizado; `lg`: + Sala, Responsável e Vínculo; `xl`: +
+  Atualizado em). Abaixo de `lg` o vínculo aparece no resumo da descrição
+  ("Vínculo: Ocioso"). Vínculo vazio = "—" visual + texto acessível "sem vínculo".
+  O vínculo é texto importado não confiável: só texto escapado pelo React.
   Colunas opcionais só existem se a chave veio no JSON.
 - **Número patrimonial é TEXTO** (fonte mono, `translate="no"`): nunca passa por
   `Number`/formatação, zeros à esquerda preservados. Datas/horas em
@@ -35,6 +49,7 @@ UX, nunca segurança.
 - `GET /assets/<id>` (linha da lista como esboço). Abas "Dados" e "Histórico".
 - Campos ausentes não são renderizados: RH não recebe `notes`, então não há campo
   "Observações". Telefone e e-mail de pessoas não aparecem nesta tela.
+- Aba "Dados" inclui a linha "Vínculo" (mesma regra de vazio da lista).
 - Histórico (`GET /assets/<id>/history`, 10 por página): operação em português,
   data, ator (só o final do identificador), "Campo: antes → depois" como TEXTO
   escapado pelo React (`notes` nunca mostra conteúdo). O contrato permite o
@@ -71,16 +86,19 @@ escopo de unidades"), 403, 400, 429, 401, AAL2 requerido e rede.
 ## Acessibilidade e motion
 - WCAG 2.2 AA (axe 1366 e 375 px) e matriz 320–1920 px nas telas `patrimonios-*`
   de `frontend/e2e/support/screens.ts` (lista por perfil, excluídos, vazio, erro,
-  detalhe ADM/RH, histórico, novo USER/ADM, editar USER/ADM, excluir, restaurar).
+  filtro Vínculo = Ocioso, opções de vínculo indisponíveis, detalhe ADM/RH,
+  histórico, novo USER/ADM, editar USER/ADM, excluir, restaurar).
 - Situação e "Localizado" com ícone + texto (nunca só cor); no diálogo claro, texto
   escuro + ícone. Tabela, painel e diálogos animam só via `@/components/animations`
   e `@/lib/motion/tokens` (150–200 ms), respeitando `prefers-reduced-motion`.
 
 ## Testes
-`frontend/e2e/assets-functional.spec.ts` (43 casos) com o mock
+`frontend/e2e/assets-functional.spec.ts` (51 casos) com o mock
 `frontend/e2e/support/asset-mocks.ts`, que imita escopo, `version`, campos por
-perfil, `include_deleted` só ADM, unicidade sem distinguir caixa, vínculos e
-exclusão lógica. Nenhum dado é real.
+perfil, `include_deleted` só ADM, unicidade sem distinguir caixa, vínculos,
+exclusão lógica e `bond_status` (filtro sem caixa, `__none__`, opções com
+contagem, falha do endpoint, resposta inválida e vínculo com marcador XSS).
+Nenhum dado é real.
 
 ## Lacunas conhecidas (backend)
 - Não há endpoint de listagem de **locais** (`locations`): criar não permite

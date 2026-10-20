@@ -132,7 +132,7 @@ def test_db_alembic_revision_chain_is_linear() -> None:
     down_targets = [d for d in revisions.values() if d is not None]
     assert len(down_targets) == len(set(down_targets)), "ramificação (branch) de revisões"
     heads = set(revisions) - set(down_targets)
-    assert heads == {"0011_dashboard_charts_prefs"}, heads
+    assert heads == {"0012_asset_bond_status"}, heads
 
 
 def test_db_alembic_revision_ids_cabem_em_alembic_version() -> None:
@@ -712,3 +712,101 @@ def test_db_0010_seed_0002_grants_are_what_is_being_revoked() -> None:
     seed = (SQL_DIR / "0002_seeds_roles_permissions.sql").read_text(encoding="utf-8")
     user_block = seed.split("WHERE r.code = 'USER'")[0].rsplit("INSERT INTO role_permissions", 1)[1]
     assert "'rooms.manage'" in user_block and "'inventory.create'" in user_block
+
+
+# ---------------------------------------------------------------------------
+# Migração 0012_asset_bond_status
+# ---------------------------------------------------------------------------
+
+BOND_PY = VERSIONS_DIR / "0012_asset_bond_status.py"
+BOND_SQL = SQL_DIR / "0015_asset_bond_status.sql"
+
+
+@pytest.fixture(scope="module")
+def bond_migration() -> ModuleType:
+    return _load_module(BOND_PY)
+
+
+def test_db_0012_revises_0011(bond_migration) -> None:
+    assert bond_migration.revision == "0012_asset_bond_status"
+    assert bond_migration.down_revision == "0011_dashboard_charts_prefs"
+
+
+def test_db_0012_column_check_and_index(bond_migration) -> None:
+    assert "ALTER TABLE public.assets\n    ADD COLUMN IF NOT EXISTS bond_status text NULL;" in (
+        bond_migration.ADD_COLUMN_SQL
+    )
+    assert "DEFAULT" not in bond_migration.ADD_COLUMN_SQL.upper()
+    check = bond_migration.ADD_CHECK_SQL
+    assert "conname = 'ck_assets_bond_status_len'" in check  # idempotente
+    assert (
+        "CHECK (bond_status IS NULL OR (char_length(bond_status) BETWEEN 1 AND 64"
+        " AND bond_status = btrim(bond_status)))"
+    ) in check
+    assert "CREATE INDEX IF NOT EXISTS ix_assets_bond_status_lower" in bond_migration.CREATE_INDEX_SQL
+    assert "ON public.assets (lower(bond_status)) WHERE deleted_at IS NULL" in (
+        bond_migration.CREATE_INDEX_SQL
+    )
+
+
+def test_db_0012_backfill_is_idempotent_and_scoped(bond_migration) -> None:
+    sql = bond_migration.BACKFILL_SQL
+    # só preenche o que está vazio (reexecução não sobrescreve)
+    assert "a.bond_status IS NULL" in sql
+    assert "v.bond IS NOT NULL" in sql
+    # registro IMPORTADO mais recente por source_record_id, desempate determinístico
+    assert "r.import_status = 'IMPORTADO'" in sql
+    assert "DISTINCT ON (r.source_record_id)" in sql
+    assert "ORDER BY r.source_record_id, r.created_at DESC, r.id DESC" in sql
+    # só a origem Google Sheets
+    assert "j.source = 'google_sheets'" in sql and "a.source_system = 'google_sheets'" in sql
+    # valor normalizado respeita o CHECK: btrim por ÚLTIMO, depois do left(…, 64)
+    assert (
+        "NULLIF(btrim(left(regexp_replace(btrim(r.normalized_values->>'vinculo_situacao'),"
+        r" '\s+', ' ', 'g'), 64)), '')"
+    ) in sql
+    assert sql.count("UPDATE ") == 1 and "UPDATE public.assets a" in sql
+    assert not re.search(r"\b(DELETE|INSERT|TRUNCATE|DROP)\b", sql, re.IGNORECASE)
+    assert "version" not in sql  # não mexe no controle otimista
+
+
+def test_db_0012_statement_order(bond_migration) -> None:
+    stmts = bond_migration.UPGRADE_STATEMENTS
+    assert stmts == (
+        bond_migration.ADD_COLUMN_SQL,
+        bond_migration.ADD_CHECK_SQL,
+        bond_migration.CREATE_INDEX_SQL,
+        bond_migration.BACKFILL_SQL,
+    )
+    upgrade_sql = chr(10).join(stmts)
+    assert not re.search(r"\bADD\s+COLUMN\s+(?!IF\s+NOT\s+EXISTS)", upgrade_sql)
+    assert not re.search(r"\bCREATE\s+(UNIQUE\s+)?INDEX\s+(?!IF\s+NOT\s+EXISTS)", upgrade_sql)
+
+
+def test_db_0012_downgrade_only_removes_its_objects(bond_migration) -> None:
+    sql = bond_migration.DOWNGRADE_SQL
+    assert re.findall(r"DROP INDEX IF EXISTS public\.(\w+)", sql) == ["ix_assets_bond_status_lower"]
+    assert re.findall(r"DROP CONSTRAINT IF EXISTS (\w+)", sql) == ["ck_assets_bond_status_len"]
+    assert re.findall(r"DROP COLUMN IF EXISTS (\w+)", sql) == ["bond_status"]
+    assert "DROP TABLE" not in sql.upper()
+    assert not re.search(r"^\s*DELETE\s+FROM|TRUNCATE", sql, re.IGNORECASE | re.MULTILINE)
+
+
+def test_db_0012_sql_mirror_matches_alembic(bond_migration) -> None:
+    mirror = BOND_SQL.read_text(encoding="utf-8")
+    for statement in bond_migration.UPGRADE_STATEMENTS:
+        assert statement.strip(chr(10)) in mirror
+    # Aplicada no SQL Editor em 2026-10-20; o cabeçalho registra a autorização.
+    assert "APLICADA" in mirror and "autorização explícita" in mirror
+    assert not re.search(r"^\s*(BEGIN|COMMIT)\s*;", mirror, re.IGNORECASE | re.MULTILINE)
+
+
+def test_db_0012_model_matches_migration() -> None:
+    table = Asset.__table__
+    column = table.c.bond_status
+    assert isinstance(column.type, Text) and column.nullable
+    assert column.server_default is None and column.default is None
+    assert "ck_assets_bond_status_len" in {c.name for c in table.constraints}
+    idx = {i.name: i for i in table.indexes}["ix_assets_bond_status_lower"]
+    assert not idx.unique
+    assert "deleted_at IS NULL" in str(idx.dialect_options["postgresql"]["where"])

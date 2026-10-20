@@ -1,5 +1,5 @@
-"""Leituras agregadas do dashboard (`/api/v1/dashboard/resumo|por-unidade|por-situacao|
-aquisicoes-mensais`): SQLite com o schema real, `require_auth` real, sem rede.
+"""Leituras agregadas do dashboard (`/api/v1/dashboard/*`): SQLite com o schema
+real, `require_auth` real, sem rede. Filtros: `test_dashboard_filters.py`.
 
 Cobre 401, perfis ADM/USER/RH, escopo de unidade (sem vazamento), vazio,
 validação da consulta, valores, soft delete e ausência de PII.
@@ -24,7 +24,7 @@ from app.services import dashboard_service as ds
 
 BASE = "/api/v1/dashboard"
 NOW = datetime.now(timezone.utc)
-EXTRA = ("unit_aliases", "asset_movements", "inventories")
+EXTRA = ("unit_aliases", "asset_movements", "inventories", "inventory_items")
 SUBS = {"ua": "dsh-a", "ub": "dsh-b", "rh": "dsh-rh", "adm": "dsh-adm", "none": "dsh-none"}
 
 
@@ -62,7 +62,11 @@ def add(api, unit, number, *, description=None, located="DESCONHECIDO", created=
     api.world.asset(unit, number, description=description, located=located, registration_date=reg, **kw)
 
 
-ENDPOINTS = ("resumo", "por-unidade", "por-situacao", "aquisicoes-mensais")
+ENDPOINTS = (
+    "resumo", "por-unidade", "por-situacao", "aquisicoes-mensais", "localizacao-por-unidade",
+    "por-vinculo", "pendencias-cadastro", "por-sala", "inventario", "tipos",
+)
+LIST_ENDPOINTS = tuple(p for p in ENDPOINTS if p not in ("resumo", "pendencias-cadastro", "inventario"))
 
 
 # --- autenticação / perfis --------------------------------------------------------
@@ -97,16 +101,20 @@ def test_banco_vazio(api):
         "movimentacoes_pendentes": 0, "inventarios_abertos": 0, "novos_30d": 0,
         "valor_total": None, "em_manutencao": None, "baixas_ano": None,
         "variacao": {"total_bens": None, "valor_total": None, "em_manutencao": None, "baixas_ano": None},
+        "filtros_aplicados": [],
     }
-    assert get(api, "por-unidade").get_json() == []
-    assert get(api, "por-situacao").get_json() == []
-    assert get(api, "aquisicoes-mensais").get_json() == []
+    for path in LIST_ENDPOINTS:
+        assert get(api, path).get_json() == [], path
+    assert get(api, "pendencias-cadastro").get_json() == {
+        "sem_responsavel": 0, "sem_sala": 0, "ociosos": 0, "nao_localizados": 0}
+    assert get(api, "inventario").get_json() == {
+        "conferidos": 0, "nao_conferidos": 0, "encontrados": 0, "nao_encontrados": 0}
 
 
 def test_sem_unidades_zeros_nunca_404(api):
     add(api, api.ua, "1", description="(1) NOTEBOOK X", located="SIM")
     assert get(api, "resumo", "none").get_json()["total_bens"] == 0
-    for path in ("por-unidade", "por-situacao", "aquisicoes-mensais"):
+    for path in LIST_ENDPOINTS:
         response = get(api, path, "none")
         assert response.status_code == 200 and response.get_json() == []
 
@@ -130,10 +138,13 @@ def test_adm_sem_bypass_de_escopo(api):
     assert get(api, "resumo", "adm", "aal2").get_json()["total_bens"] == 1
 
 
-def test_parametro_unit_id_e_extra_rejeitados_400(api):
+def test_parametro_extra_rejeitado_400(api):
     for path in ENDPOINTS:
-        assert get(api, path, query=f"?unit_id={api.ub}").status_code == 400
         assert get(api, path, query="?foo=1").status_code == 400
+        assert get(api, path, query="?unit_id=nao-uuid").status_code == 400
+        # `meses` só existe em /aquisicoes-mensais
+        if path != "aquisicoes-mensais":
+            assert get(api, path, query="?meses=3").status_code == 400
 
 
 @pytest.mark.parametrize("meses", ["0", "25", "-1", "abc", "", "1.5"])
@@ -284,5 +295,5 @@ def test_nenhum_campo_pii(api):
         assert set(get(api, "resumo", who).get_json()) == {
             "total_bens", "localizados", "nao_localizados", "desconhecidos",
             "movimentacoes_pendentes", "inventarios_abertos", "novos_30d",
-            "valor_total", "em_manutencao", "baixas_ano", "variacao",
+            "valor_total", "em_manutencao", "baixas_ano", "variacao", "filtros_aplicados",
         }

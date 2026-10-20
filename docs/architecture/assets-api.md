@@ -3,21 +3,22 @@
 Contrato para o frontend. Código: rotas `backend/app/api/v1/assets.py`, schemas
 `asset_schemas.py`, regra `backend/app/services/asset_service.py`; unidades do
 escopo em `services/unit_scope_service.py` + `api/v1/units.py`. Testes:
-`backend/tests/test_assets_api.py` e `test_sec_route_inventory.py`. **Sem
-migração**: usa as tabelas existentes (`assets`, `rooms`, `locations`,
-`responsible_people`).
+`backend/tests/test_assets_api.py`, `test_assets_bond_status.py` e
+`test_sec_route_inventory.py`. Usa as tabelas existentes (`assets`, `rooms`,
+`locations`, `responsible_people`); o campo `bond_status` depende da migração
+`0012_asset_bond_status` (espelho `sql/0015`).
 
 ## Rotas
 | Método | Caminho | Pilha / permissão |
 |---|---|---|
-| GET | `/assets`, `/assets/<id>`, `/assets/<id>/history` | auth, AAL2 se ADM, `assets.read` |
+| GET | `/assets`, `/assets/<id>`, `/assets/<id>/history`, `/assets/bond-statuses` | auth, AAL2 se ADM, `assets.read` |
 | POST | `/assets` | auth, AAL2 se ADM, `assets.create` (ADM e USER) |
 | PATCH | `/assets/<id>` | auth, AAL2 se ADM, `assets.update` (ADM e USER) |
 | POST | `/assets/<id>/delete`, `/assets/<id>/restore` | auth, ADM, AAL2, `assets.delete` |
 | GET | `/units/accessible` | auth, AAL2 se ADM, `units.read` |
 
 Não existe `DELETE` (405). Rate limit por usuário/hora: 1200 (lista), 600
-(detalhe/histórico/units), 120 (criar/editar), 60 (excluir/restaurar). Erros:
+(detalhe/histórico/units/bond-statuses), 120 (criar/editar), 60 (excluir/restaurar). Erros:
 `{"error": {"code", "message"}}`.
 
 ## Regras transversais
@@ -28,7 +29,8 @@ Não existe `DELETE` (405). Rate limit por usuário/hora: 1200 (lista), 600
 - **Excluídos**: só aparecem para ADM com `include_deleted=true` (lista, detalhe e
   histórico). USER/RH com `include_deleted=true` => 403 `forbidden` + `ACCESS_DENIED`.
 - **Mass assignment**: schemas `extra="forbid"`. `id`, `version` (na criação),
-  `created_*`, `updated_*`, `deleted_*`, `source_*`, `assigned_user_id` e
+  `created_*`, `updated_*`, `deleted_*`, `source_*`, `assigned_user_id`,
+  `bond_status` (vínculo; só a importação grava) e
   `unit_id` (em PATCH) nunca vêm do cliente: 400 `validation_error` + evento
   (`PRIVILEGE_ESCALATION_ATTEMPT` ou `MASS_ASSIGNMENT_REJECTED`).
 - **Campos por perfil** (lista provisória, pendente de validação institucional):
@@ -63,10 +65,22 @@ Não existe `DELETE` (405). Rate limit por usuário/hora: 1200 (lista), 600
 Consulta (allowlist; desconhecido/repetido => 400): `q` (≤100; patrimônio e
 descrição, curingas LIKE escapados), `unit_id`, `owner_unit_id`, `room_id`,
 `responsible_person_id` (UUID), `located=SIM|NAO|DESCONHECIDO`,
+`bond_status` (1–64, sem caracteres de controle; igualdade EXATA sem caixa,
+`lower(bond_status) = lower(valor)`, usa `ix_assets_bond_status_lower`; valor
+especial `__none__` = bens sem vínculo; >64/vazio => 400),
 `include_deleted=true|false` (só ADM), `sort` (`patrimony_number` padrão,
-`description`, `created_at`, `updated_at`, cada um com prefixo `-` p/ decrescente;
+`description`, `created_at`, `updated_at`, `bond_status` (sem caixa; sem vínculo
+primeiro), cada um com prefixo `-` p/ decrescente;
 desempate por `id`), `page` (≥1), `page_size` (1–100, padrão 25).
 Resposta: `{total, page, page_size, assets: [Asset]}`.
+
+## Opções do filtro de vínculo `GET /assets/bond-statuses`
+Sem parâmetros (qualquer um => 400). Mesma pilha e mesmo escopo da listagem
+(`unit_id` OU `owner_unit_id` acessíveis), só bens NÃO excluídos e com vínculo.
+Resposta `{"items": [{"value": "Ocioso", "count": 12}, ...]}`: agrupado por
+`lower(bond_status)`; `value` = grafia mais frequente do grupo (desempate
+alfabético); ordenado por `value` (sem caixa); no máximo 100 grupos. Escopo
+vazio => `{"items": []}`. Contagens de outras unidades nunca aparecem.
 
 ## Objeto `Asset`
 ```
@@ -75,9 +89,12 @@ unit_id, unit {id, code, name},
 owner_unit_id|null, owner_unit {id, code, name}|null,
 responsible_person_id|null, responsible_person {id, name}|null,
 room_id|null, room {id, name}|null, location_id|null, location {id, name}|null,
-located, registration_date (AAAA-MM-DD)|null,
+located, bond_status|null, registration_date (AAAA-MM-DD)|null,
 created_at, updated_at, deleted_at|null, version
 ```
+`bond_status` ("Vínculo": Servidor, Terceirizado, Ocioso...) vem da 1ª coluna
+`RESPONSAVEL` da planilha (migração 0012); todos os perfis com acesso ao bem o
+recebem (não é dado pessoal); não editável pela API.
 ADM e USER recebem ainda: `notes`, `assigned_user_id`, `source_record_id`,
 `source_system`, `source_updated_at`, `created_by`, `updated_by`; só ADM:
 `deleted_by`. RH não recebe nenhuma dessas chaves.

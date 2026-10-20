@@ -226,7 +226,9 @@ derivada de `../logo.png`) é exibida na tela de login por
 
 `/login` e `/ativar-conta` ficam em `src/app/(publico)/` e usam
 `(publico)/layout.tsx`: viewport inteiro (`min-h-dvh`) sobre #101010, cabeçalho
-com `AguLogo` + eyebrow `SISPAT-AGU`, `<main id="conteudo">` e rodapé
+com `AguLogo` (direto sobre o canvas, sem painel claro, `brightness-125`),
+"Unidade Estadual de Administração em Tocantins" e eyebrow `SISPAT-AGU`,
+`<main id="conteudo">` e rodapé
 (copyright, "Sistema de Gestão Patrimonial — AGU, Palmas/TO" e a nota "Acesso
 apenas por convite…"). Sem Sidebar/Header/AuthGuard. As demais rotas ficam em
 `(app)/`, cujo layout traz o shell e o `AuthGuard` (sem sessão → `/login`,
@@ -236,6 +238,13 @@ de orientações (`AuthGuidancePanel`) fica ao lado do formulário em `lg` e aba
 dele em telas menores. Não há "Cadastre-se" (só convite) nem "Esqueceu a
 senha?" (fluxo inexistente). Testes: `e2e/functional.spec.ts` ("tela pública
 autônoma") e a matriz de `e2e/support/screens.ts`.
+
+**Compartilhamento (meta tags):** `src/app/layout.tsx` define Open Graph/Twitter
+(`summary_large_image`), `theme-color` #101010 e `robots: noindex`. A imagem
+1200x630 é gerada pela rota `src/app/og/route.tsx` (`/og`; os arquivos
+`opengraph-image.tsx` quebram o build com a raiz `force-dynamic`). A origem
+pública vem de `NEXT_PUBLIC_SITE_URL` (padrão `https://ueato.revizzicar.com.br`).
+
 
 ## Estrutura
 

@@ -67,6 +67,19 @@ class Asset(TimestampMixin, Base):
             "unit_id",
             postgresql_where=text("deleted_at IS NULL"),
         ),
+        # Vínculo (migração 0012_asset_bond_status). No Postgres o CHECK usa
+        # btrim(); trim() é equivalente para espaços e também existe no SQLite.
+        CheckConstraint(
+            "bond_status IS NULL OR (char_length(bond_status) BETWEEN 1 AND 64"
+            " AND bond_status = trim(bond_status))",
+            name="ck_assets_bond_status_len",
+        ),
+        Index(
+            "ix_assets_bond_status_lower",
+            text("lower(bond_status)"),
+            postgresql_where=text("deleted_at IS NULL"),
+            sqlite_where=text("deleted_at IS NULL"),
+        ),
         # SEC-AST-01: o índice único parcial `uq_assets_patrimony_number_active`
         # (lower(btrim(patrimony_number)) WHERE deleted_at IS NULL) existe só na
         # migração 0009_uniq_idx_assets_movements. NÃO é declarado aqui
@@ -82,6 +95,9 @@ class Asset(TimestampMixin, Base):
     # NUNCA numérico/float: pode conter zeros à esquerda, prefixos, etc.
     patrimony_number: Mapped[str] = mapped_column(Text, nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Vínculo/situação do bem (ex.: Servidor, Terceirizado, Ocioso): valor da
+    # 1ª coluna RESPONSAVEL da planilha; gerenciado pela importação.
+    bond_status: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     unit_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("units.id", ondelete="RESTRICT"), nullable=False

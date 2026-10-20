@@ -1,5 +1,7 @@
-"""Revisao AppSec dos endpoints `/api/v1/dashboard/{resumo,por-unidade,por-situacao,
-aquisicoes-mensais}`: regressao de seguranca (IDOR, allowlist, DoS, XSS, PII, logs).
+"""Revisao AppSec dos endpoints de agregacao `/api/v1/dashboard/*` (resumo, por-unidade,
+por-situacao, aquisicoes-mensais, localizacao-por-unidade, por-vinculo,
+pendencias-cadastro, por-sala, inventario, tipos): regressao de seguranca (IDOR,
+allowlist, DoS, XSS, PII, logs). Filtros: `test_dashboard_filters.py`.
 
 Reaproveita o mundo SQLite de `test_dashboard_summary_api`. Achados ABERTOS usam
 `xfail(strict=True)`: quando forem corrigidos o teste passa a falhar como XPASS e
@@ -44,16 +46,25 @@ def _put(api, rows):
 
 
 @pytest.mark.parametrize("path", ENDPOINTS)
-def test_unit_id_existente_e_inexistente_mesma_resposta(api, path):
-    other = get(api, path, query=f"?unit_id={api.ub}")
-    ghost = get(api, path, query=f"?unit_id={uuid.uuid4()}")
-    assert other.status_code == ghost.status_code == 400
+@pytest.mark.parametrize("param", ["unit_id", "owner_unit_id", "room_id", "responsible_person_id"])
+def test_id_alheio_e_inexistente_mesma_resposta(api, path, param):
+    """Filtro por ID fora do escopo = resultado vazio identico a ID inexistente."""
+    add(api, api.ua, "A1", description="(1) NOTEBOOK", located="SIM")
+    room_b = api.world.room(api.ub, "Sala B")
+    person_b = api.world.person(api.ub, "Pessoa B")
+    api.world.asset(api.ub, "B1", description="(2) MESA", located="NAO", room_id=room_b,
+                    responsible_person_id=person_b, owner_unit_id=api.ub)
+    alien = {"unit_id": api.ub, "owner_unit_id": api.ub, "room_id": room_b,
+             "responsible_person_id": person_b}[param]
+    other = get(api, path, query=f"?{param}={alien}")
+    ghost = get(api, path, query=f"?{param}={uuid.uuid4()}")
+    assert other.status_code == ghost.status_code == 200
     assert other.get_json() == ghost.get_json()
-    assert str(api.ub) not in other.get_data(as_text=True)
+    assert str(alien) not in other.get_data(as_text=True)
 
 
 @pytest.mark.parametrize("path", ENDPOINTS)
-@pytest.mark.parametrize("param", ["unit_id", "unidade", "owner_unit_id", "user_id", "role", "limit", "sort"])
+@pytest.mark.parametrize("param", ["unidade", "user_id", "role", "limit", "sort", "deleted_at", "q"])
 def test_query_fora_da_allowlist_400_auditada_sem_eco(api, path, param):
     with patch("app.authorization.security_events._dispatch") as dispatch:
         response = get(api, path, query=f"?{param}=SEGREDO-{uuid.uuid4()}")
@@ -268,8 +279,8 @@ def test_servico_sem_sql_bruto():
 def test_rotas_novas_sem_unit_id_vindo_do_cliente():
     src = (ROOT / "backend/app/api/v1/dashboard.py").read_text(encoding="utf-8")
     assert "request.args.get" not in src and "request.json" not in src
-    assert src.count('\n@require_permission("reports.read")') == 4
-    assert src.count("\n@require_aal2_for_adm") == 4
+    assert src.count('\n@require_permission("reports.read")') == len(ENDPOINTS)
+    assert src.count("\n@require_aal2_for_adm") == len(ENDPOINTS)
 
 
 FRONT_FILES = [

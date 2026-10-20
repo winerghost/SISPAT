@@ -37,6 +37,16 @@ export const ASSET_NOT_FOUND_MESSAGE = "Bem não encontrado, ou fora do seu esco
 export const ASSET_LOOKUPS_ERROR_MESSAGE =
   "Não foi possível carregar as unidades, salas ou responsáveis para os filtros. A listagem continua disponível.";
 
+export const BOND_STATUS_NONE_LABEL = "Sem vínculo";
+
+export const BOND_STATUS_UNAVAILABLE_MESSAGE =
+  "Não foi possível carregar as opções de vínculo; o filtro está indisponível. A listagem continua disponível.";
+
+/** Rótulo da opção do filtro: "Ocioso (12)". A contagem é a do backend, sem cálculo local. */
+export function bondStatusOptionLabel(option: { value: string; count: number }): string {
+  return `${option.value} (${option.count.toLocaleString("pt-BR")})`;
+}
+
 /** Data de calendário AAAA-MM-DD → DD/MM/AAAA, sem conversão de fuso (não é instante). */
 export function formatCalendarDate(value: string | null | undefined): string | null {
   if (!value) return null;
@@ -122,6 +132,7 @@ export const FIELD_LABEL: Record<string, string> = {
   room_id: "Sala",
   location_id: "Local",
   located: "Localizado",
+  bond_status: "Vínculo",
   registration_date: "Data de registro",
   deleted_at: "Excluído em",
   version: "Versão",

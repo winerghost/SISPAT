@@ -5,7 +5,7 @@ import { keepPreviousData, useQuery } from "@tanstack/react-query";
 
 import { Button } from "@/components/ui/button";
 import { LoadingSkeleton } from "@/components/ui/loading-skeleton";
-import { listAssets, type AssetRecord } from "@/lib/assets-api";
+import { fetchAssetBondStatuses, listAssets, type AssetRecord } from "@/lib/assets-api";
 import { CatalogHeader, CatalogNotice, CatalogPagination } from "@/components/features/catalog/catalog-parts";
 import { SESSION_ERROR_MESSAGE } from "@/components/features/lookup/lookup-labels";
 import { noClientRetry, useAccessibleUnits, useLookupAccess } from "@/components/features/lookup/use-lookup";
@@ -19,7 +19,7 @@ import { useUnitPeople, useUnitRooms } from "./use-asset-lookups";
 
 // =============================================================================
 // /patrimonios — lista real de bens (`GET /api/v1/assets`).
-// Busca (debounce 300 ms), unidade, sala, responsável, "localizado", ordenação
+// Busca (debounce 300 ms), unidade, sala, responsável, "localizado", vínculo, ordenação
 // (allowlist) e paginação vão como parâmetros; o BACKEND aplica perfil, escopo de
 // unidade e campos por perfil. Esta tela é só apresentação: esconder botões por
 // perfil é UX, nunca segurança. Detalhe/edição/exclusão lógica/histórico ficam
@@ -41,6 +41,14 @@ export function PatrimoniosPage() {
   const rooms = useUnitRooms(filters.unitId, access.ready, false);
   const people = useUnitPeople(filters.unitId, access.ready, false);
 
+  // Opções do filtro "Vínculo": falha aqui só desativa o filtro (a lista segue).
+  const bondStatuses = useQuery({
+    queryKey: [...assetsQueryKey, "bond-statuses"],
+    queryFn: fetchAssetBondStatuses,
+    enabled: access.ready,
+    retry: noClientRetry,
+  });
+
   const includeDeleted = access.isAdmin && filters.includeDeleted;
   const params = {
     q: filters.q || undefined,
@@ -48,6 +56,7 @@ export function PatrimoniosPage() {
     room_id: filters.roomId || undefined,
     responsible_person_id: filters.personId || undefined,
     located: filters.located || undefined,
+    bond_status: filters.bondStatus || undefined,
     include_deleted: includeDeleted || undefined,
     sort: filters.sort,
     page: filters.page,
@@ -92,6 +101,8 @@ export function PatrimoniosPage() {
         units={units.data?.units}
         rooms={rooms.data?.rooms}
         people={people.data?.people}
+        bondStatuses={bondStatuses.data?.items}
+        bondStatusesFailed={bondStatuses.isError}
         isAdmin={access.isAdmin}
       />
 
@@ -112,7 +123,7 @@ export function PatrimoniosPage() {
         <>
           <AssetsTable
             assets={assets.data.assets}
-            pageKey={`${assets.data.page}|${filters.q}|${filters.unitId}|${filters.roomId}|${filters.personId}|${filters.located}|${includeDeleted}|${filters.sort}`}
+            pageKey={`${assets.data.page}|${filters.q}|${filters.unitId}|${filters.roomId}|${filters.personId}|${filters.located}|${filters.bondStatus}|${includeDeleted}|${filters.sort}`}
             busy={assets.isFetching && !assets.isPending}
             sort={filters.sort}
             onSortChange={filters.chooseSort}

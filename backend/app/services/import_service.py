@@ -130,6 +130,7 @@ from app.services.patrimony_lock import (
     normalize_patrimony_number,
     normalized_column,
 )
+from app.services.import_normalizer import normalize_bond_status
 from app.services.import_references import (
     PENDING_CODES,
     ImportReferences,
@@ -423,6 +424,8 @@ class ImportService:
                 located=located if located in _VALID_LOCATED else "DESCONHECIDO",
                 notes=notes.strip() if isinstance(notes, str) and notes.strip() else None,
                 registration_date=_parse_iso_date(nv.get("registration_date")),
+                # Vínculo (1ª RESPONSAVEL): pertence à planilha; nunca é pessoa.
+                bond_status=normalize_bond_status(nv.get("vinculo_situacao")),
                 source_updated_at=_parse_iso_datetime(nv.get("source_updated_at_utc")) or now,
                 created_by=confirmed_by_user_id,
                 updated_by=confirmed_by_user_id,
@@ -458,6 +461,11 @@ class ImportService:
                 return ("o bem foi excluído logicamente após a pré-visualização", 0, 0)
             if item.description:
                 asset.description = item.description
+            # Vínculo é da planilha (não editável na UI): atualiza quando muda;
+            # célula vazia NÃO apaga o valor existente (mesma regra da descrição).
+            bond = normalize_bond_status((item.normalized_values or {}).get("vinculo_situacao"))
+            if bond is not None and bond != asset.bond_status:
+                asset.bond_status = bond
             asset.source_system = "google_sheets"
             asset.source_record_id = item.source_record_id
             asset.source_updated_at = (

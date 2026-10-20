@@ -1,6 +1,6 @@
 """Patrimônios (`/api/v1/assets`): leitura, escrita e exclusão lógica com escopo.
 
-Leitura (`GET`, `history`): `require_auth -> require_aal2_for_adm ->
+Leitura (`GET`, `history`, `bond-statuses`): `require_auth -> require_aal2_for_adm ->
 require_permission("assets.read") -> rate_limit`; ADM exige AAL2, USER/RH não.
 Escrita de cadastro (`POST`, `PATCH`): `assets.create`/`assets.update`
 (ADM e USER; AAL2 só para ADM; campos por perfil no serviço). Exclusão lógica
@@ -19,6 +19,7 @@ from werkzeug.exceptions import BadRequest
 
 from app.api.v1.asset_schemas import (
     AssetActionRequest,
+    AssetBondStatusQuery,
     AssetCreateRequest,
     AssetGetQuery,
     AssetHistoryQuery,
@@ -116,6 +117,22 @@ def list_assets_endpoint():
         return denied
     with get_db_session() as db:
         payload = _service(db).list(g.current_user.id, query)
+    return jsonify(payload), 200
+
+
+@assets_bp.route("/bond-statuses", methods=["GET"])
+@require_auth
+@require_aal2_for_adm
+@require_permission("assets.read")
+@rate_limit(admin_rate_limit_key, limit=READ_LIMIT, window_seconds=WINDOW)
+def list_bond_statuses_endpoint():
+    """Opções do filtro "Vínculo" (contagens só dos bens no escopo do usuário)."""
+    try:
+        parse_query(AssetBondStatusQuery, request.args, context="assets.bond_statuses")
+    except BadRequest as exc:
+        return validation_error(exc)
+    with get_db_session() as db:
+        payload = _service(db).bond_statuses(g.current_user.id)
     return jsonify(payload), 200
 
 

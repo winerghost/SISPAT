@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { GeistSans } from "geist/font/sans";
 import { GeistMono } from "geist/font/mono";
 import { cookies } from "next/headers";
@@ -33,9 +33,39 @@ import "./globals.css";
 // bloqueadas pela CSP. Ver docs/security/evidence/frontend-security.md.
 export const dynamic = "force-dynamic";
 
+// Metadados de compartilhamento (Open Graph/Twitter). A imagem 1200x630 vem da
+// rota app/og/route.tsx.
+// `NEXT_PUBLIC_SITE_URL` (opcional) define a origem pública; sistema interno:
+// `noindex` para não ser listado em buscadores (o link ainda gera preview).
+const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL ?? "https://ueato.revizzicar.com.br";
+const TITLE = "SISPAT-AGU — Gestão Patrimonial";
+const DESCRIPTION =
+  "Sistema de Gestão Patrimonial da Unidade Estadual de Administração em Tocantins — AGU, Palmas/TO.";
+
+const OG_IMAGE = { url: "/og", width: 1200, height: 630, alt: "SISPAT-AGU — Gestão Patrimonial da AGU em Tocantins" };
+
 export const metadata: Metadata = {
-  title: "SISPAT-AGU",
-  description: "Sistema de Gestão Patrimonial da AGU — unidade Palmas/TO.",
+  metadataBase: new URL(SITE_URL),
+  title: { default: TITLE, template: "%s · SISPAT-AGU" },
+  description: DESCRIPTION,
+  applicationName: "SISPAT-AGU",
+  authors: [{ name: "AGU — Unidade Estadual de Administração em Tocantins" }],
+  robots: { index: false, follow: false },
+  openGraph: {
+    type: "website",
+    locale: "pt_BR",
+    siteName: "SISPAT-AGU",
+    title: TITLE,
+    description: DESCRIPTION,
+    url: "/",
+    images: [OG_IMAGE],
+  },
+  twitter: { card: "summary_large_image", title: TITLE, description: DESCRIPTION, images: [OG_IMAGE] },
+};
+
+export const viewport: Viewport = {
+  themeColor: "#101010",
+  colorScheme: "dark",
 };
 
 export default async function RootLayout({ children }: { children: React.ReactNode }) {

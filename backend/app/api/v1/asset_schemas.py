@@ -27,6 +27,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator, model_validator
 
 from app.api.v1.catalog_schemas import clean_text, collapse_spaces
+from app.services.import_normalizer import BOND_STATUS_MAX
 
 PATRIMONY_MAX = 64
 TEXT_MAX = 2000
@@ -126,6 +127,7 @@ class AssetActionRequest(_AssetModel):
 AssetSortKey = Literal[
     "patrimony_number", "-patrimony_number", "description", "-description",
     "created_at", "-created_at", "updated_at", "-updated_at",
+    "bond_status", "-bond_status",
 ]
 
 
@@ -142,6 +144,9 @@ class AssetListQuery(_Query):
     room_id: uuid.UUID | None = None
     responsible_person_id: uuid.UUID | None = None
     located: LocatedStatus | None = None
+    # Vínculo: comparação exata sem caixa; `__none__` = sem vínculo
+    # (`bond_status IS NULL`). Nunca aceito em criação/edição (vem da planilha).
+    bond_status: str | None = Field(default=None, min_length=1, max_length=BOND_STATUS_MAX)
     sort: AssetSortKey = "patrimony_number"
     page: int = Field(default=1, ge=1, le=100_000)
     page_size: int = Field(default=25, ge=1, le=100)
@@ -150,6 +155,31 @@ class AssetListQuery(_Query):
     @classmethod
     def _q(cls, value: str | None) -> str | None:
         return None if value is None else (collapse_spaces(value) or None)
+
+    @field_validator("bond_status")
+    @classmethod
+    def _bond_status(cls, value: str | None) -> str | None:
+        return clean_bond_status_filter(value)
+
+
+def clean_bond_status_filter(value: str | None) -> str | None:
+    """Regra única do filtro de vínculo (lista de bens e dashboard).
+
+    Trim + espaços colapsados; controle => erro; vazio => erro. `__none__`
+    passa como está (o serviço o traduz para `bond_status IS NULL`).
+    """
+    if value is None:
+        return None
+    cleaned = clean_text(value, label="bond_status")  # rejeita controle
+    if not cleaned:
+        raise ValueError("bond_status não pode ser vazio")
+    return cleaned
+
+
+class AssetBondStatusQuery(BaseModel):
+    """`GET /assets/bond-statuses`: sem parâmetros (qualquer um => 400)."""
+
+    model_config = ConfigDict(extra="forbid")
 
 
 class AssetGetQuery(_Query):
@@ -163,9 +193,12 @@ class AssetHistoryQuery(_Query):
 
 __all__ = [
     "AssetActionRequest",
+    "AssetBondStatusQuery",
     "AssetCreateRequest",
     "AssetGetQuery",
     "AssetHistoryQuery",
     "AssetListQuery",
     "AssetUpdateRequest",
+    "LocatedStatus",
+    "clean_bond_status_filter",
 ]

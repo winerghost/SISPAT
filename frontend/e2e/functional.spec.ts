@@ -577,6 +577,11 @@ test.describe("logomarca AGU no login", () => {
       await expect.poll(() => logo.evaluate((el) => (el as HTMLImageElement).naturalWidth)).toBeGreaterThan(0);
       // Texto da marca do sistema permanece visível.
       await expect(page.getByRole("banner").getByText("SISPAT-AGU", { exact: true })).toBeVisible();
+      // Unidade abaixo da logo; logo sem painel claro (sem fundo branco estourado).
+      const unit = page.getByRole("banner").getByText("Unidade Estadual de Administração em Tocantins");
+      await expect(unit).toBeVisible();
+      expect((await unit.boundingBox())!.y).toBeGreaterThan((await logo.boundingBox())!.y);
+      await expect(logo.locator("xpath=..")).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
       const overflow = await page.evaluate(
         () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
       );

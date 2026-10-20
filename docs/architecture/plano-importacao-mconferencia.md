@@ -155,7 +155,14 @@ aplicadas no Supabase (pendente `alembic stamp`).
 4. Confirmar só o que estiver conferido (linhas problemáticas ficam fora).
 
 Comportamento da reimportação (limites conhecidos):
-- Bem EXISTENTE: só descrição e origem são atualizadas. Mudança na planilha de
+- Vínculo (1ª `RESPONSAVEL` → `assets.bond_status`, 2026-10-20): normalizado
+  por `normalize_bond_status` (`app/services/import_normalizer.py`; NFC, espaços
+  colapsados, sem caracteres Cc/Cf, corte em 64 e trim por último; vazio →
+  NULL — mesma regra do backfill da migração 0012). NOVO grava; EXISTENTE
+  atualiza quando o valor muda; célula vazia NÃO apaga o valor existente. O
+  vínculo pertence à planilha: não é editável pela API/UI. `Ocioso` continua
+  nunca sendo pessoa.
+- Bem EXISTENTE: só descrição, vínculo e origem são atualizados. Mudança na planilha de
   sala, responsável ou `LOCALIZADO` NÃO é refletida (evita sobrescrever edição
   feita no sistema). Mudar isso é decisão de produto.
 - Pessoa/sala existente: só campos vazios são preenchidos, nunca sobrescritos.

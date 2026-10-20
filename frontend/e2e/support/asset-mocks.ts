@@ -19,6 +19,10 @@ import type { CatalogUnitRef, PersonMock, RoomMock, UnitDetailMock } from "./cat
 import { PERSON_IDS, ROOM_IDS } from "./catalog-mocks";
 
 const XSS = `<img src=x onerror="window.__xss=1">`;
+/** Vínculo importado com marcador XSS (deve aparecer como TEXTO literal). */
+export const BOND_XSS = "<img src=x onerror=window.__xss=1>";
+/** Valor reservado do filtro "Sem vínculo". */
+export const BOND_NONE = "__none__";
 const BASE = Date.UTC(2026, 9, 2, 12, 0, 0);
 const iso = (offsetMinutes: number) => new Date(BASE + offsetMinutes * 60_000).toISOString();
 
@@ -52,6 +56,8 @@ export interface AssetMock {
   room_id: string | null;
   location_id: string | null;
   located: "SIM" | "NAO" | "DESCONHECIDO";
+  /** Vínculo (1ª coluna RESPONSAVEL da planilha); só leitura, vem da importação. */
+  bond_status: string | null;
   registration_date: string | null;
   created_at: string;
   updated_at: string;
@@ -89,6 +95,8 @@ export interface AssetMockState {
   forceWriteError: { status: number; code: string } | null;
   /** Erro HTTP forçado em `GET /assets/<id>/history`. */
   forceHistoryStatus: number | null;
+  /** Erro HTTP forçado em `GET /assets/bond-statuses` (o filtro "Vínculo" fica indisponível). */
+  forceBondStatusesStatus: number | null;
 }
 
 export interface AssetHandlerState extends AssetMockState {
@@ -112,6 +120,7 @@ export function defaultAssets(units: CatalogUnitRef[]): AssetMockState {
     room_id: null,
     location_id: null,
     located: "DESCONHECIDO",
+    bond_status: null,
     registration_date: null,
     created_at: iso(0),
     updated_at: iso(10),
@@ -145,6 +154,7 @@ export function defaultAssets(units: CatalogUnitRef[]): AssetMockState {
         room_id: ROOM_IDS.a,
         location_id: LOCATION_ID,
         located: "SIM",
+        bond_status: "Servidor",
         registration_date: "2024-02-29",
         version: 3,
       }),
@@ -152,22 +162,28 @@ export function defaultAssets(units: CatalogUnitRef[]): AssetMockState {
         description: "Cadeira giratória sintética",
         owner_unit_id: u2.id,
         notes: null,
+        bond_status: "Ocioso",
       }),
       asset(ASSET_IDS.xss, u2.id, "XSS-001", {
         description: `Monitor ${XSS}`,
         notes: `Nota ${XSS}`,
         room_id: ROOM_IDS.other,
         located: "NAO",
+        bond_status: BOND_XSS,
       }),
       asset(ASSET_IDS.slash, u2.id, "A-2025/007", { description: "Projetor sintético", located: "SIM" }),
       asset(ASSET_IDS.deleted, u1.id, "DEL-0001", {
         description: "Bem excluído sintético",
         deleted_at: iso(30),
         version: 2,
+        bond_status: "Ocioso",
       }),
-      asset(ASSET_IDS.outOfScope, OUT_OF_SCOPE_UNIT_ID, "FORA-001", { description: "Bem de unidade fora do escopo" }),
-      asset(ASSET_IDS.third, u3.id, "007", { description: "Armário sintético" }),
-      asset(ASSET_IDS.similar, u1.id, "00123", { description: "Mesa sintética" }),
+      asset(ASSET_IDS.outOfScope, OUT_OF_SCOPE_UNIT_ID, "FORA-001", {
+        description: "Bem de unidade fora do escopo",
+        bond_status: "Ocioso",
+      }),
+      asset(ASSET_IDS.third, u3.id, "007", { description: "Armário sintético", bond_status: "Terceirizado" }),
+      asset(ASSET_IDS.similar, u1.id, "00123", { description: "Mesa sintética", bond_status: "ocioso" }),
     ],
     history: [
       entry(ASSET_IDS.long, 1, "ASSET_CREATED", null, { patrimony_number: "000123", located: "DESCONHECIDO" }),
@@ -187,6 +203,7 @@ export function defaultAssets(units: CatalogUnitRef[]): AssetMockState {
     forceListStatus: null,
     forceWriteError: null,
     forceHistoryStatus: null,
+    forceBondStatusesStatus: null,
   };
 }
 
@@ -216,12 +233,13 @@ const LIST_PARAMS = new Set([
   "room_id",
   "responsible_person_id",
   "located",
+  "bond_status",
   "include_deleted",
   "sort",
   "page",
   "page_size",
 ]);
-const SORTS = new Set(["patrimony_number", "description", "created_at", "updated_at"]);
+const SORTS = new Set(["patrimony_number", "description", "bond_status", "created_at", "updated_at"]);
 const LOCATED = new Set(["SIM", "NAO", "DESCONHECIDO"]);
 const CREATE_KEYS = new Set([
   "unit_id",
@@ -279,6 +297,10 @@ export async function handleAssets(ctx: AssetRequestContext): Promise<boolean> {
   const isAdm = state.role === "ADM";
   if (isAdm && state.aal !== "aal2") return err(403, "AAL2_REQUIRED", "MFA obrigatório");
 
+  if (id === "bond-statuses" && !action) {
+    if (method === "GET") return bondStatuses(ctx, err);
+    return false;
+  }
   if (!id) {
     if (method === "GET") return listAssets(ctx, err);
     if (method === "POST") return createAsset(ctx, err);
@@ -331,6 +353,7 @@ function view(state: AssetHandlerState, asset: AssetMock): Record<string, unknow
     location_id: asset.location_id,
     location: location ? { id: location.id, name: location.name } : null,
     located: asset.located,
+    bond_status: asset.bond_status,
     registration_date: asset.registration_date,
     created_at: asset.created_at,
     updated_at: asset.updated_at,
@@ -404,6 +427,7 @@ async function listAssets(ctx: AssetRequestContext, err: Err): Promise<boolean> 
   const sort = searchParams.get("sort") ?? "patrimony_number";
   const field = sort.replace(/^-/, "");
   const located = searchParams.get("located");
+  const bond = searchParams.get("bond_status");
   const page = Number(searchParams.get("page") ?? 1);
   const pageSize = Number(searchParams.get("page_size") ?? 25);
   for (const key of ["unit_id", "owner_unit_id", "room_id", "responsible_person_id"]) {
@@ -412,6 +436,7 @@ async function listAssets(ctx: AssetRequestContext, err: Err): Promise<boolean> 
   }
   if (
     q.length > 100 ||
+    (bond !== null && (bond.trim() === "" || bond.length > 100)) ||
     !SORTS.has(field) ||
     (located !== null && !LOCATED.has(located)) ||
     !Number.isInteger(page) ||
@@ -438,7 +463,8 @@ async function listAssets(ctx: AssetRequestContext, err: Err): Promise<boolean> 
         (!ownerId || a.owner_unit_id === ownerId) &&
         (!roomId || a.room_id === roomId) &&
         (!personId || a.responsible_person_id === personId) &&
-        (!located || a.located === located),
+        (!located || a.located === located) &&
+        matchesBond(a, bond),
     )
     .sort((a, b) => {
       const va = String((a as unknown as Record<string, unknown>)[field] ?? "");
@@ -451,6 +477,33 @@ async function listAssets(ctx: AssetRequestContext, err: Err): Promise<boolean> 
     page_size: pageSize,
     assets: list.slice((page - 1) * pageSize, page * pageSize).map((a) => view(state, a)),
   });
+  return true;
+}
+
+/** `bond_status` sem distinguir caixa; `__none__` = sem vínculo. */
+function matchesBond(asset: AssetMock, bond: string | null): boolean {
+  if (bond === null) return true;
+  if (bond === BOND_NONE) return asset.bond_status === null;
+  return asset.bond_status !== null && asset.bond_status.toLowerCase() === bond.trim().toLowerCase();
+}
+
+/** `GET /assets/bond-statuses`: valores distintos (sem caixa) no escopo, bens ativos, com contagem. */
+async function bondStatuses(ctx: AssetRequestContext, err: Err): Promise<boolean> {
+  const { state, respond } = ctx;
+  if (ctx.rawKeys.length > 0) return err(400, "validation_error");
+  if (state.forceBondStatusesStatus && state.forceBondStatusesStatus >= 400) {
+    return err(state.forceBondStatusesStatus, "INTERNAL", "SISPAT_BACKEND_MSG");
+  }
+  const counts = new Map<string, { value: string; count: number }>();
+  for (const asset of state.assets) {
+    if (!inScope(state, asset) || asset.deleted_at || asset.bond_status === null) continue;
+    const key = asset.bond_status.toLowerCase();
+    const current = counts.get(key);
+    if (current) current.count += 1;
+    else counts.set(key, { value: asset.bond_status, count: 1 });
+  }
+  const items = [...counts.values()].sort((a, b) => a.value.localeCompare(b.value, "pt-BR"));
+  await respond(200, { items });
   return true;
 }
 
@@ -569,6 +622,7 @@ async function createAsset(ctx: AssetRequestContext, err: Err): Promise<boolean>
     room_id: (body.room_id as string | null | undefined) ?? null,
     location_id: (body.location_id as string | null | undefined) ?? null,
     located: located as AssetMock["located"],
+    bond_status: null,
     registration_date: date,
     created_at: stamp,
     updated_at: stamp,

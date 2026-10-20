@@ -112,6 +112,8 @@ export interface MockOptions {
   lookupListStatus?: number;
   /** `GET /v1/assets` responde com este status de erro (ex.: 403, 404, 500); testes também podem mudar `state.forceListStatus`. */
   assetsListStatus?: number;
+  /** `GET /v1/assets/bond-statuses` responde com este status de erro (filtro "Vínculo" indisponível). */
+  assetBondStatusesStatus?: number;
   /** `GET /v1/movements` responde com este status de erro (ex.: 403, 404, 500); testes também podem mudar `state.forceMovementListStatus`. */
   movementsListStatus?: number;
   /** `GET /v1/inventories` responde com este status de erro (ex.: 403, 404, 500); testes também podem mudar `state.forceInventoryListStatus`. */
@@ -970,6 +972,7 @@ export async function installMocks(page: Page, opts: MockOptions = {}): Promise<
     ...defaultCatalog(UNITS, { hidePhone: opts.catalogHidePhone, hideAddress: opts.catalogHideAddress }),
     ...defaultAssets(UNITS),
     forceListStatus: opts.assetsListStatus ?? null,
+    forceBondStatusesStatus: opts.assetBondStatusesStatus ?? null,
     ...defaultMovements(UNITS),
     forceMovementListStatus: opts.movementsListStatus ?? null,
     ...defaultInventories(UNITS),

@@ -972,6 +972,29 @@ export const SCREENS: ScreenDef[] = [
     },
   },
   {
+    id: "patrimonios-vinculo-ocioso",
+    title: "Patrimônios — filtro Vínculo = Ocioso (USER)",
+    path: "/patrimonios",
+    session: { role: "USER" },
+    prepare: async (page) => {
+      await expect(page.getByRole("table", { name: "Patrimônios" })).toBeVisible();
+      const select = page.getByLabel("Vínculo", { exact: true });
+      await expect(select).toBeEnabled();
+      await select.selectOption("Ocioso");
+      await expect(page.getByText("Página 1 de 1 · 2 bem(ns)")).toBeVisible();
+    },
+  },
+  {
+    id: "patrimonios-vinculo-indisponivel",
+    title: "Patrimônios — opções de Vínculo indisponíveis (lista segue)",
+    path: "/patrimonios",
+    session: { role: "USER", assetBondStatusesStatus: 500 },
+    prepare: async (page) => {
+      await expect(page.getByRole("table", { name: "Patrimônios" })).toBeVisible();
+      await expect(page.getByText("o filtro está indisponível")).toBeVisible({ timeout: 15_000 });
+    },
+  },
+  {
     id: "patrimonios-erro",
     title: "Patrimônios — erro 500 com nova tentativa",
     path: "/patrimonios",
