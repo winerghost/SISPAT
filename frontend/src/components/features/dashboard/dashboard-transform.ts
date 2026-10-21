@@ -5,7 +5,13 @@
 // =============================================================================
 
 import type { ChartDatum, MultiSeriesChartData } from "@/components/dashboard/types";
-import type { MonthlySeries, SituationSlice, UnitBreakdownRow } from "@/lib/dashboard-api";
+import type {
+  LabeledCount,
+  MonthlySeries,
+  SituationSlice,
+  UnitBreakdownRow,
+  UnitLocationRow,
+} from "@/lib/dashboard-api";
 
 /** Número máximo de séries por tipo; excedentes são somados em "Outros". */
 export const MAX_TYPE_SERIES = 4;
@@ -100,5 +106,41 @@ export function buildMonthlyData(series: MonthlySeries[]): MultiSeriesChartData 
       label: humanizeCode(s.id),
       values: Object.fromEntries(s.data.map((p) => [p.x, p.y])),
     })),
+  };
+}
+
+/**
+ * Localizados × não localizados por unidade (barras empilhadas). Ordem das
+ * séries = ordem das cores (fixa): Não localizado (sinal), Localizado,
+ * Desconhecido. Chaves das categorias são internas (u0, u1...), nunca o texto.
+ */
+export const LOCATION_SERIES = [
+  { key: "nao", label: "Não localizado" },
+  { key: "sim", label: "Localizado" },
+  { key: "desconhecido", label: "Desconhecido" },
+] as const;
+
+export function buildUnitLocationData(rows: UnitLocationRow[]): MultiSeriesChartData {
+  return {
+    categories: rows.map((row, i) => ({ key: `u${i}`, label: row.unidade })),
+    series: LOCATION_SERIES.map((s) => ({
+      key: s.key,
+      label: s.label,
+      values: Object.fromEntries(rows.map((row, i) => [`u${i}`, row[s.key]])),
+    })),
+  };
+}
+
+/** Vínculo/sala → categorias (ordem do backend: top N, "Outros", "Sem ..."). */
+export function buildLabeledData(items: LabeledCount[]): ChartDatum[] {
+  return items.filter((item) => item.value > 0).map((item) => ({ key: item.id, label: item.label, value: item.value }));
+}
+
+/** Bens por sala em barras horizontais (série única "Bens"). */
+export function buildRoomData(items: LabeledCount[]): MultiSeriesChartData {
+  const rows = items.filter((item) => item.value > 0);
+  return {
+    categories: rows.map((item, i) => ({ key: `r${i}`, label: item.label })),
+    series: [{ key: "bens", label: "Bens", values: Object.fromEntries(rows.map((item, i) => [`r${i}`, item.value])) }],
   };
 }

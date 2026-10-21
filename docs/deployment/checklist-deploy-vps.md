@@ -9,6 +9,12 @@ segredo deve ser escrito aqui, em tickets ou em chats.
 > Nada neste checklist autoriza, por si só, um deploy ou uma migração em produção:
 > ambos exigem autorização explícita do responsável pelo sistema.
 
+> **Pendências pós-implantação de 2026-10-20** (Supabase Auth, gitleaks/trivy na VPS,
+> limite de 100 s da Cloudflare, worker Celery, `set_real_ip_from` global do CloudPanel,
+> expurgo de `import_previews`): passo a passo em
+> [`docs/deploy/PENDENCIAS_OPERACIONAIS_2026-10-20.md`](../deploy/PENDENCIAS_OPERACIONAIS_2026-10-20.md).
+> Varredura na VPS sem instalar binários: `bash scripts/security-scan-docker.sh`.
+
 ## 0. Pré-requisitos
 
 - [ ] Autorização explícita para o deploy **e**, separadamente, para cada migração.

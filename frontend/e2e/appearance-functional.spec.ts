@@ -7,6 +7,8 @@ import {
   waitForHydration,
   type MockOptions,
   type MockState,
+  defaultDashboardCharts,
+  defaultDashboardLayout,
   type PreferencesMock,
 } from "./support/mocks";
 import { waitForAnimations, VIEWPORTS } from "./support/screens";
@@ -260,7 +262,8 @@ test.describe("tela de Aparência", () => {
     expect(state.prefs).toEqual({
       density: "compact",
       font_scale: 112,
-      dashboard_charts: { units: "grouped", status: "pie", monthly: "line" },
+      dashboard_charts: defaultDashboardCharts(),
+      dashboard_layout: defaultDashboardLayout(),
       version: 1,
     });
     await expect(page.getByRole("button", { name: "Salvar" })).toBeDisabled();

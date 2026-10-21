@@ -4,7 +4,6 @@ import { ResponsivePie, type PieTooltipProps } from "@nivo/pie";
 
 import {
   ChartShell,
-  OTHERS_KEY,
   TooltipBox,
   defaultFormatter,
   useCategoryModel,
@@ -33,6 +32,7 @@ export function PieChart(props: AnimatedChartProps) {
     valueFormatter = defaultFormatter,
     selectedKey = null,
     onSelectKey,
+    selectActionLabel,
     height = 240,
     theme = "screen",
     className,
@@ -62,6 +62,8 @@ export function PieChart(props: AnimatedChartProps) {
       table={model.table}
       selectedKey={selectedKey}
       onSelectKey={onSelectKey}
+      selectActionLabel={selectActionLabel}
+      interactive={!!onSelectKey}
       className={className}
     >
       {() => (
@@ -83,7 +85,7 @@ export function PieChart(props: AnimatedChartProps) {
           tooltip={Tooltip}
           onClick={(datum) => {
             const key = String(datum.id);
-            if (onSelectKey && key !== OTHERS_KEY) toggle(key);
+            if (onSelectKey && model.canSelect(key)) toggle(key);
           }}
           theme={nivoTheme(theme)}
           animate={false}

@@ -121,6 +121,10 @@ export interface ChartShellProps {
   kind: string;
   selectedKey?: string | null;
   onSelectKey?: (key: string | null) => void;
+  /** Prefixo (só leitor de tela) do nome dos botões da legenda, ex. "Filtrar por situação:". */
+  selectActionLabel?: string;
+  /** Marcas clicáveis (cursor de ponteiro na superfície do gráfico). */
+  interactive?: boolean;
   className?: string;
   /** Recebe a largura medida do contêiner (0 antes da 1ª medição). */
   children: (width: number) => ReactNode;
@@ -137,6 +141,8 @@ export function ChartShell({
   kind,
   selectedKey = null,
   onSelectKey,
+  selectActionLabel,
+  interactive = false,
   className,
   children,
 }: ChartShellProps) {
@@ -166,7 +172,12 @@ export function ChartShell({
         className="relative w-full min-w-0"
         style={{ height }}
       >
-        <div aria-hidden="true" data-chart-surface="nivo" className="h-full w-full">
+        <div
+          aria-hidden="true"
+          data-chart-surface="nivo"
+          data-chart-interactive={interactive || undefined}
+          className={cn("h-full w-full", interactive && "[&_path]:cursor-pointer [&_rect]:cursor-pointer")}
+        >
           {children(width)}
         </div>
       </div>
@@ -188,7 +199,7 @@ export function ChartShell({
             </>
           );
           return (
-            <li key={item.key}>
+            <li key={item.key} data-focus-id={`legend:${item.key}`}>
               {onSelectKey && item.selectable ? (
                 <button
                   type="button"
@@ -200,6 +211,7 @@ export function ChartShell({
                     cls.focusRing,
                   )}
                 >
+                  {selectActionLabel ? <span className="sr-only">{`${selectActionLabel} `}</span> : null}
                   {content}
                 </button>
               ) : (
@@ -316,6 +328,10 @@ export interface AnimatedChartProps {
   selectedKey?: string | null;
   /** Habilita a seleção pela legenda (botões aria-pressed). */
   onSelectKey?: (key: string | null) => void;
+  /** Quais categorias aceitam seleção (padrão: todas menos "Outros"). */
+  isSelectableKey?: (key: string) => boolean;
+  /** Prefixo acessível dos botões da legenda (ex.: "Filtrar por vínculo:"). */
+  selectActionLabel?: string;
   /** Altura do gráfico em px (padrão 240). */
   height?: number;
   /** Tema visual (padrão "screen"; "paper" = relatório impresso). */
@@ -330,11 +346,13 @@ export function useCategoryModel({
   valueLabel = "Valor",
   valueFormatter = defaultFormatter,
   selectedKey = null,
+  isSelectableKey,
   theme = "screen",
 }: AnimatedChartProps) {
   const palette = chartPalette(theme);
   return useMemo(() => {
     const rows = toCategoryRows(kind, data, palette);
+    const canSelect = (key: string) => key !== OTHERS_KEY && (isSelectableKey ? isSelectableKey(key) : true);
     const fillFor = (row: CategoryRow) => (kind === "bar" && row.key === selectedKey ? palette.highlight : row.color);
     const opacityFor = (row: CategoryRow) => (selectedKey && row.key !== selectedKey ? 0.35 : 1);
     const legend: LegendItem[] = rows.map((row) => ({
@@ -343,7 +361,7 @@ export function useCategoryModel({
       color: fillFor(row),
       opacity: opacityFor(row),
       valueText: valueFormatter(row.value),
-      selectable: row.key !== OTHERS_KEY,
+      selectable: canSelect(row.key),
     }));
     const table: TableSpec = {
       rowHeader: "Categoria",
@@ -353,8 +371,8 @@ export function useCategoryModel({
     const summary = `${categoryKindLabel(kind)}: ${rows
       .map((row) => `${row.label} ${valueFormatter(row.value)}`)
       .join("; ")}.`;
-    return { rows, legend, table, summary, fillFor, opacityFor, palette };
-  }, [kind, data, palette, selectedKey, valueFormatter, valueLabel]);
+    return { rows, legend, table, summary, fillFor, opacityFor, palette, canSelect };
+  }, [kind, data, palette, selectedKey, valueFormatter, valueLabel, isSelectableKey]);
 }
 
 /** Props comuns dos gráficos de várias séries (unidades e mensal). */
@@ -368,6 +386,11 @@ export interface AnimatedSeriesChartProps {
   kindLabel?: string;
   theme?: ChartThemeName;
   className?: string;
+  /**
+   * Clique numa barra (chaves ORIGINAIS da categoria e da série). Ausente =
+   * barras sem ação. A alternativa por teclado fica no painel (botões).
+   */
+  onMarkClick?: (categoryKey: string, seriesKey: string) => void;
 }
 
 export interface SeriesModelSeries {

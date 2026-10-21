@@ -11,7 +11,14 @@ from app.models.settings import UserPreferences
 
 URL = "/api/v1/me/preferences"
 SUBS = {"USER": "auth-dc-user", "RH": "auth-dc-rh", "ADM": "auth-dc-adm"}
-DEFAULTS = {"units": "grouped", "status": "pie", "monthly": "line"}
+DEFAULTS = {
+    "units": "grouped",
+    "status": "pie",
+    "monthly": "line",
+    "location": "stacked",
+    "bond": "donut",
+    "rooms": "horizontal",
+}
 
 
 @pytest.fixture()
@@ -54,6 +61,9 @@ def test_get_devolve_padroes(people):
         ("units", ["grouped", "stacked", "horizontal"]),
         ("status", ["pie", "donut", "bar"]),
         ("monthly", ["line", "area", "bar"]),
+        ("location", ["grouped", "horizontal", "stacked"]),
+        ("bond", ["pie", "bar", "donut"]),
+        ("rooms", ["bar", "horizontal"]),
     ],
 )
 def test_allowlist_aceita_todos_os_valores(people, panel, values):
@@ -81,6 +91,15 @@ def test_allowlist_aceita_todos_os_valores(people, panel, values):
         {"units": {"type": "grouped"}},
         {"status": {"a": {"b": "pie"}}},
         {"units": ""},
+        {"location": "pie"},
+        {"location": "line"},
+        {"bond": "line"},
+        {"bond": "stacked"},
+        {"rooms": "grouped"},
+        {"rooms": "pie"},
+        {"rooms": "BAR"},
+        {"bond": 0},
+        {"location": ["stacked"]},
         "pie",
         ["units"],
         1,
@@ -123,11 +142,7 @@ def test_merge_parcial_preserva_demais_chaves(people):
     api, users = people
     _patch(api, {"version": 0, "dashboard_charts": {"units": "horizontal"}})
     second = _patch(api, {"version": 1, "dashboard_charts": {"monthly": "area"}})
-    assert second.get_json()["dashboard_charts"] == {
-        "units": "horizontal",
-        "status": "pie",
-        "monthly": "area",
-    }
+    assert second.get_json()["dashboard_charts"] == {**DEFAULTS, "units": "horizontal", "monthly": "area"}
     # alterar só densidade não toca nos gráficos
     third = _patch(api, {"version": 2, "density": "compact"})
     assert third.get_json()["dashboard_charts"]["units"] == "horizontal"

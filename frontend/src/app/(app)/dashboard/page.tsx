@@ -1,11 +1,13 @@
-import Link from "next/link";
-import { FileText } from "lucide-react";
+import { Suspense } from "react";
 
-import { DashboardPanels } from "@/components/features/dashboard/dashboard-panels";
+import { DashboardHeaderActions, DashboardView } from "@/components/features/dashboard/dashboard-view";
+import { LoadingSkeleton } from "@/components/ui/loading-skeleton";
 
 // =============================================================================
 // /dashboard — indicadores patrimoniais (todos os perfis). Os números vêm do
 // backend (escopo por perfil/unidade decidido lá); nada é estimado aqui.
+// Filtros na URL (link compartilhável); "Imprimir relatório" leva os mesmos
+// filtros; "Personalizar painéis" salva quais painéis aparecem e a ordem. As partes que leem a URL ficam em <Suspense> (useSearchParams).
 // =============================================================================
 
 export default function DashboardPage() {
@@ -22,16 +24,14 @@ export default function DashboardPage() {
             Indicadores do patrimônio nas unidades visíveis para o seu perfil.
           </p>
         </div>
-        <Link
-          href="/dashboard/relatorio"
-          className="inline-flex h-10 items-center gap-2 rounded-buttons border border-ash-stroke px-[14px] text-body-sm text-bone transition-factory hover:border-chalk hover:text-chalk focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-bone focus-visible:ring-offset-2 focus-visible:ring-offset-obsidian-canvas"
-        >
-          <FileText className="h-4 w-4" aria-hidden />
-          Relatório imprimível
-        </Link>
+        <Suspense fallback={null}>
+          <DashboardHeaderActions />
+        </Suspense>
       </header>
 
-      <DashboardPanels />
+      <Suspense fallback={<LoadingSkeleton variant="cards" count={4} label="Carregando dashboard" />}>
+        <DashboardView />
+      </Suspense>
     </div>
   );
 }

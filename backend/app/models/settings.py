@@ -83,13 +83,31 @@ class AISettings(TimestampMixin, Base):
 
 
 class UserPreferences(TimestampMixin, Base):
-    """Preferências de aparência de um usuário (densidade e escala de fonte)."""
+    """Preferências de aparência de um usuário (densidade, fonte e dashboard)."""
 
     __tablename__ = "user_preferences"
     __table_args__ = (
         CheckConstraint("density IN ('comfortable','compact')", name="ck_user_preferences_density"),
         CheckConstraint("font_scale IN (100, 112, 125)", name="ck_user_preferences_font_scale"),
         CheckConstraint("version >= 1", name="ck_user_preferences_version"),
+        # 0011_dashboard_charts_prefs
+        CheckConstraint(
+            "jsonb_typeof(dashboard_charts) = 'object'",
+            name="ck_user_preferences_dashboard_charts_object",
+        ),
+        CheckConstraint(
+            "octet_length(dashboard_charts::text) <= 512",
+            name="ck_user_preferences_dashboard_charts_size",
+        ),
+        # 0013_dashboard_layout_prefs
+        CheckConstraint(
+            "jsonb_typeof(dashboard_layout) = 'object'",
+            name="ck_user_preferences_dashboard_layout_object",
+        ),
+        CheckConstraint(
+            "octet_length(dashboard_layout::text) <= 1024",
+            name="ck_user_preferences_dashboard_layout_size",
+        ),
     )
 
     user_id: Mapped[uuid.UUID] = mapped_column(
@@ -101,8 +119,13 @@ class UserPreferences(TimestampMixin, Base):
     font_scale: Mapped[int] = mapped_column(
         SmallInteger, nullable=False, server_default=text("100")
     )
-    # Só chaves NÃO padrão (units/status/monthly); allowlist no schema/serviço.
+    # Só chaves NÃO padrão (allowlist de painéis/tipos no schema/serviço).
     dashboard_charts: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'")
+    )
+    # `{"order": [...], "hidden": [...]}` só quando diferente do padrão
+    # ({} = layout padrão); IDs de painel da allowlist no schema/serviço.
+    dashboard_layout: Mapped[dict[str, Any]] = mapped_column(
         JSONB, nullable=False, server_default=text("'{}'")
     )
     version: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("1"))

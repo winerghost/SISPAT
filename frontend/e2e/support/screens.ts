@@ -1,6 +1,12 @@
 import { expect, type Page } from "@playwright/test";
 
-import { emptyDashboard } from "./dashboard-mocks";
+import {
+  DASHBOARD_ENDPOINTS,
+  EMPTY_BLOCKS,
+  ERROR_BLOCKS,
+  KPI_CARDS,
+  emptyDashboard,
+} from "./dashboard-mocks";
 import { installMocks, seedSession, waitForHydration, type MockOptions } from "./mocks";
 
 // =============================================================================
@@ -103,16 +109,61 @@ function openInventorySheet(name: string, status: string) {
   };
 }
 
-/** Aguarda KPIs, os 3 gráficos (import dinâmico) e a tabela de detalhamento. */
-export async function expectDashboardLoaded(page: Page): Promise<void> {
-  await expect(page.locator("[data-dashboard-block=indicadores] [data-stat-card]")).toHaveCount(4, {
-    timeout: 15_000,
-  });
-  for (const block of ["por-unidade", "por-situacao", "aquisicoes-mensais"]) {
+/** Aguarda KPIs, os gráficos (import dinâmico), os cartões e a tabela de detalhamento. */
+/**
+ * Todos os blocos do dashboard carregados. `hidden`: `data-dashboard-block`
+ * dos painéis ocultos pela personalização (precisam estar AUSENTES).
+ */
+export async function expectDashboardLoaded(page: Page, opts: { hidden?: readonly string[] } = {}): Promise<void> {
+  const hidden = new Set(opts.hidden ?? []);
+  const shown = (block: string) => !hidden.has(block);
+  if (shown("indicadores")) {
+    await expect(page.locator("[data-dashboard-block=indicadores] [data-stat-card]")).toHaveCount(KPI_CARDS, {
+      timeout: 15_000,
+    });
+  }
+  for (const block of [
+    "por-unidade",
+    "por-situacao",
+    "aquisicoes-mensais",
+    "localizacao-por-unidade",
+    "por-vinculo",
+    "por-sala",
+  ].filter(shown)) {
     await expect(page.locator(`[data-dashboard-block=${block}] figure`)).toBeVisible({ timeout: 20_000 });
   }
-  await expect(page.getByRole("table", { name: "Detalhamento de bens por unidade e tipo" })).toBeVisible();
+  for (const block of ["pendencias-cadastro", "inventario"].filter(shown)) {
+    await expect(page.locator(`[data-dashboard-block=${block}] [data-stat-card]`)).toHaveCount(4, {
+      timeout: 15_000,
+    });
+  }
+  for (const block of hidden) {
+    await expect(page.locator(`[data-dashboard-block=${block}]`)).toHaveCount(0);
+  }
+  await expect(page.getByRole("table", { name: "Detalhamento de bens por unidade e tipo" })).toBeVisible({
+    timeout: 15_000,
+  });
 }
+
+/** Layout personalizado de exemplo: ordem trocada e 2 painéis ocultos. */
+export const DASHBOARD_CUSTOM_LAYOUT = {
+  order: ["bond", "status", "kpis", "rooms", "units", "location", "monthly", "pending", "inventory"],
+  hidden: ["monthly", "inventory"],
+};
+export const DASHBOARD_CUSTOM_HIDDEN_BLOCKS = ["aquisicoes-mensais", "inventario"] as const;
+
+/** No celular (< 768px) a barra de filtros é recolhível: abre se estiver fechada. */
+export async function openMobileFilters(page: Page): Promise<void> {
+  const toggle = page.locator("[data-dashboard-filters-toggle]");
+  if ((await toggle.isVisible()) && (await toggle.getAttribute("aria-expanded")) !== "true") {
+    await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-expanded", "true");
+  }
+}
+
+/** Filtros de exemplo (URL compartilhável) usados nas telas responsive/a11y. */
+export const DASHBOARD_FILTERED_QUERY =
+  "unit_id=60000000-0000-4000-8000-000000000001&located=NAO&bond_status=Ocioso&registrado_desde=2026-01-01&inventario=nao_conferido";
 
 export const RH_NAME = "Pessoa Sintética RH";
 export const ADMIN_NAME = "Pessoa Sintética Administradora com Nome Bastante Longo para Teste";
@@ -212,6 +263,16 @@ export const SCREENS: ScreenDef[] = [
     session: null,
     prepare: async (page) => {
       await expect(page.getByRole("button", { name: "Continuar" })).toBeVisible();
+    },
+  },
+  {
+    id: "ativar-conta-recuperacao",
+    title: "Redefinir senha — nova senha (link de recuperação, type=recovery)",
+    path: "/ativar-conta?token_hash=hash-valido-e2e&type=recovery",
+    session: null,
+    prepare: async (page) => {
+      await page.getByRole("button", { name: "Continuar" }).click();
+      await expect(page.getByRole("button", { name: "Redefinir senha" })).toBeVisible();
     },
   },
   {
@@ -1400,8 +1461,8 @@ export const SCREENS: ScreenDef[] = [
     session: { role: "RH", dashboard: emptyDashboard() },
     prepare: async (page) => {
       await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
-      await expect(page.locator("[data-dashboard-empty]")).toHaveCount(4, { timeout: 15_000 });
-      await expect(page.locator("[data-dashboard-block=indicadores] [data-stat-card]")).toHaveCount(4);
+      await expect(page.locator("[data-dashboard-empty]")).toHaveCount(EMPTY_BLOCKS, { timeout: 15_000 });
+      await expect(page.locator("[data-dashboard-block=indicadores] [data-stat-card]")).toHaveCount(KPI_CARDS);
     },
   },
   {
@@ -1410,10 +1471,10 @@ export const SCREENS: ScreenDef[] = [
     path: "/dashboard",
     session: {
       role: "USER",
-      dashboardStatus: { resumo: 500, "por-unidade": 500, "por-situacao": 500, "aquisicoes-mensais": 500 },
+      dashboardStatus: Object.fromEntries(DASHBOARD_ENDPOINTS.map((endpoint) => [endpoint, 500])),
     },
     prepare: async (page) => {
-      await expect(page.locator("[data-dashboard-error]")).toHaveCount(5, { timeout: 20_000 });
+      await expect(page.locator("[data-dashboard-error]")).toHaveCount(ERROR_BLOCKS, { timeout: 20_000 });
       await expect(page.getByRole("button", { name: "Tentar novamente" }).first()).toBeVisible();
     },
   },
@@ -1429,29 +1490,122 @@ export const SCREENS: ScreenDef[] = [
     },
   },
   {
+    id: "dashboard-filtros",
+    title: "Dashboard — filtros da URL aplicados e \"Mais filtros\" aberto (USER)",
+    path: `/dashboard?${DASHBOARD_FILTERED_QUERY}`,
+    session: { role: "USER" },
+    prepare: async (page) => {
+      await expectDashboardLoaded(page);
+      await expect(page.locator("[data-dashboard-filter-summary]")).toContainText("Vínculo: Ocioso");
+      await openMobileFilters(page);
+      // Filtro avançado ativo na URL => "Mais filtros" já abre expandido.
+      await expect(page.getByRole("button", { name: /Mais filtros/ })).toHaveAttribute("aria-expanded", "true");
+      await expect(page.getByLabel("Unidade pertencente")).toBeVisible();
+    },
+  },
+  {
+    id: "dashboard-relatorio-filtros",
+    title: "Relatório imprimível com filtros herdados da URL (RH)",
+    path: `/dashboard/relatorio?${DASHBOARD_FILTERED_QUERY}`,
+    session: { role: "RH" },
+    prepare: async (page) => {
+      await expect(page.getByRole("heading", { level: 1, name: "Relatório patrimonial" })).toBeVisible();
+      await expect(page.locator("[data-report-filters]")).toContainText("Vínculo: Ocioso");
+      await expectDashboardLoaded(page);
+    },
+  },
+  {
     id: "dashboard-graficos-alternativos",
-    title: "Dashboard — tipos de gráfico escolhidos (horizontal, rosca, área)",
+    title: "Dashboard — tipos de gráfico escolhidos (horizontal, rosca, área; localização horizontal, vínculo pizza, sala vertical)",
     path: "/dashboard",
     session: {
       role: "USER",
-      prefs: { dashboard_charts: { units: "horizontal", status: "donut", monthly: "area" } },
+      prefs: {
+        dashboard_charts: { units: "horizontal", status: "donut", monthly: "area", location: "horizontal", bond: "pie", rooms: "bar" },
+      },
     },
     prepare: async (page) => {
       await expectDashboardLoaded(page);
-      await expect(page.getByRole("img", { name: /Gráfico de barras horizontais/ })).toBeVisible();
+      await expect(
+        page.locator("[data-dashboard-block=por-unidade]").getByRole("img", { name: /Gráfico de barras horizontais/ }),
+      ).toBeVisible();
     },
   },
   {
     id: "dashboard-graficos-empilhado-barras",
-    title: "Dashboard — tipos de gráfico escolhidos (empilhadas, barras, barras)",
+    title: "Dashboard — tipos de gráfico escolhidos (empilhadas, barras, barras; localização agrupada, vínculo barras)",
     path: "/dashboard",
     session: {
       role: "RH",
-      prefs: { dashboard_charts: { units: "stacked", status: "bar", monthly: "bar" } },
+      prefs: {
+        dashboard_charts: { units: "stacked", status: "bar", monthly: "bar", location: "grouped", bond: "bar", rooms: "horizontal" },
+      },
     },
     prepare: async (page) => {
       await expectDashboardLoaded(page);
-      await expect(page.getByRole("img", { name: /Gráfico de barras empilhadas/ })).toBeVisible();
+      await expect(
+        page.locator("[data-dashboard-block=por-unidade]").getByRole("img", { name: /Gráfico de barras empilhadas/ }),
+      ).toBeVisible();
+    },
+  },
+  {
+    id: "dashboard-filtros-celular",
+    title: "Dashboard — barra de filtros recolhível (celular) aberta, com filtros ativos",
+    path: `/dashboard?${DASHBOARD_FILTERED_QUERY}`,
+    session: { role: "USER" },
+    prepare: async (page) => {
+      await expectDashboardLoaded(page);
+      await expect(page.locator("[data-dashboard-filter-summary]")).toContainText("Vínculo: Ocioso");
+      await openMobileFilters(page);
+      await expect(page.getByLabel("Unidade de uso", { exact: true })).toBeVisible();
+    },
+  },
+  {
+    id: "dashboard-personalizar",
+    title: "Dashboard — diálogo \"Personalizar painéis\" (rascunho com painel movido e oculto)",
+    path: "/dashboard",
+    session: { role: "USER" },
+    prepare: async (page) => {
+      await expectDashboardLoaded(page);
+      await page.getByRole("button", { name: "Personalizar painéis" }).click();
+      const dialog = page.getByRole("dialog", { name: "Personalizar painéis" });
+      await expect(dialog).toBeVisible();
+      await dialog.getByRole("button", { name: "Mover Bens por vínculo para cima" }).click();
+      await dialog.getByRole("checkbox", { name: /Inventário/ }).uncheck();
+      await expect(dialog.getByRole("button", { name: "Salvar" })).toBeEnabled();
+    },
+  },
+  {
+    id: "dashboard-layout-personalizado",
+    title: "Dashboard — painéis reordenados/ocultos e \"Filtrar pelo gráfico\" aberto (USER)",
+    path: "/dashboard",
+    session: {
+      role: "USER",
+      prefs: {
+        dashboard_layout: DASHBOARD_CUSTOM_LAYOUT,
+        dashboard_charts: { location: "grouped", bond: "bar", rooms: "bar" },
+      },
+    },
+    prepare: async (page) => {
+      await expectDashboardLoaded(page, { hidden: DASHBOARD_CUSTOM_HIDDEN_BLOCKS });
+      const rooms = page.locator("[data-dashboard-block=por-sala]");
+      await rooms.getByRole("button", { name: /Filtrar pelo gráfico/ }).click();
+      await expect(rooms.getByRole("button", { name: "Sem sala" })).toBeVisible();
+      // O clique rolou a página: volta ao topo para não medir conteúdo sob o cabeçalho fixo.
+      await page.evaluate(() => {
+        window.scrollTo(0, 0);
+        document.getElementById("conteudo")?.scrollTo(0, 0);
+      });
+    },
+  },
+  {
+    id: "dashboard-relatorio-personalizado",
+    title: "Relatório imprimível com a ordem/ocultos do usuário (RH)",
+    path: "/dashboard/relatorio",
+    session: { role: "RH", prefs: { dashboard_layout: DASHBOARD_CUSTOM_LAYOUT } },
+    prepare: async (page) => {
+      await expect(page.getByRole("heading", { level: 1, name: "Relatório patrimonial" })).toBeVisible();
+      await expectDashboardLoaded(page, { hidden: DASHBOARD_CUSTOM_HIDDEN_BLOCKS });
     },
   },
   // --- Menu sem 404: rotas pai e importações ----------------------------------

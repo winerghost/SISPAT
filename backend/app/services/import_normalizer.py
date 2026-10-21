@@ -199,23 +199,54 @@ BOND_STATUS_MAX = 64
 _INVISIBLE_CATEGORIES = frozenset({"Cc", "Cf"})
 
 
-def normalize_bond_status(value: Any) -> str | None:
-    """Vínculo do bem (1ª ``RESPONSAVEL``) -> valor de ``assets.bond_status``.
-
-    Mesma regra do backfill SQL da migração ``0012_asset_bond_status``
-    (``NULLIF(btrim(left(regexp_replace(btrim(v), '\\s+', ' ', 'g'), 64)), '')``):
-    NFC, espaços colapsados, corte em 64 e trim POR ÚLTIMO; vazio -> None.
-    Caracteres de controle/formatação invisível (Cc/Cf: NUL, bidi, largura
-    zero) são REMOVIDOS antes do corte -- não há como exibi-los nem filtrar por
-    eles. O resultado sempre satisfaz ``ck_assets_bond_status_len``.
-    """
+def bond_status_text(value: Any) -> str | None:
+    """Texto do vínculo ANTES do corte em 64: NFC, Cc/Cf removidos, espaços
+    colapsados; vazio -> None. Usado para comparar com nomes de pessoas
+    (SEC-VF-01 item 2) sem perder o final de um nome longo."""
     if value is None:
         return None
     text = " ".join(unicodedata.normalize("NFC", str(value)).split())
     if any(unicodedata.category(ch) in _INVISIBLE_CATEGORIES for ch in text):
         text = "".join(ch for ch in text if unicodedata.category(ch) not in _INVISIBLE_CATEGORIES)
         text = " ".join(text.split())
-    return text[:BOND_STATUS_MAX].strip() or None
+    return text or None
+
+
+def _is_reserved_bond(text: str) -> bool:
+    folded = text.casefold()
+    return len(folded) >= 4 and folded.startswith("__") and folded.endswith("__")
+
+
+def is_reserved_bond_value(value: Any) -> bool:
+    """SEC-VF-04: ``__none__``/``__outros__``/``__outras__`` (e qualquer
+    ``__...__``, sem caixa, após normalização) são ids reservados de filtro e
+    de balde do dashboard; nunca podem virar ``assets.bond_status``."""
+    text = bond_status_text(value)
+    if text is None:
+        return False
+    return _is_reserved_bond(text) or _is_reserved_bond(text[:BOND_STATUS_MAX].strip())
+
+
+def normalize_bond_status(value: Any) -> str | None:
+    """Vínculo do bem (1ª ``RESPONSAVEL``) -> valor de ``assets.bond_status``.
+
+    Regra ÚNICA de gravação (todo caminho que grava ``bond_status`` passa por
+    aqui; ver ``import_references.screen_bond_status``). Base: o backfill SQL
+    da migração ``0012_asset_bond_status``
+    (``NULLIF(btrim(left(regexp_replace(btrim(v), '\\s+', ' ', 'g'), 64)), '')``):
+    NFC, espaços colapsados, corte em 64 e trim POR ÚLTIMO; vazio -> None.
+    Além do SQL: caracteres de controle/formatação invisível (Cc/Cf: NUL, bidi,
+    largura zero) são REMOVIDOS antes do corte -- não há como exibi-los nem
+    filtrar por eles -- e valores reservados ``__...__`` (SEC-VF-04) viram
+    None. O resultado sempre satisfaz ``ck_assets_bond_status_len``.
+    """
+    text = bond_status_text(value)
+    if text is None:
+        return None
+    out = text[:BOND_STATUS_MAX].strip() or None
+    if out is None or _is_reserved_bond(text) or _is_reserved_bond(out):
+        return None
+    return out
 
 
 def _bounded_text(value: Any, field: str, warnings: list[str]) -> str | None:

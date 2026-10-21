@@ -14,6 +14,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 
 from app.api.v1 import api_v1_bp
 from app.api.v1.health import health_legacy_bp
+from app.cli import register_cli
 from app.config.settings import get_settings
 from app.errors import register_error_handlers
 
@@ -177,5 +178,8 @@ def create_app() -> Flask:
 
     app.register_blueprint(api_v1_bp)
     app.register_blueprint(health_legacy_bp)
+
+    # Comandos de manutenção (`flask purge-import-previews`); ver app/cli.py.
+    register_cli(app)
 
     return app

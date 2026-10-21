@@ -230,7 +230,9 @@ def clean_label(value: str | None, max_len: int = LABEL_MAX) -> str:
     """Rótulo de texto vindo da planilha (sala/vínculo): remove controle e
     formatação invisível (categoria Unicode C*), colapsa espaços e limita.
     Não é sanitizador de HTML: o JSON é texto e o React o escapa ao exibir."""
-    text = "".join(c for c in (value or "") if unicodedata.category(c)[0] != "C")
+    text = "".join(
+        " " if c.isspace() else c for c in (value or "") if c.isspace() or unicodedata.category(c)[0] != "C"
+    )
     return " ".join(text.split())[:max_len]
 
 
@@ -598,6 +600,8 @@ def by_room(db: Session, actor_id: Any, filters: Any = None) -> list[dict[str, A
         if len(name_units[name.casefold()]) > 1 and unit_id in unit_names:
             label = f"{name} ({unit_names[unit_id]})"
         out.append({"id": str(rid), "label": label, "value": n})
+    # Desempate pelo rótulo FINAL (com sigla): ordem estável entre homônimas.
+    out.sort(key=lambda item: (-item["value"], item["label"].casefold(), item["label"], item["id"]))
     rest_total = sum(n for _, n in rest)
     if rest_total:
         out.append({"id": OUTRAS_ID, "label": OUTRAS_LABEL, "value": rest_total})

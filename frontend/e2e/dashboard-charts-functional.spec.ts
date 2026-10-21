@@ -2,6 +2,7 @@ import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
 import {
+  defaultDashboardCharts,
   installMocks,
   seedSession,
   waitForHydration,
@@ -14,7 +15,8 @@ import { expectDashboardLoaded, waitForAnimations } from "./support/screens";
 // =============================================================================
 // Tipo de gráfico de cada painel do dashboard (preferência `dashboard_charts`).
 // Contrato MOCKADO (o backend é feito em paralelo):
-//   GET/PATCH /api/v1/me/preferences  { dashboard_charts: { units, status, monthly }, version }
+//   GET/PATCH /api/v1/me/preferences
+//     { dashboard_charts: { units, status, monthly, location, bond, rooms }, version }
 //   PATCH envia só as chaves alteradas (+ version); `null` restaura o padrão; 409 = versão.
 // Cobre: troca por mouse e teclado, persistência após recarregar, restaurar
 // padrão, estado honesto (nada muda antes da confirmação), 409, 400, GET falho,
@@ -38,6 +40,15 @@ async function open(page: Page, opts: MockOptions = { role: "USER" }): Promise<M
 }
 
 const block = (page: Page, id: string) => page.locator(`[data-dashboard-block=${id}]`);
+/** Painéis com seletor de tipo (dashboard_charts). */
+const CHART_PANELS = [
+  "por-unidade",
+  "por-situacao",
+  "aquisicoes-mensais",
+  "localizacao-por-unidade",
+  "por-vinculo",
+  "por-sala",
+] as const;
 const trigger = (panel: Locator) => panel.getByRole("button", { name: /^Tipo de gráfico/ });
 const patches = (state: MockState) => state.calls.filter((c) => c.method === "PATCH" && PREFS_URL(c.url));
 
@@ -60,11 +71,17 @@ test.describe("padrões", () => {
     await expect(block(page, "por-unidade").getByRole("img", { name: /Gráfico de barras agrupadas/ })).toBeVisible();
     await expect(block(page, "por-situacao").getByRole("img", { name: /Gráfico de pizza/ })).toBeVisible();
     await expect(block(page, "aquisicoes-mensais").getByRole("img", { name: /Gráfico de linhas/ })).toBeVisible();
-    for (const id of ["por-unidade", "por-situacao", "aquisicoes-mensais"]) {
+    await expect(block(page, "localizacao-por-unidade").getByRole("img", { name: /Gráfico de barras empilhadas/ })).toBeVisible();
+    await expect(block(page, "por-vinculo").getByRole("img", { name: /Gráfico de rosca/ })).toBeVisible();
+    await expect(block(page, "por-sala").getByRole("img", { name: /Gráfico de barras horizontais/ })).toBeVisible();
+    for (const id of CHART_PANELS) {
       const button = trigger(block(page, id));
       await expect(button).toHaveAttribute("aria-haspopup", "menu");
       await expect(button).toHaveAttribute("aria-expanded", "false");
     }
+    // Pendências e inventário (cartões) também não têm seletor.
+    await expect(trigger(block(page, "pendencias-cadastro"))).toHaveCount(0);
+    await expect(trigger(block(page, "inventario"))).toHaveCount(0);
     // Indicadores e detalhamento não têm seletor.
     await expect(trigger(block(page, "indicadores"))).toHaveCount(0);
     await expect(trigger(block(page, "detalhamento"))).toHaveCount(0);
@@ -73,11 +90,16 @@ test.describe("padrões", () => {
   test("preferência salva no backend é aplicada ao abrir", async ({ page }) => {
     await open(page, {
       role: "ADM",
-      prefs: { dashboard_charts: { units: "horizontal", status: "donut", monthly: "area" } },
+      prefs: {
+        dashboard_charts: { units: "horizontal", status: "donut", monthly: "area", location: "grouped", bond: "pie", rooms: "bar" },
+      },
     });
     await expect(block(page, "por-unidade").getByRole("img", { name: /Gráfico de barras horizontais/ })).toBeVisible();
     await expect(block(page, "por-situacao").getByRole("img", { name: /Gráfico de rosca/ })).toBeVisible();
     await expect(block(page, "aquisicoes-mensais").getByRole("img", { name: /Gráfico de áreas/ })).toBeVisible();
+    await expect(block(page, "localizacao-por-unidade").getByRole("img", { name: /Gráfico de barras agrupadas/ })).toBeVisible();
+    await expect(block(page, "por-vinculo").getByRole("img", { name: /Gráfico de pizza/ })).toBeVisible();
+    await expect(block(page, "por-sala").getByRole("img", { name: /Gráfico de barras verticais/ })).toBeVisible();
   });
 });
 
@@ -99,7 +121,7 @@ test.describe("troca de tipo", () => {
     await expect(page.getByRole("menu")).toHaveCount(0);
     // O foco volta ao botão do painel.
     await expect(trigger(panel)).toBeFocused();
-    expect(state.prefs.dashboard_charts).toEqual({ units: "stacked", status: "pie", monthly: "line" });
+    expect(state.prefs.dashboard_charts).toEqual({ ...defaultDashboardCharts(), units: "stacked" });
     // Os outros painéis não mudaram.
     await expect(block(page, "por-situacao").getByRole("img", { name: /Gráfico de pizza/ })).toBeVisible();
 
@@ -166,6 +188,14 @@ test.describe("troca de tipo", () => {
     { panel: "aquisicoes-mensais", title: "monthly", option: "Área", name: /Gráfico de áreas/, table: "Bens adquiridos por mês", kind: "area" },
     { panel: "aquisicoes-mensais", title: "monthly", option: "Barras", name: /Gráfico de barras:/, table: "Bens adquiridos por mês", kind: "grouped" },
     { panel: "aquisicoes-mensais", title: "monthly", option: "Linhas", name: /Gráfico de linhas/, table: "Bens adquiridos por mês", kind: "line" },
+    { panel: "localizacao-por-unidade", title: "location", option: "Barras agrupadas", name: /Gráfico de barras agrupadas/, table: "Situação de localização em cada unidade de uso", kind: "grouped" },
+    { panel: "localizacao-por-unidade", title: "location", option: "Barras horizontais", name: /Gráfico de barras horizontais/, table: "Situação de localização em cada unidade de uso", kind: "horizontal" },
+    { panel: "localizacao-por-unidade", title: "location", option: "Barras empilhadas", name: /Gráfico de barras empilhadas/, table: "Situação de localização em cada unidade de uso", kind: "stacked" },
+    { panel: "por-vinculo", title: "bond", option: "Pizza", name: /Gráfico de pizza/, table: "Quantidade de bens por vínculo", kind: "pie" },
+    { panel: "por-vinculo", title: "bond", option: "Barras", name: /Gráfico de barras:/, table: "Quantidade de bens por vínculo", kind: "bar" },
+    { panel: "por-vinculo", title: "bond", option: "Rosca", name: /Gráfico de rosca/, table: "Quantidade de bens por vínculo", kind: "donut" },
+    { panel: "por-sala", title: "rooms", option: "Barras verticais", name: /Gráfico de barras verticais/, table: "Quantidade de bens por sala", kind: "grouped" },
+    { panel: "por-sala", title: "rooms", option: "Barras horizontais", name: /Gráfico de barras horizontais/, table: "Quantidade de bens por sala", kind: "horizontal" },
   ];
 
   test("todos os tipos: role=img com resumo, legenda e tabela alternativa", async ({ page }) => {
@@ -192,6 +222,52 @@ test.describe("troca de tipo", () => {
   });
 });
 
+test.describe("painéis novos (localização, vínculo, sala)", () => {
+  test("PATCH só com a chave do painel; os outros não mudam; persiste após recarregar", async ({ page }) => {
+    const state = await open(page);
+    const steps = [
+      { panel: "localizacao-por-unidade", option: "Barras horizontais", body: { location: "horizontal" }, name: /Gráfico de barras horizontais/ },
+      { panel: "por-vinculo", option: "Barras", body: { bond: "bar" }, name: /Gráfico de barras:/ },
+      { panel: "por-sala", option: "Barras verticais", body: { rooms: "bar" }, name: /Gráfico de barras verticais/ },
+    ];
+    for (const step of steps) {
+      const request = page.waitForRequest((r) => PREFS_URL(r.url()) && r.method() === "PATCH");
+      await choose(page, block(page, step.panel), step.option);
+      const sent = (await request).postDataJSON() as { dashboard_charts: unknown };
+      expect(sent.dashboard_charts).toEqual(step.body);
+      await expect(block(page, step.panel).getByRole("img", { name: step.name })).toBeVisible();
+      await expect(trigger(block(page, step.panel))).toBeFocused();
+    }
+    expect(state.prefs.dashboard_charts).toEqual({
+      ...defaultDashboardCharts(),
+      location: "horizontal",
+      bond: "bar",
+      rooms: "bar",
+    });
+    await expect(block(page, "por-unidade").getByRole("img", { name: /Gráfico de barras agrupadas/ })).toBeVisible();
+    await page.reload();
+    await waitForHydration(page);
+    await expectDashboardLoaded(page);
+    await expect(block(page, "por-vinculo").getByRole("img", { name: /Gráfico de barras:/ })).toBeVisible();
+    await expect(block(page, "por-sala").getByRole("img", { name: /Gráfico de barras verticais/ })).toBeVisible();
+  });
+
+  test("menu do vínculo e da sala oferece só as opções do contrato; restaurar envia null", async ({ page }) => {
+    const state = await open(page, { role: "USER", prefs: { dashboard_charts: { bond: "bar", rooms: "bar" } } });
+    await trigger(block(page, "por-sala")).click();
+    await expect(page.getByRole("menuitemradio")).toHaveCount(2);
+    await page.keyboard.press("Escape");
+    await trigger(block(page, "por-vinculo")).click();
+    await expect(page.getByRole("menuitemradio")).toHaveCount(3);
+    const request = page.waitForRequest((r) => PREFS_URL(r.url()) && r.method() === "PATCH");
+    await page.getByRole("menuitem", { name: "Restaurar padrão" }).click();
+    expect((await request).postDataJSON()).toEqual({ version: 0, dashboard_charts: { bond: null } });
+    await expect(block(page, "por-vinculo").getByRole("img", { name: /Gráfico de rosca/ })).toBeVisible();
+    expect(state.prefs.dashboard_charts.bond).toBe("donut");
+    expect(state.prefs.dashboard_charts.rooms).toBe("bar");
+  });
+});
+
 test.describe("restaurar padrão", () => {
   test("desabilitado no padrão; depois de escolher, envia null só daquele painel", async ({ page }) => {
     const state = await open(page, {
@@ -212,7 +288,7 @@ test.describe("restaurar padrão", () => {
     await restore.click();
     expect((await request).postDataJSON()).toEqual({ version: 0, dashboard_charts: { status: null } });
     await expect(panel.getByRole("img", { name: /Gráfico de pizza/ })).toBeVisible();
-    expect(state.prefs.dashboard_charts).toEqual({ units: "stacked", status: "pie", monthly: "line" });
+    expect(state.prefs.dashboard_charts).toEqual({ ...defaultDashboardCharts(), units: "stacked" });
     // Os outros painéis seguem como estavam.
     await expect(block(page, "por-unidade").getByRole("img", { name: /Gráfico de barras empilhadas/ })).toBeVisible();
   });
@@ -292,7 +368,7 @@ test.describe("estado honesto e erros", () => {
   test("409: avisa, recarrega a versão nova e permite escolher de novo", async ({ page }) => {
     const state = await open(page);
     // Outra sessão salvou antes (versão 5, status em rosca).
-    state.prefs = { ...state.prefs, version: 5, dashboard_charts: { units: "grouped", status: "donut", monthly: "line" } };
+    state.prefs = { ...state.prefs, version: 5, dashboard_charts: { ...defaultDashboardCharts(), status: "donut" } };
     const panel = block(page, "por-unidade");
     await choose(page, panel, "Barras horizontais");
     await expect(panel.getByRole("alert")).toContainText(/alteradas em outra sessão/);
@@ -371,9 +447,9 @@ test.describe("acessibilidade e responsividade", () => {
     test(`${width}px: sem rolagem horizontal (padrão, alternativos e menu aberto), axe`, async ({ page }) => {
       await page.setViewportSize({ width, height: width < 600 ? 800 : 900 });
       const configs: Charts[] = [
-        { units: "grouped", status: "pie", monthly: "line" },
-        { units: "horizontal", status: "donut", monthly: "area" },
-        { units: "stacked", status: "bar", monthly: "bar" },
+        defaultDashboardCharts(),
+        { units: "horizontal", status: "donut", monthly: "area", location: "horizontal", bond: "pie", rooms: "bar" },
+        { units: "stacked", status: "bar", monthly: "bar", location: "grouped", bond: "bar", rooms: "horizontal" },
       ];
       const state = await open(page, { role: "USER", prefs: { dashboard_charts: configs[0]! } });
       await noHorizontalOverflow(page);
@@ -387,7 +463,7 @@ test.describe("acessibilidade e responsividade", () => {
       }
 
       // Menu aberto no último painel de cada linha (pior caso lateral) sem estourar a página.
-      for (const id of ["por-unidade", "por-situacao", "aquisicoes-mensais"]) {
+      for (const id of CHART_PANELS) {
         await trigger(block(page, id)).click();
         const menu = page.getByRole("menu");
         await expect(menu).toBeVisible();
@@ -443,15 +519,20 @@ test.describe("relatório imprimível", () => {
   test("usa o tipo escolhido e não mostra seletor", async ({ page }) => {
     const opts: MockOptions = {
       role: "USER",
-      prefs: { dashboard_charts: { units: "stacked", status: "donut", monthly: "area" } },
+      prefs: {
+        dashboard_charts: { units: "stacked", status: "donut", monthly: "area", location: "horizontal", bond: "bar", rooms: "bar" },
+      },
     };
     await installMocks(page, opts);
     await seedSession(page, opts);
     await page.goto("/dashboard/relatorio");
     await waitForHydration(page);
     await expectDashboardLoaded(page);
-    await expect(page.getByRole("img", { name: /Gráfico de barras empilhadas/ })).toBeVisible();
-    await expect(page.getByRole("img", { name: /Gráfico de rosca/ })).toBeVisible();
+    await expect(block(page, "por-unidade").getByRole("img", { name: /Gráfico de barras empilhadas/ })).toBeVisible();
+    await expect(block(page, "por-situacao").getByRole("img", { name: /Gráfico de rosca/ })).toBeVisible();
+    await expect(block(page, "localizacao-por-unidade").getByRole("img", { name: /Gráfico de barras horizontais/ })).toBeVisible();
+    await expect(block(page, "por-vinculo").getByRole("img", { name: /Gráfico de barras:/ })).toBeVisible();
+    await expect(block(page, "por-sala").getByRole("img", { name: /Gráfico de barras verticais/ })).toBeVisible();
     await expect(page.getByRole("button", { name: /^Tipo de gráfico/ })).toHaveCount(0);
   });
 });

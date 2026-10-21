@@ -170,6 +170,47 @@ vhost).
 - Revisão: `docs/security/REVISAO_DASHBOARD_NIVO_2026-10-20.md` (L-1 corrigido;
   L-2 e `npm dedupe` ficaram para depois do deploy).
 
+### Vínculo do bem e filtros do dashboard (2026-10-20)
+
+- **Vínculo** (`assets.bond_status`): recebe o valor da 1ª coluna
+  `RESPONSAVEL` da planilha (ex.: "Ocioso", "Servidor"); a 2ª coluna é a
+  pessoa responsável. Só é lido quando a planilha tem exatamente 2 colunas
+  `RESPONSAVEL` (senão a prévia mostra um aviso). Filtro, ordenação e coluna em
+  Patrimônios; `GET /api/v1/assets/bond-statuses`. Migração
+  `0012_asset_bond_status` (espelho `sql/0015`) já aplicada no Supabase; no
+  deploy basta `alembic stamp 0012_asset_bond_status`.
+- **Dashboard personalizável:** cada usuário exibe o que é do seu interesse.
+  Filtros na URL (unidade, unidade dona, sala, responsável, localizado S/N,
+  vínculo, tipo, período de registro, inventário, com/sem sala, com/sem
+  responsável, movimentação pendente) valem para todos os painéis e para o
+  relatório imprimível, que lista os filtros no cabeçalho. Painéis novos:
+  localização por unidade, vínculo, pendências de cadastro, por sala,
+  inventário e tipos. Detalhes em `docs/ux/DASHBOARD_PERSONALIZACAO.md` e
+  `docs/architecture/dashboard-api.md`.
+- Revisão: `docs/security/REVISAO_VINCULO_FILTROS_2026-10-20.md` (SEC-VF-01
+  corrigido; SEC-VF-02 pendente; `certifi` 2026.10.19 aplicado em 2026-10-21).
+- **Importação de Bens:** só depois do deploy desta versão.
+
+### Painéis personalizáveis, recuperação de senha e expurgo (2026-10-21)
+
+- **Personalizar painéis:** cada usuário mostra/oculta e reordena os painéis
+  do dashboard (`user_preferences.dashboard_layout`, migração
+  `0013_dashboard_layout_prefs`, espelho `sql/0016`, aplicada no Supabase em
+  2026-10-21; no deploy, `alembic stamp 0013_dashboard_layout_prefs`). O
+  relatório imprimível segue a mesma ordem.
+- Tipo de gráfico também em localização, vínculo e salas; clicar num item do
+  gráfico aplica o filtro na URL (de novo, remove); no celular a barra de
+  filtros é recolhível.
+- **Recuperação de senha:** `/ativar-conta` com `type=recovery` só redefine a
+  senha (não chama `activate-invite`), encerra a sessão e leva ao login. Trocar
+  o template "Reset Password" do Supabase só depois do rebuild do frontend
+  (ver `docs/deploy/PENDENCIAS_OPERACIONAIS_2026-10-20.md`).
+- **Expurgo de prévias:** `flask purge-import-previews --older-than-days N
+  [--dry-run]` apaga prévias antigas e seus itens (nunca `raw_import_records`)
+  e grava `IMPORT_PREVIEWS_PURGED` com origem `cli`.
+- `certifi` atualizado para 2026.10.19 (PYSEC-2026-4320). Revisão de
+  segurança: `docs/security/SECURITY_AUDIT.md`, seção 17.
+
 ## Estrutura de pastas
 
 ```

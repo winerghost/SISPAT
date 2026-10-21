@@ -688,6 +688,18 @@ class GoogleSheetsClient:
         normalized_values["responsavel_original"] = _responsavel_value(0)
         normalized_values["responsavel_unidade"] = _responsavel_value(1)
 
+        # SEC-VF-01: o mapeamento posicional só é seguro com EXATAMENTE duas
+        # colunas RESPONSAVEL. Com uma (ou três+), a coluna da pessoa poderia
+        # cair em `vinculo_situacao` -> `assets.bond_status`, expondo nomes
+        # como "vínculo". Nesses casos vínculo e pessoa ficam vazios + aviso.
+        responsavel_ok = len(responsavel_indices) == 2
+        if responsavel_indices and not responsavel_ok:
+            validation_errors.append(
+                "aviso: a planilha deveria ter exatamente 2 colunas RESPONSAVEL "
+                f"(vínculo e pessoa), mas tem {len(responsavel_indices)}; "
+                "vínculo e responsável não foram lidos"
+            )
+
         def _first_cell(header_name: str) -> Any:
             for idx, canon in enumerate(canonical_headers):
                 if canon == header_name:
@@ -702,8 +714,8 @@ class GoogleSheetsClient:
             sala=_first_cell("SALA"),
             usuario=_first_cell("USUARIO"),
             unidade_pertencente=_first_cell("UNIDADE_PERTENCENTE"),
-            responsavel_vinculo=_responsavel_value(0),
-            responsavel_pessoa=_responsavel_value(1),
+            responsavel_vinculo=_responsavel_value(0) if responsavel_ok else None,
+            responsavel_pessoa=_responsavel_value(1) if responsavel_ok else None,
             data_registro=_first_cell("DATA_REGISTRO"),
             localizacao=_first_cell("LOCALIZACAO"),
             data_alteracao=_first_cell("DATA_ALTERACAO"),

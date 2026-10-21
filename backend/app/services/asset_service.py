@@ -55,6 +55,7 @@ from app.models.audit import AuditLog
 from app.models.people import ResponsiblePerson
 from app.models.units import Location, Room, Unit
 from app.security.sanitize import LIKE_ESCAPE_CHAR, escape_like
+from app.services.import_normalizer import normalize_bond_status
 from app.services.patrimony_lock import (
     acquire_patrimony_lock,
     normalize_patrimony_number,
@@ -391,7 +392,9 @@ class AssetService:
             "location_id": str(asset.location_id) if asset.location_id else None,
             "location": look.locations.get(asset.location_id),
             "located": asset.located,
-            "bond_status": asset.bond_status,  # vínculo (da planilha); não é dado pessoal
+            # Vínculo (da planilha). SEC-VF-02: saída pela MESMA regra da
+            # gravação (sem Cc/Cf nem `__...__`); no-op para dado já normalizado.
+            "bond_status": normalize_bond_status(asset.bond_status),
             "registration_date": _iso(asset.registration_date),
             "created_at": _iso(asset.created_at),
             "updated_at": _iso(asset.updated_at),

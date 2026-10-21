@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import re
 import uuid
-from typing import Any, Literal, TypeVar
+from typing import Any, ClassVar, Literal, TypeVar, get_args
 
 from flask import abort
 from pydantic import (
@@ -166,13 +166,21 @@ class EmptyBody(_StrictModel):
 
 
 class _NoExplicitNullsModel(_StrictModel):
-    """`null` explícito não tem significado (omitir = manter) -> 400."""
+    """`null` explícito não tem significado (omitir = manter) -> 400.
+
+    Exceção declarada por subclasse em `_NULLABLE_FIELDS` (ex.: `null` =
+    restaurar o padrão).
+    """
+
+    _NULLABLE_FIELDS: ClassVar[frozenset[str]] = frozenset()
 
     @model_validator(mode="before")
     @classmethod
     def _reject_explicit_nulls(cls, data: Any) -> Any:
         if isinstance(data, dict) and not (set(data) - set(cls.model_fields)):
             for name in cls.model_fields:
+                if name in cls._NULLABLE_FIELDS:
+                    continue
                 if name in data and data[name] is None:
                     raise ValueError(f"{name} não pode ser nulo")
         return data
@@ -225,6 +233,43 @@ class DashboardChartsPatch(_StrictModel):
     units: Literal["grouped", "stacked", "horizontal"] | None = None
     status: Literal["pie", "donut", "bar"] | None = None
     monthly: Literal["line", "area", "bar"] | None = None
+    location: Literal["stacked", "grouped", "horizontal"] | None = None
+    bond: Literal["pie", "donut", "bar"] | None = None
+    rooms: Literal["bar", "horizontal"] | None = None
+
+
+# Allowlist FECHADA de painéis do dashboard (ordem = ordem padrão de exibição).
+DashboardPanelId = Literal[
+    "kpis", "units", "status", "monthly", "location", "bond", "pending", "rooms", "inventory"
+]
+DASHBOARD_PANEL_IDS: tuple[str, ...] = get_args(DashboardPanelId)
+_MAX_PANELS = len(DASHBOARD_PANEL_IDS)
+
+
+class DashboardLayoutPatch(_StrictModel):
+    """`dashboard_layout` parcial: ordem e painéis ocultos.
+
+    Ausente = manter; `null` = restaurar o padrão da chave. Cada lista só
+    aceita IDs da allowlist, sem repetição, até 9 itens. `order` parcial é
+    aceito (os demais painéis seguem na ordem padrão). `hidden` não pode
+    ocultar todos os painéis.
+    """
+
+    order: list[DashboardPanelId] | None = Field(default=None, max_length=_MAX_PANELS)
+    hidden: list[DashboardPanelId] | None = Field(default=None, max_length=_MAX_PANELS)
+
+    @field_validator("order", "hidden", mode="after")
+    @classmethod
+    def _no_duplicates(cls, value: list[str] | None) -> list[str] | None:
+        if value is not None and len(set(value)) != len(value):
+            raise ValueError("painel repetido")
+        return value
+
+    @model_validator(mode="after")
+    def _keep_one_visible(self) -> "DashboardLayoutPatch":
+        if self.hidden is not None and len(set(self.hidden)) >= _MAX_PANELS:
+            raise ValueError("ao menos um painel deve ficar visível")
+        return self
 
 
 class PreferencesUpdateRequest(_NoExplicitNullsModel):
@@ -238,12 +283,26 @@ class PreferencesUpdateRequest(_NoExplicitNullsModel):
     density: Literal["comfortable", "compact"] | None = None
     font_scale: Literal[100, 112, 125] | None = None
     dashboard_charts: "DashboardChartsPatch | None" = None
+    # `null` = restaurar o layout padrão (único campo que aceita null).
+    dashboard_layout: "DashboardLayoutPatch | None" = None
+
+    _NULLABLE_FIELDS: ClassVar[frozenset[str]] = frozenset({"dashboard_layout"})
 
     @model_validator(mode="after")
     def _require_change(self) -> "PreferencesUpdateRequest":
         charts_changed = bool(self.dashboard_charts and self.dashboard_charts.model_fields_set)
-        if self.density is None and self.font_scale is None and not charts_changed:
-            raise ValueError("informe density, font_scale e/ou dashboard_charts")
+        layout_changed = "dashboard_layout" in self.model_fields_set and (
+            self.dashboard_layout is None or bool(self.dashboard_layout.model_fields_set)
+        )
+        if (
+            self.density is None
+            and self.font_scale is None
+            and not charts_changed
+            and not layout_changed
+        ):
+            raise ValueError(
+                "informe density, font_scale, dashboard_charts e/ou dashboard_layout"
+            )
         return self
 
 

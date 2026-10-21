@@ -31,6 +31,9 @@ export const CHART_TYPE_LABELS: { [P in DashboardChartPanel]: Record<DashboardCh
   units: { grouped: "Barras agrupadas", stacked: "Barras empilhadas", horizontal: "Barras horizontais" },
   status: { pie: "Pizza", donut: "Rosca", bar: "Barras" },
   monthly: { line: "Linhas", area: "Área", bar: "Barras" },
+  location: { stacked: "Barras empilhadas", grouped: "Barras agrupadas", horizontal: "Barras horizontais" },
+  bond: { pie: "Pizza", donut: "Rosca", bar: "Barras" },
+  rooms: { bar: "Barras verticais", horizontal: "Barras horizontais" },
 };
 
 export interface ChartTypeMenuProps<P extends DashboardChartPanel> {

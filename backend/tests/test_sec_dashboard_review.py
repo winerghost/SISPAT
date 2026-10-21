@@ -301,12 +301,24 @@ def _front_sources():
         yield from ([path] if path.is_file() else sorted(path.rglob("*.ts*")))
 
 
+# Comentários (linha inteira `//` ou bloco `/* */`) podem CITAR as APIs proibidas
+# ("nada vai para localStorage"); só o código conta. `//` no meio da linha não é
+# removido (pode ser URL em string), então código real nunca é escondido.
+_COMMENTS = re.compile(r"/\*.*?\*/|^\s*//.*$", re.DOTALL | re.MULTILINE)
+
+
 def test_frontend_dashboard_sem_sinks_perigosos():
     files = list(_front_sources())
     assert files
     bad = [f"{p.name}: {m.group(0)}" for p in files
-           for m in FORBIDDEN.finditer(p.read_text(encoding="utf-8"))]
+           for m in FORBIDDEN.finditer(_COMMENTS.sub("", p.read_text(encoding="utf-8")))]
     assert not bad, bad
+
+
+def test_filtro_de_comentarios_nao_esconde_codigo():
+    code = 'const a = "https://x"; localStorage.setItem("k", "v");\n// localStorage citado\n/* innerHTML */'
+    found = [m.group(0) for m in FORBIDDEN.finditer(_COMMENTS.sub("", code))]
+    assert found == ["localStorage"]
 
 
 def test_frontend_valida_resposta_por_type_guard():

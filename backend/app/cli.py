@@ -1,0 +1,52 @@
+"""Comandos de manutenção (`flask <comando>`), registrados no factory.
+
+Uso na VPS (container do backend):
+    docker compose exec backend flask purge-import-previews --dry-run
+    docker compose exec backend flask purge-import-previews --older-than-days 7
+
+Nenhum comando imprime dados de bens/pessoas, segredos ou a URL do banco.
+"""
+from __future__ import annotations
+
+import logging
+
+import click
+from flask import Flask
+
+from app.database.session import get_db_session
+from app.services.import_preview_purge import (
+    DEFAULT_OLDER_THAN_DAYS,
+    MAX_OLDER_THAN_DAYS,
+    MIN_OLDER_THAN_DAYS,
+    purge_import_previews,
+)
+
+logger = logging.getLogger(__name__)
+
+
+@click.command("purge-import-previews")
+@click.option(
+    "--older-than-days",
+    type=click.IntRange(MIN_OLDER_THAN_DAYS, MAX_OLDER_THAN_DAYS),
+    default=DEFAULT_OLDER_THAN_DAYS,
+    show_default=True,
+    help="Idade mínima (dias) da prévia final/expirada para ser apagada.",
+)
+@click.option("--dry-run", is_flag=True, default=False, help="Só conta; não apaga nada.")
+def purge_import_previews_command(older_than_days: int, dry_run: bool) -> None:
+    """Apaga prévias de importação finais/expiradas (nunca raw_import_records)."""
+    try:
+        with get_db_session() as db:
+            result = purge_import_previews(db, older_than_days=older_than_days, dry_run=dry_run)
+    except Exception as exc:  # transação já desfeita por get_db_session
+        logger.error("purge-import-previews falhou: %s", type(exc).__name__)
+        raise click.ClickException(f"Falha ao expurgar prévias ({type(exc).__name__}).") from None
+    verb = "seriam apagadas" if result.dry_run else "apagadas"
+    click.echo(
+        f"Prévias {verb}: {result.previews} (itens: {result.items}); "
+        f"corte: {result.cutoff.isoformat()} ({result.older_than_days} dias)."
+    )
+
+
+def register_cli(app: Flask) -> None:
+    app.cli.add_command(purge_import_previews_command)

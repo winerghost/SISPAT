@@ -12,6 +12,14 @@ o escopo por perfil/unidade é decidido pelo backend). Menu: "Dashboard" (ícone
 | `GET /api/v1/dashboard/por-unidade` | `[{unidade, total, tipos:{TIPO:int}}]` |
 | `GET /api/v1/dashboard/por-situacao` | `[{id, value}]` |
 | `GET /api/v1/dashboard/aquisicoes-mensais?meses=6` | `[{id, data:[{x:"YYYY-MM", y:int}]}]` |
+| `GET /api/v1/dashboard/localizacao-por-unidade` | `[{unidade, sim, nao, desconhecido, total}]` (top 15 + "Outras") |
+| `GET /api/v1/dashboard/por-vinculo` / `por-sala` | `[{id, label, value}]` (rótulo da planilha = texto) |
+| `GET /api/v1/dashboard/pendencias-cadastro` | `{sem_responsavel, sem_sala, ociosos, nao_localizados}` |
+| `GET /api/v1/dashboard/inventario` | `{conferidos, nao_conferidos, encontrados, nao_encontrados}` |
+| `GET /api/v1/dashboard/tipos` | `[{value, count}]` (opções do filtro "Tipo") |
+
+Todos aceitam os filtros de `DashboardFilters` (ver "Filtros" abaixo e
+`docs/architecture/dashboard-api.md`); `/resumo` devolve `filtros_aplicados` (nomes).
 
 Toda resposta passa por type guards com allowlist; qualquer desvio (inclusive número em
 `valor_total`/`em_manutencao`/`baixas_ano`) vira estado de erro — nada não reconhecido é
@@ -19,22 +27,48 @@ renderizado. Nomes vêm como texto puro (escape do React).
 
 ## Blocos e estados
 
-KPIs (grade de 2 colunas no celular, 4 no desktop: Total de bens com `Badge` de variação,
-Localizados, Movimentações pendentes, Inventários abertos), "Indicadores indisponíveis"
+KPIs (grade de 2 colunas no celular, 3 no tablet, 5 a partir de 1280px: Total de bens com
+`Badge` de variação, Localizados, Não localizados (com "N com localização desconhecida"),
+Movimentações pendentes, Inventários abertos), "Indicadores indisponíveis"
 (valor total, em manutenção, baixas no ano — explica que o cadastro ainda não tem esses
 campos), barras por unidade/tipo (3 maiores tipos + "Outros"), pizza por situação,
 linhas de aquisições mensais (tipo de cada gráfico escolhido pelo usuário — ver
 `DASHBOARD_GRAFICOS.md`) (mês abreviado pt-BR, America/Araguaina) e tabela de detalhamento
-com linha de total. Cada bloco tem skeleton, erro com "Tentar novamente" (independente dos
+com linha de total. Painéis dos filtros (tipo de gráfico também escolhido pelo usuário):
+Localizados × não localizados por unidade (padrão barras empilhadas), Bens por vínculo
+(padrão rosca), Pendências de cadastro (4 cartões), Bens por sala (padrão barras
+horizontais, top 15) e Inventário (4 cartões). Cada usuário escolhe quais painéis vê e
+a ordem ("Personalizar painéis"), e clicar numa barra/fatia aplica o filtro equivalente
+na URL — ver `DASHBOARD_PERSONALIZACAO.md`. Cada bloco tem skeleton, erro com "Tentar novamente" (independente dos
 demais) e estado vazio honesto. Variação `null` = nenhum selo. Os números só animam quando
 o backend os confirmou (AnimatedCounter; sem animação sob reduced motion).
 
 Acessibilidade: gráficos em `role="img"` com resumo textual, legenda em texto, tabela
-`sr-only` e (pizza/rosca/barras da situação) seleção por botões `aria-pressed`; o SVG do
+`sr-only` e (situação e vínculo) legenda com botões `aria-pressed` que aplicam o filtro
+(unidade, localização e sala: disclosure "Filtrar pelo gráfico"); o SVG do
 Nivo fica num wrapper `aria-hidden` com a a11y interna desligada (`role="presentation"`,
 `isFocusable={false}`) para não duplicar a leitura; tabela de detalhamento rolável é região
 focável. WCAG 2.2 AA verificado com axe nas telas `dashboard-painel`, `-vazio`, `-erro` e
 `dashboard-relatorio`; sem rolagem horizontal de 320 a 1920px.
+
+## Filtros (estado na URL)
+
+Barra "Filtros" acima dos números (`dashboard-filter-bar.tsx`): visíveis Unidade de uso,
+Localizado, Vínculo e Tipo; "Mais filtros" (disclosure `aria-expanded`/`aria-controls`,
+abre sozinho se a URL já tem filtro avançado) com Unidade pertencente, Sala e Pessoa
+responsável (habilitadas após a unidade; trocar a unidade limpa as duas), Sala cadastrada,
+Responsável cadastrado, Inventário, Movimentação pendente e Período de registro (de/até;
+período invertido ou > 5 anos não é aplicado e é explicado ao lado). "Limpar filtros" volta
+ao total. Resumo `role="status"`: "Os números refletem os filtros: Vínculo: Ocioso; ...".
+
+- Estado só na URL (`use-dashboard-url-filters.ts`, `router.replace` sem recarregar,
+  debounce de 400 ms); nada é salvo por usuário (fase 3). Link compartilhável.
+- Parse defensivo (`parseDashboardFilters`): chave desconhecida/repetida ou valor
+  inválido é descartado e a URL é normalizada; a tela nunca quebra. A validação real
+  (400) e o escopo são do backend; esconder filtro não é segurança.
+- Filtros entram em todas as queryKeys; opções vêm de `/units/accessible`, `/rooms`,
+  `/responsible-people`, `/assets/bond-statuses` e `/dashboard/tipos` (sem o próprio `tipo`).
+- "Imprimir relatório" leva os filtros aplicados; o relatório os lista no cabeçalho.
 
 ## Biblioteca de gráficos
 
@@ -54,7 +88,8 @@ fica de fora por contraste). Para trocar a paleta, edite somente esse arquivo.
 
 ## Relatório imprimível
 
-`/dashboard/relatorio`: mesma composição em folha clara. `@media print`: sidebar, header e
+`/dashboard/relatorio`: mesma composição em folha clara, com os filtros da URL aplicados
+e listados no cabeçalho ("Filtros aplicados", rótulos humanos; "Nenhum" sem filtro). `@media print`: sidebar, header e
 botões escondidos (`print:hidden`), rolagem interna do shell desativada, fundo branco,
 `break-inside: avoid` em cada bloco e margens de página de 12 mm. O botão "Imprimir / Salvar
 PDF" chama `window.print()`; a data/hora de emissão é a do navegador (America/Araguaina).
@@ -64,5 +99,7 @@ rolagem horizontal, mas a escala final na folha depende do navegador.
 
 ## Testes
 
-`e2e/dashboard.spec.ts` (projeto Playwright `dashboard`), `e2e/support/dashboard-mocks.ts` e
-as telas em `e2e/support/screens.ts`.
+`e2e/dashboard.spec.ts` (projeto Playwright `dashboard`), `e2e/dashboard-filters-functional.spec.ts`
+(filtros/URL/relatório/XSS/teclado), `e2e/support/dashboard-mocks.ts` (valida os filtros
+como o backend: lixo => 400) e as telas `dashboard-*` em `e2e/support/screens.ts`
+(inclui `dashboard-filtros` e `dashboard-relatorio-filtros`).

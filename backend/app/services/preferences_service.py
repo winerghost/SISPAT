@@ -12,7 +12,12 @@ Regras:
       só densidade, escala, tipos de gráfico (allowlist) e versão (sem dados
       pessoais).
     - `dashboard_charts`: persiste só chaves não padrão; a resposta traz
-      sempre as 3 chaves resolvidas.
+      sempre as 6 chaves resolvidas.
+    - `dashboard_layout`: persiste `order` (ordem efetiva completa) e
+      `hidden` só quando diferentes do padrão; a resposta traz sempre
+      `{"order": [9 IDs na ordem efetiva], "hidden": [...]}`.
+    - Dado legado/inválido no banco (chave desconhecida, tipo errado, ID fora
+      da allowlist) é ignorado e cai no padrão; nunca gera erro.
 """
 from __future__ import annotations
 
@@ -48,6 +53,9 @@ DASHBOARD_CHART_OPTIONS: dict[str, tuple[str, ...]] = {
     "units": ("grouped", "stacked", "horizontal"),
     "status": ("pie", "donut", "bar"),
     "monthly": ("line", "area", "bar"),
+    "location": ("stacked", "grouped", "horizontal"),
+    "bond": ("donut", "pie", "bar"),
+    "rooms": ("horizontal", "bar"),
 }
 DEFAULT_DASHBOARD_CHARTS: dict[str, str] = {
     panel: options[0] for panel, options in DASHBOARD_CHART_OPTIONS.items()
@@ -72,18 +80,86 @@ def _resolved_charts(stored: dict[str, str]) -> dict[str, str]:
     return {**DEFAULT_DASHBOARD_CHARTS, **stored}
 
 
+# Allowlist FECHADA de painéis, na ordem padrão (espelha `DashboardPanelId`
+# em app/api/v1/schemas.py; teste garante a igualdade).
+DEFAULT_DASHBOARD_ORDER: tuple[str, ...] = (
+    "kpis",
+    "units",
+    "status",
+    "monthly",
+    "location",
+    "bond",
+    "pending",
+    "rooms",
+    "inventory",
+)
+
+
+def _valid_panel_ids(raw: Any) -> list[str]:
+    """IDs da allowlist, sem repetição, na ordem recebida (tolerante a legado)."""
+    if not isinstance(raw, list):
+        return []
+    seen: list[str] = []
+    for item in raw:
+        if isinstance(item, str) and item in DEFAULT_DASHBOARD_ORDER and item not in seen:
+            seen.append(item)
+    return seen
+
+
+def _effective_order(raw: Any) -> list[str]:
+    """Ordem parcial + painéis ausentes ao fim, na ordem padrão."""
+    first = _valid_panel_ids(raw)
+    return first + [panel for panel in DEFAULT_DASHBOARD_ORDER if panel not in first]
+
+
+def _normalized_hidden(raw: Any) -> list[str]:
+    """Ocultos na ordem padrão; ocultar TODOS é inválido -> nenhum oculto."""
+    hidden = set(_valid_panel_ids(raw))
+    if len(hidden) >= len(DEFAULT_DASHBOARD_ORDER):
+        return []
+    return [panel for panel in DEFAULT_DASHBOARD_ORDER if panel in hidden]
+
+
+def _compact_layout(order: Any, hidden: Any) -> dict[str, list[str]]:
+    """Forma persistida: só o que difere do padrão ({} = layout padrão)."""
+    stored: dict[str, list[str]] = {}
+    effective = _effective_order(order)
+    if tuple(effective) != DEFAULT_DASHBOARD_ORDER:
+        stored["order"] = effective
+    normalized = _normalized_hidden(hidden)
+    if normalized:
+        stored["hidden"] = normalized
+    return stored
+
+
+def _stored_layout(row: UserPreferences | None) -> dict[str, list[str]]:
+    raw = getattr(row, "dashboard_layout", None) if row is not None else None
+    if not isinstance(raw, dict):
+        return {}
+    return _compact_layout(raw.get("order"), raw.get("hidden"))
+
+
+def _resolved_layout(stored: dict[str, list[str]]) -> dict[str, list[str]]:
+    return {
+        "order": _effective_order(stored.get("order")),
+        "hidden": _normalized_hidden(stored.get("hidden")),
+    }
+
+
 def _snapshot(row: UserPreferences | None) -> dict[str, Any]:
     if row is None:
         return {
             "density": DEFAULT_DENSITY,
             "font_scale": DEFAULT_FONT_SCALE,
             "dashboard_charts": dict(DEFAULT_DASHBOARD_CHARTS),
+            "dashboard_layout": _resolved_layout({}),
             "version": 0,
         }
     return {
         "density": row.density,
         "font_scale": int(row.font_scale),
         "dashboard_charts": _resolved_charts(_stored_charts(row)),
+        "dashboard_layout": _resolved_layout(_stored_layout(row)),
         "version": int(row.version),
     }
 
@@ -121,6 +197,8 @@ class PreferencesService:
                 else:
                     stored[panel] = value
 
+        layout = self._merge_layout(_stored_layout(row), changes)
+
         now = utcnow()
         if row is None:
             row = UserPreferences(user_id=user_id, created_at=now)
@@ -128,6 +206,7 @@ class PreferencesService:
         row.density = density
         row.font_scale = int(font_scale)
         row.dashboard_charts = stored
+        row.dashboard_layout = layout
         row.version = previous["version"] + 1
         row.updated_at = now
 
@@ -151,3 +230,19 @@ class PreferencesService:
             logger.warning("user_preferences: conflito ao gravar")
             raise PreferencesVersionConflictError() from None
         return new_values
+
+    @staticmethod
+    def _merge_layout(stored: dict[str, list[str]], changes: Any) -> dict[str, list[str]]:
+        """Ausente = manter; `null` (no todo ou na chave) = padrão."""
+        if "dashboard_layout" not in getattr(changes, "model_fields_set", set()):
+            return stored
+        patch = changes.dashboard_layout
+        if patch is None:
+            return {}
+        order = stored.get("order")
+        hidden = stored.get("hidden")
+        if "order" in patch.model_fields_set:
+            order = patch.order
+        if "hidden" in patch.model_fields_set:
+            hidden = patch.hidden
+        return _compact_layout(order, hidden)

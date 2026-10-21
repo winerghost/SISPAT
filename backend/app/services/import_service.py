@@ -130,7 +130,6 @@ from app.services.patrimony_lock import (
     normalize_patrimony_number,
     normalized_column,
 )
-from app.services.import_normalizer import normalize_bond_status
 from app.services.import_references import (
     PENDING_CODES,
     ImportReferences,
@@ -178,6 +177,8 @@ _HEADER_UNIDADE = "UNIDADE"
 _HEADER_OBSERVACAO = "OBSERVACAO"
 # Chaves dentro de `normalized_values` escritas por este serviço.
 _LINKS_KEY = "_links"
+# Código (sem valor) do vínculo descartado na prévia; ver `screen_bond_status`.
+_BOND_DISCARD_KEY = "_vinculo_descartado"
 _VALID_LOCATED = frozenset({"SIM", "NAO", "DESCONHECIDO"})
 _IMPORT_SOURCE = "google_sheets"
 
@@ -368,6 +369,12 @@ class ImportService:
             unit_sigla=_extract_field(nv, _HEADER_UNIDADE), normalized=nv
         )
 
+    def _bond_status_of(self, normalized_values: dict[str, Any]) -> str | None:
+        """ÚNICO caminho que produz `assets.bond_status` na importação:
+        `normalize_bond_status` + descarte de valor reservado e de nome de
+        pessoa (SEC-VF-01 item 2 / SEC-VF-04). Pessoas carregadas 1x/operação."""
+        return self._references().screen_bond(normalized_values)[0]
+
     def _lock_patrimony(self, patrimony_number: str) -> None:
         """Advisory lock TRANSACIONAL por número patrimonial NORMALIZADO
         (`lower(btrim)`), com a MESMA chave da API de bens (SEC-AST-01; ver
@@ -424,8 +431,9 @@ class ImportService:
                 located=located if located in _VALID_LOCATED else "DESCONHECIDO",
                 notes=notes.strip() if isinstance(notes, str) and notes.strip() else None,
                 registration_date=_parse_iso_date(nv.get("registration_date")),
-                # Vínculo (1ª RESPONSAVEL): pertence à planilha; nunca é pessoa.
-                bond_status=normalize_bond_status(nv.get("vinculo_situacao")),
+                # Vínculo (1ª RESPONSAVEL): pertence à planilha; nunca é pessoa
+                # (triagem autoritativa de novo aqui; ver `_bond_status_of`).
+                bond_status=self._bond_status_of(nv),
                 source_updated_at=_parse_iso_datetime(nv.get("source_updated_at_utc")) or now,
                 created_by=confirmed_by_user_id,
                 updated_by=confirmed_by_user_id,
@@ -463,7 +471,8 @@ class ImportService:
                 asset.description = item.description
             # Vínculo é da planilha (não editável na UI): atualiza quando muda;
             # célula vazia NÃO apaga o valor existente (mesma regra da descrição).
-            bond = normalize_bond_status((item.normalized_values or {}).get("vinculo_situacao"))
+            # Vínculo descartado (pessoa/reservado) conta como vazio: mantém o atual.
+            bond = self._bond_status_of(item.normalized_values or {})
             if bond is not None and bond != asset.bond_status:
                 asset.bond_status = bond
             asset.source_system = "google_sheets"
@@ -643,6 +652,15 @@ class ImportService:
                         validation_errors.append(f"{level}: {message_for(code)}")
                     if links.blocking is not None:
                         classification = "INVALIDO"
+
+            # Vínculo (1ª RESPONSAVEL) que seria descartado na confirmação
+            # (nome de pessoa / valor reservado): aviso visível na prévia, sem
+            # ecoar o valor. A confirmação refaz a triagem (autoritativa).
+            if classification in _SELECTABLE_CLASSIFICATIONS:
+                _, bond_discard = self._references().screen_bond(normalized_values)
+                if bond_discard is not None:
+                    normalized_values[_BOND_DISCARD_KEY] = bond_discard
+                    validation_errors.append(f"aviso: {message_for(bond_discard)}")
 
             if patrimony_number is not None:
                 seen_patrimony[normalize_patrimony_number(patrimony_number)] = already_seen + 1

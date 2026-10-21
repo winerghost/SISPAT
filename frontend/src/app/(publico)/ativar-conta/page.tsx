@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { CheckCircle2 } from "lucide-react";
 
 import { FadeIn, SlideIn } from "@/components/animations";
@@ -44,13 +45,28 @@ import { activateInvite, ApiError } from "@/lib/users-api";
 //
 // Fluxo após a sessão existir:
 //   1. Usuário define a senha (`supabase.auth.updateUser({ password })`).
-//   2. Em sucesso, chama `POST /api/v1/users/activate-invite` (sem corpo —
-//      o backend identifica o convite pela sessão/token atual).
-//   3. 404/409 do backend = convite inválido/expirado — mensagem clara,
-//      orientando a solicitar um novo convite ao administrador.
+//   2. CONVITE: em sucesso, chama `POST /api/v1/users/activate-invite` (sem
+//      corpo — o backend identifica o convite pela sessão/token atual).
+//      404/409 do backend = convite inválido/expirado — mensagem clara.
+//
+// RECUPERAÇÃO DE SENHA (o e-mail "Reset Password" também aponta para cá; não
+// há página própria de reset). O modo vem do `type` do link:
+//   - `?token_hash=...&type=recovery` (template recomendado; mesmo cuidado
+//     anti-scanner do convite) -> `verifyOtp({ token_hash, type: "recovery" })`;
+//   - legado `{{ .ConfirmationURL }}` -> `#access_token=...&type=recovery` ou
+//     evento `PASSWORD_RECOVERY` do SDK.
+//   Depois do `updateUser({ password })` NÃO chama activate-invite (usuário já
+//   ativo: daria 404). Encerra a sessão local de recuperação (o próximo acesso
+//   passa pelo login e pelo MFA), mostra sucesso e leva ao /login.
 // =============================================================================
 
 type Phase = "checking" | "confirm" | "ready" | "invalid" | "activated";
+type Mode = "invite" | "recovery";
+
+/** Após redefinir a senha, segue sozinho para o login (o botão permite ir antes). */
+const RECOVERY_REDIRECT_MS = 4000;
+const RECOVERY_STEPS = ["Validar link", "Nova senha", "Senha redefinida"];
+const RECOVERY_ERROR = "Não foi possível redefinir a senha agora. Abra o link de recuperação novamente.";
 
 // Apresentação: indicador de etapas (reflete só a fase REAL), skeleton enquanto
 // o link é validado, troca de fase com fade (FadeIn), erro com entrada
@@ -59,10 +75,14 @@ const ACTIVATION_STEPS = ["Validar convite", "Definir senha", "Conta ativada"];
 
 const TOKEN_HASH_MAX_LENGTH = 512;
 
-/** Valida só o FORMATO (type=invite, hash não vazio, tamanho e charset razoáveis). */
+function isMode(type: string | null): type is Mode {
+  return type === "invite" || type === "recovery";
+}
+
+/** Valida só o FORMATO (type=invite|recovery, hash não vazio, tamanho e charset razoáveis). */
 function isPlausibleTokenHash(value: string | null, type: string | null): value is string {
   return (
-    type === "invite" &&
+    isMode(type) &&
     !!value &&
     value.length <= TOKEN_HASH_MAX_LENGTH &&
     /^[A-Za-z0-9._~+/=-]+$/.test(value)
@@ -70,9 +90,9 @@ function isPlausibleTokenHash(value: string | null, type: string | null): value 
 }
 
 type UrlIntent =
-  | { kind: "token"; tokenHash: string }
-  | { kind: "invalid" }
-  | { kind: "legacy" };
+  | { kind: "token"; tokenHash: string; mode: Mode }
+  | { kind: "invalid"; mode: Mode }
+  | { kind: "legacy"; mode: Mode };
 
 /** Lê a URL uma única vez e já a limpa (token_hash e erros nunca ficam no histórico). */
 function readAndCleanUrl(): UrlIntent {
@@ -82,14 +102,18 @@ function readAndCleanUrl(): UrlIntent {
 
   const hasToken = query.has("token_hash") || query.has("type");
   const hasHashError = hashParams.has("error") || hashParams.has("error_code");
-  if (!hasToken && !hasHashError) return { kind: "legacy" };
+  // Legado: o SDK lê/limpa o hash; aqui só se lê o `type` (recovery x invite).
+  if (!hasToken && !hasHashError) {
+    return { kind: "legacy", mode: hashParams.get("type") === "recovery" ? "recovery" : "invite" };
+  }
 
   const tokenHash = query.get("token_hash");
   const type = query.get("type");
   window.history.replaceState(window.history.state, "", url.pathname);
 
-  if (hasToken && isPlausibleTokenHash(tokenHash, type)) return { kind: "token", tokenHash };
-  return { kind: "invalid" };
+  const mode: Mode = type === "recovery" ? "recovery" : "invite";
+  if (hasToken && isPlausibleTokenHash(tokenHash, type)) return { kind: "token", tokenHash, mode };
+  return { kind: "invalid", mode };
 }
 
 export default function AtivarContaPage() {
@@ -100,6 +124,9 @@ export default function AtivarContaPage() {
   const [error, setError] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
   const [activatedRole, setActivatedRole] = useState<string | null>(null);
+  const [mode, setMode] = useState<Mode>("invite");
+  const modeRef = useRef<Mode>("invite");
+  const router = useRouter();
 
   const tokenHashRef = useRef<string | null>(null);
   const intentRef = useRef<UrlIntent["kind"] | null>(null);
@@ -111,6 +138,8 @@ export default function AtivarContaPage() {
     if (intentRef.current === null) {
       const intent = readAndCleanUrl();
       intentRef.current = intent.kind;
+      modeRef.current = intent.mode;
+      setMode(intent.mode);
       if (intent.kind === "token") tokenHashRef.current = intent.tokenHash;
       if (intent.kind === "token") setPhase("confirm");
       else if (intent.kind === "invalid") setPhase("invalid");
@@ -124,8 +153,12 @@ export default function AtivarContaPage() {
       if (!active) return;
       setPhase(data.session ? "ready" : "invalid");
     });
-    const { data: subscription } = supabase.auth.onAuthStateChange((_event, session) => {
+    const { data: subscription } = supabase.auth.onAuthStateChange((event, session) => {
       if (!active) return;
+      if (event === "PASSWORD_RECOVERY") {
+        modeRef.current = "recovery";
+        setMode("recovery");
+      }
       if (session) setPhase((current) => (current === "activated" ? current : "ready"));
     });
 
@@ -149,7 +182,7 @@ export default function AtivarContaPage() {
     try {
       const { data, error: verifyError } = await getSupabaseClient().auth.verifyOtp({
         token_hash: tokenHash,
-        type: "invite",
+        type: modeRef.current,
       });
       setPhase(verifyError || !data.session ? "invalid" : "ready");
     } catch {
@@ -183,17 +216,34 @@ export default function AtivarContaPage() {
         return;
       }
 
+      if (modeRef.current === "recovery") {
+        // Usuário já ativo: nada de activate-invite. Encerra a sessão de
+        // recuperação para o próximo acesso passar pelo login (e MFA).
+        await supabase.auth.signOut({ scope: "local" }).catch(() => undefined);
+        setPhase("activated");
+        return;
+      }
+
       const result = await activateInvite();
       setActivatedRole(result.role);
       setPhase("activated");
     } catch (cause) {
-      setError(activateErrorMessage(cause));
+      setError(modeRef.current === "recovery" ? RECOVERY_ERROR : activateErrorMessage(cause));
     } finally {
       setSubmitting(false);
     }
   }
 
-  const stepIndex = phase === "checking" || phase === "confirm" ? 0 : phase === "ready" ? 1 : ACTIVATION_STEPS.length;
+  const recovery = mode === "recovery";
+  const steps = recovery ? RECOVERY_STEPS : ACTIVATION_STEPS;
+  const stepIndex = phase === "checking" || phase === "confirm" ? 0 : phase === "ready" ? 1 : steps.length;
+
+  // Recuperação concluída: segue para o login (o botão permite ir antes).
+  useEffect(() => {
+    if (phase !== "activated" || !recovery) return;
+    const handle = setTimeout(() => router.replace("/login"), RECOVERY_REDIRECT_MS);
+    return () => clearTimeout(handle);
+  }, [phase, recovery, router]);
 
   return (
     <div className="flex flex-1 flex-col items-center justify-center p-4 sm:p-8">
@@ -202,17 +252,21 @@ export default function AtivarContaPage() {
         className="flex w-full max-w-sm flex-col gap-6 rounded-cards border border-ash-stroke p-card-padding"
       >
         <div className="flex flex-col gap-1">
-          <h1 className="text-heading text-[28px] text-bone">Ativar conta</h1>
+          <h1 className="text-heading text-[28px] text-bone">{recovery ? "Redefinir senha" : "Ativar conta"}</h1>
         </div>
 
         {phase !== "invalid" && (
-          <StepIndicator label="Etapas da ativação" steps={ACTIVATION_STEPS} current={stepIndex} />
+          <StepIndicator
+            label={recovery ? "Etapas da redefinição de senha" : "Etapas da ativação"}
+            steps={steps}
+            current={stepIndex}
+          />
         )}
 
         {phase === "checking" && (
           <div className="flex flex-col gap-3" aria-busy="true">
             <p role="status" className="text-body-sm text-warm-granite">
-              Validando seu link de convite…
+              {recovery ? "Validando seu link de recuperação…" : "Validando seu link de convite…"}
             </p>
             <Skeleton className="h-9 w-full" />
             <Skeleton className="h-9 w-full" />
@@ -222,11 +276,12 @@ export default function AtivarContaPage() {
         {phase === "confirm" && (
           <FadeIn className="flex flex-col gap-4">
             <h2 ref={focusRef} tabIndex={-1} className="text-body text-bone focus:outline-none">
-              Confirme a ativação
+              {recovery ? "Confirme a redefinição" : "Confirme a ativação"}
             </h2>
             <p className="text-body-sm text-warm-granite">
-              Recebemos o seu convite para o SISPAT-AGU. Selecione “Continuar” para validá-lo e
-              definir a sua senha.
+              {recovery
+                ? "Recebemos o pedido de redefinição da sua senha do SISPAT-AGU. Selecione “Continuar” para validar o link e definir a nova senha."
+                : "Recebemos o seu convite para o SISPAT-AGU. Selecione “Continuar” para validá-lo e definir a sua senha."}
             </p>
             <Button type="button" loading={confirming} onClick={handleConfirm} className="w-full">
               {confirming ? "Validando…" : "Continuar"}
@@ -237,11 +292,12 @@ export default function AtivarContaPage() {
         {phase === "invalid" && (
           <FadeIn className="flex flex-col gap-3">
             <h2 ref={focusRef} tabIndex={-1} className="text-body text-bone focus:outline-none">
-              Link de convite inválido
+              {recovery ? "Link de recuperação inválido" : "Link de convite inválido"}
             </h2>
             <FormMessage>
-              Este link de convite é inválido ou já expirou. Solicite um novo convite a um
-              administrador.
+              {recovery
+                ? "Este link de recuperação é inválido ou já expirou. Solicite uma nova redefinição de senha a um administrador."
+                : "Este link de convite é inválido ou já expirou. Solicite um novo convite a um administrador."}
             </FormMessage>
             <Link
               href="/login"
@@ -256,10 +312,12 @@ export default function AtivarContaPage() {
           <FadeIn>
             <form className="flex flex-col gap-4" onSubmit={handleSubmit}>
               <h2 ref={focusRef} tabIndex={-1} className="text-body text-bone focus:outline-none">
-                Defina sua senha
+                {recovery ? "Defina a nova senha" : "Defina sua senha"}
               </h2>
               <p className="text-body-sm text-warm-granite">
-                Defina uma senha (mínimo de 8 caracteres) para concluir a ativação da sua conta.
+                {recovery
+                  ? "Defina a nova senha (mínimo de 8 caracteres). A senha anterior deixa de valer."
+                  : "Defina uma senha (mínimo de 8 caracteres) para concluir a ativação da sua conta."}
               </p>
 
               <AuthField label="Nova senha">
@@ -293,14 +351,33 @@ export default function AtivarContaPage() {
               <AnimatedFormMessage id="ativar-erro" message={error} />
 
               <Button type="submit" loading={submitting} className="w-full">
-                {submitting ? "Ativando…" : "Ativar conta"}
+                {recovery ? (submitting ? "Salvando…" : "Redefinir senha") : submitting ? "Ativando…" : "Ativar conta"}
               </Button>
             </form>
           </FadeIn>
         )}
 
+        {/* Recuperação: sucesso só depois de o Supabase confirmar a nova senha. */}
+        {phase === "activated" && recovery && (
+          <FadeIn className="flex flex-col gap-3" data-recovery-done>
+            <h2 ref={focusRef} tabIndex={-1} className="text-body text-bone focus:outline-none">
+              Senha redefinida
+            </h2>
+            <p role="status" className="flex items-start gap-2 text-body-sm text-metric-green">
+              <CheckCircle2 className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+              <span>
+                Senha redefinida com sucesso. Entre com seu e-mail e a nova senha; você será levado ao login
+                em instantes.
+              </span>
+            </p>
+            <Button asChild className="w-full">
+              <Link href="/login">Ir para o login</Link>
+            </Button>
+          </FadeIn>
+        )}
+
         {/* Sucesso: só após a resposta real do backend (phase "activated"). */}
-        {phase === "activated" && (
+        {phase === "activated" && !recovery && (
           <FadeIn className="flex flex-col gap-3">
             <h2 ref={focusRef} tabIndex={-1} className="text-body text-bone focus:outline-none">
               Ativação concluída

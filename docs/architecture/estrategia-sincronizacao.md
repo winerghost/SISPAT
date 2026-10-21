@@ -269,6 +269,39 @@ parcialmente gravado.
   de execução do job devem gerar entrada em `audit_logs`
   (`entity_type='sync_jobs'`, `result='FAILURE'`).
 
+### 6.1 Expurgo de prévias antigas (`flask purge-import-previews`)
+
+Prévias (`import_previews` + `import_preview_items`) são transitórias: cada
+uma copia as linhas da planilha para revisão e, depois de confirmada, expirada
+ou falha, só ocupa espaço. O comando (`backend/app/cli.py` →
+`app/services/import_preview_purge.py`) apaga, numa única transação:
+
+- prévias com status final (`EXPIRADA`, `CONFIRMADA`, `FALHOU` — os status reais
+  de `ck_import_previews_status`) criadas há mais de N dias; **ou**
+- prévias de qualquer status cujo `expires_at` passou há mais de N dias
+  (ex.: `CONCLUIDA` nunca confirmada, `PROCESSANDO` travada);
+- e os itens dessas prévias (também cairiam por `ON DELETE CASCADE`).
+
+Prévias em revisão (`CONCLUIDA`/`PROCESSANDO` não expiradas, ou expiradas há
+menos de N dias) ficam. **Nunca** toca `raw_import_records`, `sync_jobs`,
+`assets` nem `audit_logs` (o dado bruto da planilha continua preservado). Cada
+execução real grava um `IMPORT_PREVIEWS_PURGED` em `audit_logs` só com
+contagens e parâmetros (sem dados de bens/pessoas); `--dry-run` apenas conta.
+
+Opções: `--older-than-days N` (padrão 7, mínimo 1, máximo 365) e `--dry-run`.
+Na VPS, rodar primeiro a contagem e só depois o expurgo:
+
+```bash
+docker compose exec backend flask purge-import-previews --dry-run
+docker compose exec backend flask purge-import-previews --older-than-days 7
+```
+
+O papel do banco usado pelo backend precisa de `DELETE` em `import_previews`/
+`import_preview_items` (essas tabelas não têm o gatilho de bloqueio de DELETE
+físico da 0004, que vale só para `assets`, `asset_movements` e
+`raw_import_records`). Em falha o comando sai com erro citando só o tipo da
+exceção, e a transação é desfeita.
+
 ## 7. Resolução de `sync_conflicts`
 
 Fase 1: resolução é sempre **manual**, através de uma ação administrativa

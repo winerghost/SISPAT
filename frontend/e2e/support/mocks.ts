@@ -66,15 +66,23 @@ export interface MockOptions {
   adminAccessDelayMs?: number;
   /** Sobrescreve o estado inicial de `GET /api/v1/settings/ai`. */
   ai?: Partial<AiSettingsMock>;
-  /** Sobrescreve o estado inicial de `GET /api/v1/me/preferences` (Aparência). */
-  prefs?: Partial<PreferencesMock>;
+  /**
+   * Sobrescreve o estado inicial de `GET /api/v1/me/preferences` (Aparência).
+   * `dashboard_charts` é parcial (as chaves ausentes ficam no padrão).
+   */
+  prefs?: PreferencesMockInput;
+  /**
+   * Simula o backend ANTERIOR: o GET omite `dashboard_layout` e as chaves
+   * location/bond/rooms de `dashboard_charts` (o PATCH segue o contrato novo).
+   */
+  prefsLegacy?: boolean;
   /** Status HTTP forçado em `GET /api/v1/me/preferences` (ex.: 500 testa o estado de erro). */
   prefsGetStatus?: number;
   /** Resposta de `GET /api/v1/dashboard/alerts` (padrão: 3 alertas, um crítico). */
   alerts?: AlertsMock;
   /** Status HTTP forçado em `GET /api/v1/dashboard/alerts` (ex.: 500 testa o estado de erro). */
   alertsStatus?: number;
-  /** Respostas de `GET /api/v1/dashboard/{resumo,por-unidade,por-situacao,aquisicoes-mensais}` (padrão: dados sintéticos). */
+  /** Respostas de `GET /api/v1/dashboard/*` (resumo, por-unidade, ..., inventario, tipos; padrão: dados sintéticos). */
   dashboard?: Partial<DashboardMockData>;
   /** Status HTTP forçado por endpoint do dashboard (ex.: `{ "por-unidade": 500 }`); testes podem mutar `state.dashboardStatus`. */
   dashboardStatus?: Partial<Record<DashboardEndpoint, number>>;
@@ -213,32 +221,111 @@ export function defaultAiAsk(): AiAskMock {
 export interface PreferencesMock {
   density: "comfortable" | "compact";
   font_scale: 100 | 112 | 125;
-  /** Tipo de gráfico de cada painel do dashboard (sempre as 3 chaves resolvidas). */
+  /** Tipo de gráfico de cada painel do dashboard (sempre as 6 chaves resolvidas). */
   dashboard_charts: DashboardChartsMock;
+  /** Painéis visíveis e ordem (sempre os 9 ids em `order`). */
+  dashboard_layout: DashboardLayoutMock;
   version: number;
 }
+
+export type PreferencesMockInput = Partial<Omit<PreferencesMock, "dashboard_charts">> & {
+  dashboard_charts?: Partial<DashboardChartsMock>;
+};
 
 export interface DashboardChartsMock {
   units: "grouped" | "stacked" | "horizontal";
   status: "pie" | "donut" | "bar";
   monthly: "line" | "area" | "bar";
+  location: "stacked" | "grouped" | "horizontal";
+  bond: "pie" | "donut" | "bar";
+  rooms: "bar" | "horizontal";
 }
 
 export const DASHBOARD_CHARTS_ALLOWED: Record<keyof DashboardChartsMock, readonly string[]> = {
   units: ["grouped", "stacked", "horizontal"],
   status: ["pie", "donut", "bar"],
   monthly: ["line", "area", "bar"],
+  location: ["stacked", "grouped", "horizontal"],
+  bond: ["pie", "donut", "bar"],
+  rooms: ["bar", "horizontal"],
 };
 
 export function defaultDashboardCharts(): DashboardChartsMock {
-  return { units: "grouped", status: "pie", monthly: "line" };
+  return { units: "grouped", status: "pie", monthly: "line", location: "stacked", bond: "donut", rooms: "horizontal" };
+}
+
+/** IDs dos painéis do dashboard, na ordem padrão (contrato `dashboard_layout`). */
+export const DASHBOARD_PANEL_IDS = [
+  "kpis",
+  "units",
+  "status",
+  "monthly",
+  "location",
+  "bond",
+  "pending",
+  "rooms",
+  "inventory",
+] as const;
+export type DashboardPanelIdMock = (typeof DASHBOARD_PANEL_IDS)[number];
+
+export interface DashboardLayoutMock {
+  order: string[];
+  hidden: string[];
+}
+
+export function defaultDashboardLayout(): DashboardLayoutMock {
+  return { order: [...DASHBOARD_PANEL_IDS], hidden: [] };
 }
 
 export function defaultPreferences(): PreferencesMock {
-  return { density: "comfortable", font_scale: 100, dashboard_charts: defaultDashboardCharts(), version: 0 };
+  return {
+    density: "comfortable",
+    font_scale: 100,
+    dashboard_charts: defaultDashboardCharts(),
+    dashboard_layout: defaultDashboardLayout(),
+    version: 0,
+  };
 }
 
-const PREFS_PATCH_FIELDS = new Set(["density", "font_scale", "dashboard_charts", "version"]);
+const PREFS_PATCH_FIELDS = new Set(["density", "font_scale", "dashboard_charts", "dashboard_layout", "version"]);
+
+/** Lista de painéis válida: só ids conhecidos, sem repetição. */
+function isPanelList(value: unknown): value is string[] {
+  return (
+    Array.isArray(value) &&
+    value.every((id) => typeof id === "string" && (DASHBOARD_PANEL_IDS as readonly string[]).includes(id)) &&
+    new Set(value).size === value.length
+  );
+}
+
+/**
+ * Aplica `dashboard_layout` do PATCH como o backend: `null` restaura; `order`
+ * precisa ser permutação dos 9 ids; `hidden` sem repetição e nunca os 9.
+ * `null` retornado = corpo inválido (400).
+ */
+function applyDashboardLayoutPatch(current: DashboardLayoutMock, raw: unknown): DashboardLayoutMock | null {
+  if (raw === undefined) return { order: [...current.order], hidden: [...current.hidden] };
+  if (raw === null) return defaultDashboardLayout();
+  if (typeof raw !== "object" || Array.isArray(raw)) return null;
+  const body = raw as Record<string, unknown>;
+  if (Object.keys(body).some((key) => key !== "order" && key !== "hidden")) return null;
+  const order = body.order === undefined ? current.order : body.order;
+  const hidden = body.hidden === undefined ? current.hidden : body.hidden;
+  if (!isPanelList(order) || order.length !== DASHBOARD_PANEL_IDS.length) return null;
+  if (!isPanelList(hidden) || hidden.length >= DASHBOARD_PANEL_IDS.length) return null;
+  return { order: [...order], hidden: [...hidden] };
+}
+
+/** Corpo do GET como o backend ANTERIOR (sem layout nem chaves novas de gráfico). */
+function legacyPreferences(prefs: PreferencesMock): Record<string, unknown> {
+  const { units, status, monthly } = prefs.dashboard_charts;
+  return {
+    density: prefs.density,
+    font_scale: prefs.font_scale,
+    dashboard_charts: { units, status, monthly },
+    version: prefs.version,
+  };
+}
 
 /** Aplica `dashboard_charts` do PATCH (null restaura o padrão); `null` retornado = corpo inválido (400). */
 function applyDashboardChartsPatch(current: DashboardChartsMock, raw: unknown): DashboardChartsMock | null {
@@ -277,6 +364,7 @@ export interface MockState extends CatalogMockState, AssetMockState, MovementMoc
   /** Preferências de aparência do próprio usuário (testes podem simular edição concorrente). */
   prefs: PreferencesMock;
   prefsGetStatus: number | null;
+  prefsLegacy: boolean;
   alerts: AlertsMock;
   alertsStatus: number | null;
   dashboard: DashboardMockData;
@@ -949,8 +1037,14 @@ export async function installMocks(page: Page, opts: MockOptions = {}): Promise<
     adminAccessStatus: opts.adminAccessStatus ?? null,
     adminAccessDelayMs: opts.adminAccessDelayMs ?? 0,
     ai: { ...defaultAiSettings(), ...opts.ai },
-    prefs: { ...defaultPreferences(), ...opts.prefs },
+    prefs: {
+      ...defaultPreferences(),
+      ...opts.prefs,
+      dashboard_charts: { ...defaultDashboardCharts(), ...opts.prefs?.dashboard_charts },
+      dashboard_layout: opts.prefs?.dashboard_layout ?? defaultDashboardLayout(),
+    },
     prefsGetStatus: opts.prefsGetStatus ?? null,
+    prefsLegacy: opts.prefsLegacy ?? false,
     users: defaultUsers(),
     units: UNITS.map((u) => ({ ...u })),
     audit: defaultAudit(),
@@ -1130,7 +1224,15 @@ export async function installMocks(page: Page, opts: MockOptions = {}): Promise<
       });
     }
 
-    if (await handleDashboard({ state, method, path, respond: (status, payload) => json(route, status, payload) })) {
+    if (
+      await handleDashboard({
+        state,
+        method,
+        path,
+        query: url.searchParams,
+        respond: (status, payload) => json(route, status, payload),
+      })
+    ) {
       return;
     }
 
@@ -1161,14 +1263,16 @@ export async function installMocks(page: Page, opts: MockOptions = {}): Promise<
         if (state.prefsGetStatus && state.prefsGetStatus >= 400) {
           return json(route, state.prefsGetStatus, { error: { code: "INTERNAL", message: "SISPAT_BACKEND_MSG" } });
         }
-        return json(route, 200, state.prefs);
+        return json(route, 200, state.prefsLegacy ? legacyPreferences(state.prefs) : state.prefs);
       }
       const patch = (body ?? {}) as Record<string, unknown>;
       const density = patch.density ?? state.prefs.density;
       const fontScale = patch.font_scale ?? state.prefs.font_scale;
       const charts = applyDashboardChartsPatch(state.prefs.dashboard_charts, patch.dashboard_charts);
+      const layout = applyDashboardLayoutPatch(state.prefs.dashboard_layout, patch.dashboard_layout);
       if (
         charts === null ||
+        layout === null ||
         Object.keys(patch).some((key) => !PREFS_PATCH_FIELDS.has(key)) ||
         !["comfortable", "compact"].includes(density as string) ||
         ![100, 112, 125].includes(fontScale as number)
@@ -1182,6 +1286,7 @@ export async function installMocks(page: Page, opts: MockOptions = {}): Promise<
         density: density as PreferencesMock["density"],
         font_scale: fontScale as PreferencesMock["font_scale"],
         dashboard_charts: charts,
+        dashboard_layout: layout,
         version: state.prefs.version + 1,
       };
       return json(route, 200, state.prefs);

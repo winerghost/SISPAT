@@ -17,7 +17,7 @@ backend/
     models/                 # Modelos ORM (um arquivo por grupo de entidades)
   migrations/
     env.py, script.py.mako
-    versions/                         # Cadeia Alembic (0001 ... 0012, head)
+    versions/                         # Cadeia Alembic (0001 ... 0013, head)
     sql/                              # Espelhos SQL puros + seeds manuais
 ```
 
@@ -28,7 +28,9 @@ backend/
 `0006_email_settings_permission` → `0007_unit_aliases` →
 `0008_catalog_source_ids_perms` → `0009_uniq_idx_assets_movements` →
 `0010_seed_permission_corrections` → `0011_dashboard_charts_prefs` →
-`0012_asset_bond_status` (**head**, NÃO aplicada; ver
+`0012_asset_bond_status` (aplicada pelo espelho; falta o stamp) →
+`0013_dashboard_layout_prefs` (**head**, aplicada pelo espelho em 2026-10-21;
+falta o stamp; ver
 `docs/database/historico-migracoes.md`).
 
 ### Alembic ↔ espelho SQL (`migrations/sql/`)
@@ -48,7 +50,8 @@ A numeração dos arquivos SQL é própria e **não** coincide com a do Alembic:
 | `0012` | `0009_uniq_idx_assets_movements` |
 | `0013` | `0010_seed_permission_corrections` |
 | `0014` | `0011_dashboard_charts_prefs` |
-| `0015` | `0012_asset_bond_status` (NÃO aplicada) |
+| `0015` | `0012_asset_bond_status` (aplicada pelo espelho em 2026-10-20) |
+| `0016` | `0013_dashboard_layout_prefs` (aplicada pelo espelho em 2026-10-21) |
 
 (`0008_storage_avatars.sql` é script do Supabase Storage, sem migração Alembic.)
 

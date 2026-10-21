@@ -132,7 +132,7 @@ def test_db_alembic_revision_chain_is_linear() -> None:
     down_targets = [d for d in revisions.values() if d is not None]
     assert len(down_targets) == len(set(down_targets)), "ramificação (branch) de revisões"
     heads = set(revisions) - set(down_targets)
-    assert heads == {"0012_asset_bond_status"}, heads
+    assert heads == {"0013_dashboard_layout_prefs"}, heads
 
 
 def test_db_alembic_revision_ids_cabem_em_alembic_version() -> None:
@@ -460,7 +460,7 @@ def test_db_0007_seed_is_idempotent_and_safe(aliases_migration) -> None:
     assert "ON CONFLICT DO NOTHING" in sql
     assert len(re.findall(r"INSERT\s+INTO", "\n".join(aliases_migration.UPGRADE_STATEMENTS))) == 1
     upgrade_sql = "\n".join(aliases_migration.UPGRADE_STATEMENTS)
-    assert not re.search(r"CREATE\s+TABLE\s+(?!IF\s+NOT\s+EXISTS)", upgrade_sql)
+    assert not re.search(r"\bCREATE\s+TABLE\s+(?!IF\s+NOT\s+EXISTS)", upgrade_sql)
 
 
 def test_db_0007_downgrade_only_drops_its_table(aliases_migration) -> None:
@@ -810,3 +810,91 @@ def test_db_0012_model_matches_migration() -> None:
     idx = {i.name: i for i in table.indexes}["ix_assets_bond_status_lower"]
     assert not idx.unique
     assert "deleted_at IS NULL" in str(idx.dialect_options["postgresql"]["where"])
+
+
+# ---------------------------------------------------------------------------
+# Migração 0013_dashboard_layout_prefs
+# ---------------------------------------------------------------------------
+
+LAYOUT_PY = VERSIONS_DIR / "0013_dashboard_layout_prefs.py"
+LAYOUT_SQL = SQL_DIR / "0016_dashboard_layout_prefs.sql"
+
+
+@pytest.fixture(scope="module")
+def layout_migration() -> ModuleType:
+    return _load_module(LAYOUT_PY)
+
+
+def test_db_0013_revises_0012(layout_migration) -> None:
+    assert layout_migration.revision == "0013_dashboard_layout_prefs"
+    assert layout_migration.down_revision == "0012_asset_bond_status"
+
+
+def test_db_0013_column_and_checks(layout_migration) -> None:
+    assert (
+        "ALTER TABLE public.user_preferences\n"
+        "    ADD COLUMN IF NOT EXISTS dashboard_layout jsonb NOT NULL DEFAULT '{}'::jsonb;"
+    ) in layout_migration.ADD_COLUMN_SQL
+    checks = layout_migration.ADD_CHECKS_SQL
+    # idempotente: cada CHECK protegido por consulta a pg_constraint
+    assert "conname = 'ck_user_preferences_dashboard_layout_object'" in checks
+    assert "conname = 'ck_user_preferences_dashboard_layout_size'" in checks
+    assert "CHECK (jsonb_typeof(dashboard_layout) = 'object')" in checks
+    assert "CHECK (octet_length(dashboard_layout::text) <= 1024)" in checks
+    upgrade_sql = chr(10).join(layout_migration.UPGRADE_STATEMENTS)
+    assert layout_migration.UPGRADE_STATEMENTS == (
+        layout_migration.ADD_COLUMN_SQL,
+        layout_migration.ADD_CHECKS_SQL,
+    )
+    assert not re.search(r"\bADD\s+COLUMN\s+(?!IF\s+NOT\s+EXISTS)", upgrade_sql)
+    assert not re.search(r"\b(UPDATE|DELETE|INSERT|TRUNCATE|DROP)\b", upgrade_sql)
+    # coluna nova em tabela existente: nenhum GRANT/afrouxamento de RLS
+    assert not re.search(r"\bGRANT\b|DISABLE\s+ROW\s+LEVEL", upgrade_sql, re.IGNORECASE)
+
+
+def test_db_0013_downgrade_only_removes_its_objects(layout_migration) -> None:
+    sql = layout_migration.DOWNGRADE_SQL
+    assert re.findall(r"DROP CONSTRAINT IF EXISTS (\w+)", sql) == [
+        "ck_user_preferences_dashboard_layout_size",
+        "ck_user_preferences_dashboard_layout_object",
+    ]
+    assert re.findall(r"DROP COLUMN IF EXISTS (\w+)", sql) == ["dashboard_layout"]
+    assert "DROP TABLE" not in sql.upper()
+    assert "dashboard_charts" not in sql
+    assert not re.search(r"^\s*DELETE\s+FROM|TRUNCATE", sql, re.IGNORECASE | re.MULTILINE)
+
+
+def test_db_0013_sql_mirror_matches_alembic(layout_migration) -> None:
+    mirror = LAYOUT_SQL.read_text(encoding="utf-8")
+    for statement in layout_migration.UPGRADE_STATEMENTS:
+        assert statement.strip(chr(10)) in mirror
+    # Aplicada em 2026-10-21 pelo SQL Editor: o cabeçalho registra isso e o stamp.
+    for text_ in (mirror, LAYOUT_PY.read_text(encoding="utf-8")):
+        assert "APLICADA" in text_ and "autorização explícita" in text_
+        assert "alembic stamp 0013_dashboard_layout_prefs" in text_
+    assert not re.search(r"^\s*(BEGIN|COMMIT)\s*;", mirror, re.IGNORECASE | re.MULTILINE)
+
+
+def test_db_0013_model_matches_migration() -> None:
+    from sqlalchemy.dialects.postgresql import JSONB
+
+    from app.models.settings import UserPreferences
+
+    table = UserPreferences.__table__
+    column = table.c.dashboard_layout
+    assert isinstance(column.type, JSONB) and not column.nullable
+    assert "{}" in str(column.server_default.arg)
+    checks = {c.name: str(c.sqltext) for c in table.constraints if c.name}
+    assert checks["ck_user_preferences_dashboard_layout_object"] == (
+        "jsonb_typeof(dashboard_layout) = 'object'"
+    )
+    assert checks["ck_user_preferences_dashboard_layout_size"] == (
+        "octet_length(dashboard_layout::text) <= 1024"
+    )
+    # os CHECKs da 0011 (dashboard_charts) também ficam espelhados no modelo
+    assert checks["ck_user_preferences_dashboard_charts_object"] == (
+        "jsonb_typeof(dashboard_charts) = 'object'"
+    )
+    assert checks["ck_user_preferences_dashboard_charts_size"] == (
+        "octet_length(dashboard_charts::text) <= 512"
+    )

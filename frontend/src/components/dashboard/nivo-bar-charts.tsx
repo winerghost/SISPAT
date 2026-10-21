@@ -6,7 +6,6 @@ import {
   ChartShell,
   MAX_LABELED_MARKS,
   MAX_TICK_CHARS,
-  OTHERS_KEY,
   TooltipBox,
   defaultFormatter,
   hasMarks,
@@ -70,6 +69,7 @@ function BarSeriesChart({
   kindLabel,
   theme = "screen",
   className,
+  onMarkClick,
 }: AnimatedSeriesChartProps & { mode: BarMode }) {
   const palette = chartPalette(theme);
   const cls = chartClasses(theme);
@@ -104,6 +104,7 @@ function BarSeriesChart({
   const ticks = integerTicks(max);
   const colorOf = new Map(model.series.map((s) => [s.dataKey, s.color]));
   const nameOf = new Map(model.series.map((s) => [s.dataKey, s.label]));
+  const seriesKeyOf = new Map(model.series.map((s) => [s.dataKey, s.key]));
   const catLabel = (key: string | number) => model.labelOf.get(String(key)) ?? String(key);
   const n = data.series.length;
 
@@ -125,6 +126,7 @@ function BarSeriesChart({
       theme={theme}
       legend={model.legend}
       table={model.table("Categoria")}
+      interactive={!!onMarkClick}
       className={className}
     >
       {(width) => {
@@ -189,6 +191,10 @@ function BarSeriesChart({
             totalsOffset={8}
             valueFormat={(v) => valueFormatter(v)}
             tooltip={Tooltip}
+            onClick={(datum) => {
+              const seriesKey = seriesKeyOf.get(String(datum.id));
+              if (onMarkClick && seriesKey !== undefined) onMarkClick(String(datum.indexValue), seriesKey);
+            }}
             theme={nivoTheme(theme)}
             animate={false}
             role="presentation"
@@ -229,6 +235,7 @@ export function CategoryBarChart(props: AnimatedChartProps) {
     valueFormatter = defaultFormatter,
     selectedKey = null,
     onSelectKey,
+    selectActionLabel,
     height = 240,
     theme = "screen",
     className,
@@ -263,6 +270,8 @@ export function CategoryBarChart(props: AnimatedChartProps) {
       table={model.table}
       selectedKey={selectedKey}
       onSelectKey={onSelectKey}
+      selectActionLabel={selectActionLabel}
+      interactive={!!onSelectKey}
       className={className}
     >
       {(width) => {
@@ -312,7 +321,7 @@ export function CategoryBarChart(props: AnimatedChartProps) {
             tooltip={Tooltip}
             onClick={(datum) => {
               const key = String(datum.indexValue);
-              if (onSelectKey && byKey.get(key)?.key && key !== OTHERS_KEY) toggle(key);
+              if (onSelectKey && byKey.get(key)?.key && model.canSelect(key)) toggle(key);
             }}
             theme={nivoTheme(theme)}
             animate={false}

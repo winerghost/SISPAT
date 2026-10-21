@@ -400,3 +400,45 @@ orientação passo a passo.
 - Pendente: teste no navegador (login ADM + MFA, dashboard), itens de Supabase
   Auth, trivy, limite de 100 s da Cloudflare, worker e
   `set_real_ip_from 0.0.0.0/0` no `nginx.conf` global do CloudPanel.
+- Ajustes após a subida: `REDIS_URL` com senha diferente de `REDIS_PASSWORD`
+  (backend respondia 503) e credencial do Sheets truncada ao colar no nano
+  (reenviada por `scp`). Importados: Unidades, Salas e Pessoas.
+
+## Próximo deploy — Vínculo e filtros do dashboard (2026-10-20)
+
+- Migração `0012_asset_bond_status` (espelho `sql/0015`) já aplicada no
+  SQL Editor pelo responsável; na VPS só carimbar (`alembic stamp
+  0012_asset_bond_status`).
+- Exige rebuild de `backend` e `frontend`.
+- Testes (após a correção do SEC-VF-01): pytest 11326 passed, 49 skipped,
+  4 xfailed, 0 falhas; Playwright `--workers=1`: e2e 657, a11y 398,
+  unit+dashboard+motion 102, responsive 1125 — todos aprovados.
+- Antes de importar Bens: rodar as consultas V1–V4 de
+  `docs/security/REVISAO_VINCULO_FILTROS_2026-10-20.md` (só leitura).
+- Revisão de segurança: APROVADO COM RESSALVAS; SEC-VF-01 corrigido;
+  SEC-VF-02 (backfill sem remoção de Cc/Cf) pendente; `certifi` recomendado
+  para 2026.10.19; gitleaks e trivy não executados.
+
+## Atualização 2026-10-21 — painéis, recuperação de senha e expurgo
+
+Entra no mesmo deploy do Vínculo (ainda não implantado).
+
+- Migração `0013_dashboard_layout_prefs` (espelho `sql/0016`) **aplicada** no
+  SQL Editor em 2026-10-21, com autorização. Na VPS, carimbar direto a 0013
+  (`alembic stamp 0013_dashboard_layout_prefs`, que cobre a 0012).
+- Funcionalidades: "Personalizar painéis" (ordem/ocultos por usuário), tipo de
+  gráfico em localização/vínculo/salas, clique no gráfico aplica filtro, barra
+  de filtros recolhível no celular, recuperação de senha em `/ativar-conta`
+  sem `activate-invite`, CLI `flask purge-import-previews`.
+- `certifi` 2026.10.19 no `requirements.lock` (corrige PYSEC-2026-4320).
+- Expurgo: contagens da auditoria pelo `rowcount` (SEC-1021-03) e
+  `origin: cli` (SEC-1021-04), com testes de regressão.
+- Testes: Playwright `--workers=1`: e2e 718, a11y 413, unit 11, dashboard 21,
+  motion 70, responsive aprovado (falhas só por falta de memória do runner,
+  repetidas e aprovadas); lint, tsc e build OK.
+- Revisão de segurança (`SECURITY_AUDIT.md` §17): APROVADO COM RESSALVAS,
+  sem achado crítico ou alto. Abertos: SEC-1021-01 (baixo; allowlist de
+  vínculos), `pillow` 13.0.0 (baixo, não alcançável), SEC-1021-02
+  (informativo), gitleaks/trivy não executados.
+- Antes de liberar o painel de vínculo / importar Bens: consultas V1–V4.
+- Pendente: testar a recuperação de senha com um ADM com TOTP.

@@ -6,8 +6,10 @@ Atualizado em 2026-10-20.
 > (head), carimbado no deploy da VPS com `alembic stamp` (sem DDL). O esquema
 > real já continha 0007-0011, aplicadas manualmente pelos espelhos `.sql`. A
 > seção "Estado em produção" abaixo é histórica (2026-10-15). A head do código
-> passou a ser `0012_asset_bond_status`, **aplicada no SQL Editor em
-> 2026-10-20**; falta o `alembic stamp 0012_asset_bond_status` na VPS.
+> passou por `0012_asset_bond_status`, **aplicada no SQL Editor em
+> 2026-10-20** (falta o `alembic stamp 0012_asset_bond_status` na VPS), e agora
+> é `0013_dashboard_layout_prefs`, **aplicada no SQL Editor em 2026-10-21**
+> (falta o `alembic stamp 0013_dashboard_layout_prefs` na VPS).
 
 ## Dois históricos distintos
 
@@ -118,6 +120,45 @@ FROM public.assets
 WHERE deleted_at IS NULL
 GROUP BY bond_status ORDER BY bens DESC;    -- distribuição por vínculo (NULL = sem valor)
 SELECT version_num FROM alembic_version;    -- esperado: 0012_asset_bond_status
+```
+
+## Alembic 0013 – user_preferences.dashboard_layout (APLICADA 2026-10-21)
+
+**APLICADA manualmente no Supabase em 2026-10-21**, com autorização explícita,
+via o espelho `backend/migrations/sql/0016_dashboard_layout_prefs.sql` (SQL
+Editor). Na VPS: `alembic stamp 0013_dashboard_layout_prefs` (sem `upgrade`).
+Depende de `0012_asset_bond_status`.
+
+Guarda a ordem e a visibilidade dos painéis do dashboard por usuário. Mesmo
+padrão da 0011, aditiva e idempotente:
+
+- coluna `user_preferences.dashboard_layout jsonb NOT NULL DEFAULT '{}'::jsonb`
+  (`{}` = layout padrão; linhas existentes recebem `{}`);
+- CHECK `ck_user_preferences_dashboard_layout_object` (`jsonb_typeof = 'object'`);
+- CHECK `ck_user_preferences_dashboard_layout_size` (texto <= 1024 bytes).
+
+O conteúdo (`{"order": [...], "hidden": [...]}`, IDs de painel de uma
+allowlist fechada) é validado no backend (`DashboardLayoutPatch` em
+`app/api/v1/schemas.py`); o pior caso persistido tem ~220 bytes. Nenhuma tabela
+nova (RLS/REVOKE de `user_preferences` já vêm da 0005). Downgrade remove os
+dois CHECKs e a coluna (perde só esta preferência).
+
+**Compatibilidade de deploy:** o backend que lê/grava `dashboard_layout` só
+pode subir DEPOIS de a coluna existir; com o código novo e o banco sem a
+coluna, `GET/PATCH /api/v1/me/preferences` falha (coluna inexistente).
+
+Verificação pós-aplicação:
+
+```sql
+SELECT column_name, data_type, is_nullable, column_default
+FROM information_schema.columns
+WHERE table_schema = 'public' AND table_name = 'user_preferences'
+  AND column_name = 'dashboard_layout';     -- jsonb, NO, '{}'::jsonb
+SELECT conname, pg_get_constraintdef(oid)
+FROM pg_constraint
+WHERE conrelid = 'public.user_preferences'::regclass
+  AND conname LIKE 'ck_user_preferences_dashboard_layout_%'; -- 2 linhas
+SELECT version_num FROM alembic_version;    -- após o stamp: 0013_dashboard_layout_prefs
 ```
 
 ## IDs de revisão encurtados (2026-10-20)

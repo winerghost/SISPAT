@@ -162,6 +162,22 @@ Comportamento da reimportação (limites conhecidos):
   atualiza quando o valor muda; célula vazia NÃO apaga o valor existente. O
   vínculo pertence à planilha: não é editável pela API/UI. `Ocioso` continua
   nunca sendo pessoa.
+- Triagem do vínculo (SEC-VF-01 item 2 e SEC-VF-04, 2026-10-20,
+  `import_references.screen_bond_status`): o vínculo NÃO é gravado (conta como
+  célula vazia: no EXISTENTE o valor atual é mantido) e a linha NOVO/EXISTENTE
+  ganha um aviso na prévia (não bloqueia; o texto nunca repete o valor):
+  - igual (chave de pessoa: sem caixa/acento) à 2ª `RESPONSAVEL` da linha →
+    `aviso: 1ª RESPONSAVEL (vínculo) é igual à 2ª RESPONSAVEL (pessoa) da linha; vínculo não será gravado`;
+  - igual ao nome de uma pessoa ATIVA cadastrada →
+    `aviso: 1ª RESPONSAVEL (vínculo) coincide com o nome de uma pessoa cadastrada; vínculo não será gravado`;
+  - valor reservado `__...__` (`__none__`, `__outros__`, `__outras__`, sem
+    caixa) →
+    `aviso: 1ª RESPONSAVEL (vínculo) usa um valor reservado do sistema (__none__/__outros__); vínculo tratado como vazio`.
+
+  Marcadores (`Ocioso`) seguem válidos. O código do descarte fica em
+  `normalized_values._vinculo_descartado`. As pessoas são carregadas uma vez
+  por prévia/confirmação, e a confirmação refaz a triagem com o cadastro atual.
+  Esses avisos não entram em `pending_counts`, porque não são pendências de cadastro.
 - Bem EXISTENTE: só descrição, vínculo e origem são atualizados. Mudança na planilha de
   sala, responsável ou `LOCALIZADO` NÃO é refletida (evita sobrescrever edição
   feita no sistema). Mudar isso é decisão de produto.

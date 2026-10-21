@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, type ReactNode } from "react";
 import dynamic from "next/dynamic";
 import { AlertTriangle, BarChart3, RefreshCw } from "lucide-react";
 import type { UseQueryResult } from "@tanstack/react-query";
@@ -9,25 +9,57 @@ import { FadeIn } from "@/components/animations";
 import { chartClasses, type ChartThemeName } from "@/components/dashboard/chart-theme";
 import { StatCard } from "@/components/dashboard/stat-card";
 import type { DashboardStat } from "@/components/dashboard/types";
+import { useAccessibleUnits, useLookupAccess } from "@/components/features/lookup/use-lookup";
 import { Button } from "@/components/ui/button";
 import { LoadingSkeleton } from "@/components/ui/loading-skeleton";
 import { Table, TableBody, TableCell, TableFooter, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import {
+  MONTHS_DEFAULT,
+  NO_DASHBOARD_FILTERS,
+  countDashboardFilters,
+  useDashboardByBond,
+  useDashboardByRoom,
   useDashboardBySituation,
   useDashboardByUnit,
+  useDashboardInventory,
   useDashboardMonthlyAcquisitions,
+  useDashboardPending,
   useDashboardSummary,
+  useDashboardUnitLocation,
+  type DashboardFilters,
   type DashboardSummary,
+  type InventoryStatus,
+  type LabeledCount,
+  type RegistrationPending,
   type UnitBreakdownRow,
 } from "@/lib/dashboard-api";
-import type { DashboardChartPanel } from "@/lib/preferences-api";
+import type { DashboardChartPanel, DashboardPanelId } from "@/lib/preferences-api";
 import { cn } from "@/lib/utils";
 
+import { ChartFilterShortcuts, type ShortcutGroup } from "./chart-filter-shortcuts";
+import { ChartFocusProvider, useChartFocus } from "./chart-focus-context";
 import { ChartTypeMenu } from "./chart-type-menu";
-import { useDashboardChartPrefs, type DashboardChartPrefs } from "./use-dashboard-chart-prefs";
 import {
+  bondFilter,
+  isPatchApplied,
+  locationSeriesFilter,
+  mergePatches,
+  roomFilter,
+  situationFilter,
+  unitFilter,
+  type FilterPatch,
+  type UnitRefLike,
+} from "./dashboard-chart-filters";
+import { panelSpans, visiblePanels } from "./dashboard-panel-meta";
+import { useDashboardChartPrefs, type DashboardChartPrefs } from "./use-dashboard-chart-prefs";
+import { useDashboardLayoutPrefs } from "./use-dashboard-layout-prefs";
+import {
+  LOCATION_SERIES,
+  buildLabeledData,
   buildMonthlyData,
+  buildRoomData,
   buildSituationData,
+  buildUnitLocationData,
   buildUnitModel,
   seriesValue,
   type UnitModel,
@@ -42,9 +74,19 @@ import {
 //   outras).
 // - Gráficos Nivo só são baixados no cliente (next/dynamic, ssr:false — o
 //   Responsive* mede o DOM), um chunk por módulo: barras (@nivo/bar),
-//   pizza/rosca (@nivo/pie) e linhas/áreas (@nivo/line). O módulo de pizza
-//   não é baixado se o usuário escolheu "Barras" na situação, etc.
+//   pizza/rosca (@nivo/pie) e linhas/áreas (@nivo/line).
 // - `theme="paper"`: relatório (figura clara); cores e tema Nivo em chart-theme.ts.
+// - `filters`: filtros da URL (DashboardFilters), repassados a TODAS as
+//   consultas; com filtro ativo, o estado vazio diz que nada casou com eles.
+// - Tipo de gráfico (`dashboard_charts`): unidades, situação, mensal,
+//   localização por unidade, vínculo e sala. Painéis visíveis e ordem
+//   (`dashboard_layout`): os mesmos na tela e no relatório; só o que o backend
+//   confirmou é exibido. Painel oculto não é montado (nem consulta o backend).
+// - `onFilter` (só na tela): clicar numa barra/fatia aplica o filtro
+//   equivalente na URL (unidade, localizado, vínculo, sala). Alternativa por
+//   teclado: botões da legenda (situação/vínculo) e "Filtrar pelo gráfico"
+//   (unidade, localização, sala). Item sem filtro equivalente não tem ação.
+// - O "Detalhamento por unidade" (tabela) não é personalizável: fica sempre no fim.
 // =============================================================================
 
 const chartLoading = () => <LoadingSkeleton variant="cards" count={1} label="Carregando gráfico" />;
@@ -148,13 +190,20 @@ interface BlockProps<T> {
   emptyTitle: string;
   emptyDescription: string;
   skeleton?: ReactNode;
-  className?: string;
+  /** Ocupa as 2 colunas da grade (lg+). */
+  wide?: boolean;
   /** Seletor de tipo de gráfico (só aparece quando há dados para exibir). */
   controls?: ReactNode;
   /** Estado do salvamento / erro do seletor. */
   notice?: ReactNode;
+  /** Há filtro ativo: o estado vazio explica que nada casou com os filtros. */
+  filtered?: boolean;
   children: (data: T) => ReactNode;
 }
+
+const FILTERED_EMPTY_TITLE = "Nenhum bem com estes filtros";
+const FILTERED_EMPTY_DESCRIPTION =
+  "Nenhum bem visível para o seu perfil corresponde aos filtros ativos. Ajuste ou limpe os filtros.";
 
 function Block<T>({
   id,
@@ -165,19 +214,32 @@ function Block<T>({
   emptyTitle,
   emptyDescription,
   skeleton,
-  className,
+  wide = false,
   controls,
   notice,
+  filtered = false,
   children,
 }: BlockProps<T>) {
   const cls = chartClasses(theme);
   const headingId = `dash-${id}`;
   const showControls = !query.isPending && !query.isError && !isEmpty(query.data as T);
+  // Depois de filtrar pelo gráfico, o foco volta ao botão usado (ver chart-focus-context).
+  const sectionRef = useRef<HTMLElement>(null);
+  const focus = useChartFocus();
+  const ready = !query.isPending && !query.isError;
+  useEffect(() => {
+    if (ready) focus?.restore(id, sectionRef.current);
+  }, [ready, query.data, focus, id]);
   return (
     <section
+      ref={sectionRef}
       aria-labelledby={headingId}
       data-dashboard-block={id}
-      className={cn("flex min-w-0 flex-col rounded-cards border print:break-inside-avoid", cls.figure, className)}
+      className={cn(
+        "flex min-w-0 flex-col rounded-cards border print:break-inside-avoid",
+        cls.figure,
+        wide && "lg:col-span-2",
+      )}
     >
       <div className="flex items-start justify-between gap-2 px-4 pt-4 sm:px-5">
         <h2 id={headingId} className={cn("min-w-0 pt-1 text-eyebrow", cls.legendLabel)}>
@@ -221,8 +283,10 @@ function Block<T>({
           >
             <BarChart3 className="h-4 w-4" aria-hidden />
           </span>
-          <p className={cn("text-body", cls.legendLabel)}>{emptyTitle}</p>
-          <p className={cn("max-w-xl text-body-sm", cls.legendValue)}>{emptyDescription}</p>
+          <p className={cn("text-body", cls.legendLabel)}>{filtered ? FILTERED_EMPTY_TITLE : emptyTitle}</p>
+          <p className={cn("max-w-xl text-body-sm", cls.legendValue)}>
+            {filtered ? FILTERED_EMPTY_DESCRIPTION : emptyDescription}
+          </p>
         </div>
       ) : (
         children(query.data)
@@ -230,6 +294,34 @@ function Block<T>({
     </section>
   );
 }
+
+// ---------------------------------------------------------------------------
+// Contexto comum dos painéis
+// ---------------------------------------------------------------------------
+
+interface PanelCtx {
+  theme: ChartThemeName;
+  filters: DashboardFilters;
+  filtered: boolean;
+  prefs: DashboardChartPrefs;
+  /** Ocupa 2 colunas (calculado pela ordem escolhida). */
+  wide: boolean;
+  /** Clique/teclado → filtro da URL (ausente no relatório). */
+  onFilter?: (patch: FilterPatch) => void;
+  /** Unidades acessíveis (sigla → id para o clique no gráfico de unidades). */
+  units?: readonly UnitRefLike[];
+}
+
+function chartPlaceholder(label: string) {
+  return <LoadingSkeleton variant="cards" count={1} label={label} />;
+}
+
+const PREFS_LOADING = (
+  <div className="p-4 sm:p-5">{chartPlaceholder("Carregando preferências do gráfico")}</div>
+);
+
+/** Índice da categoria interna (`u3`, `r0`...) gerada nas transformações. */
+const categoryIndex = (key: string) => Number.parseInt(key.slice(1), 10);
 
 // ---------------------------------------------------------------------------
 // Indicadores (KPIs) + bloco "Indicadores indisponíveis"
@@ -245,6 +337,12 @@ function buildStats(summary: DashboardSummary): DashboardStat[] {
       description: `${formatInt(summary.novos_30d)} novos nos últimos 30 dias`,
     },
     { id: "localizados", label: "Localizados", value: summary.localizados },
+    {
+      id: "nao-localizados",
+      label: "Não localizados",
+      value: summary.nao_localizados,
+      description: `${formatInt(summary.desconhecidos)} com localização desconhecida`,
+    },
     { id: "movimentacoes-pendentes", label: "Movimentações pendentes", value: summary.movimentacoes_pendentes },
     { id: "inventarios-abertos", label: "Inventários abertos", value: summary.inventarios_abertos },
   ];
@@ -279,8 +377,8 @@ function UnavailableIndicators({ theme }: { theme: ChartThemeName }) {
   );
 }
 
-function KpiBlock({ theme }: { theme: ChartThemeName }) {
-  const query = useDashboardSummary();
+function KpiBlock({ theme, filters, wide }: PanelCtx) {
+  const query = useDashboardSummary(filters);
   return (
     <Block
       id="indicadores"
@@ -290,14 +388,17 @@ function KpiBlock({ theme }: { theme: ChartThemeName }) {
       isEmpty={() => false}
       emptyTitle=""
       emptyDescription=""
-      skeleton={<LoadingSkeleton variant="cards" count={4} label="Carregando indicadores" />}
-      className="lg:col-span-2"
+      skeleton={<LoadingSkeleton variant="cards" count={5} label="Carregando indicadores" />}
+      wide={wide}
     >
       {(summary) => (
         <>
           <ul
             aria-label="Indicadores patrimoniais"
-            className="m-0 grid list-none grid-cols-2 gap-3 p-4 sm:p-5 lg:grid-cols-4"
+            className={cn(
+              "m-0 grid list-none grid-cols-2 gap-3 p-4 sm:grid-cols-3 sm:p-5",
+              wide ? "xl:grid-cols-5" : "xl:grid-cols-3",
+            )}
           >
             {buildStats(summary).map((stat) => (
               <li key={stat.id} className="min-w-0">
@@ -316,29 +417,30 @@ function KpiBlock({ theme }: { theme: ChartThemeName }) {
 // Gráficos e tabela
 // ---------------------------------------------------------------------------
 
-const UNIT_CHARTS = {
+const MULTI_BAR_CHARTS = {
   grouped: AnimatedGroupedBarChart,
   stacked: AnimatedStackedBarChart,
   horizontal: AnimatedHorizontalBarChart,
 } as const;
 
-function chartPlaceholder(label: string) {
-  return <LoadingSkeleton variant="cards" count={1} label={label} />;
+function unitShortcutGroup(rows: readonly { unidade: string; unit_id?: string }[], units: PanelCtx["units"]): ShortcutGroup {
+  return {
+    label: "Unidade de uso",
+    options: rows.flatMap((row, i) => {
+      const patch = unitFilter(row, units);
+      return patch ? [{ key: `u${i}`, label: row.unidade, patch }] : [];
+    }),
+  };
 }
 
 function UnitChartBlock({
-  theme,
   model,
   query,
-  prefs,
-}: {
-  theme: ChartThemeName;
-  model: UnitModel | undefined;
-  query: UseQueryResult<UnitBreakdownRow[], unknown>;
-  prefs: DashboardChartPrefs;
-}) {
+  ...ctx
+}: PanelCtx & { model: UnitModel | undefined; query: UseQueryResult<UnitBreakdownRow[], unknown> }) {
+  const { theme, prefs, filtered, wide, onFilter, units, filters } = ctx;
   const title = "Bens por unidade";
-  const Chart = UNIT_CHARTS[prefs.charts.units];
+  const Chart = MULTI_BAR_CHARTS[prefs.charts.units];
   return (
     <Block
       id="por-unidade"
@@ -349,23 +451,43 @@ function UnitChartBlock({
       emptyTitle="Nenhum bem cadastrado"
       emptyDescription="Não há bens nas unidades visíveis para o seu perfil. Nenhum gráfico de exemplo é exibido."
       skeleton={chartPlaceholder("Carregando bens por unidade")}
-      className="lg:col-span-2"
+      wide={wide}
+      filtered={filtered}
       {...panelControls(prefs, "units", title, theme)}
     >
-      {() =>
+      {(rows) =>
         prefs.status === "loading" ? (
-          <div className="p-4 sm:p-5">{chartPlaceholder("Carregando preferências do gráfico")}</div>
+          PREFS_LOADING
         ) : (
           model && (
-            <ChartSwap type={prefs.charts.units}>
-              <Chart
-                title="Quantidade de bens por tipo em cada unidade"
-                data={model.chart}
-                valueFormatter={formatInt}
-                theme={theme}
-                className="border-0 p-4 sm:p-5"
-              />
-            </ChartSwap>
+            <>
+              <ChartSwap type={prefs.charts.units}>
+                <Chart
+                  title="Quantidade de bens por tipo em cada unidade"
+                  data={model.chart}
+                  valueFormatter={formatInt}
+                  theme={theme}
+                  className="border-0 p-4 sm:p-5"
+                  onMarkClick={
+                    onFilter
+                      ? (categoryKey) => {
+                          const row = rows[categoryIndex(categoryKey)];
+                          const patch = row ? unitFilter(row, units) : null;
+                          if (patch) onFilter(patch);
+                        }
+                      : undefined
+                  }
+                />
+              </ChartSwap>
+              {onFilter ? (
+                <ChartFilterShortcuts
+                  panelTitle={title}
+                  groups={[unitShortcutGroup(rows, units)]}
+                  filters={filters}
+                  onFilter={onFilter}
+                />
+              ) : null}
+            </>
           )
         )
       }
@@ -435,9 +557,8 @@ function UnitTable({ rows, model, theme }: { rows: UnitBreakdownRow[]; model: Un
   );
 }
 
-function SituationBlock({ theme, prefs }: { theme: ChartThemeName; prefs: DashboardChartPrefs }) {
-  const query = useDashboardBySituation();
-  const [selected, setSelected] = useState<string | null>(null);
+function SituationBlock({ theme, prefs, filters, filtered, wide, onFilter }: PanelCtx) {
+  const query = useDashboardBySituation(filters);
   const title = "Bens por situação";
   const Chart = prefs.charts.status === "bar" ? CategoryBarChart : PieChart;
   return (
@@ -450,12 +571,14 @@ function SituationBlock({ theme, prefs }: { theme: ChartThemeName; prefs: Dashbo
       emptyTitle="Nenhum bem para classificar"
       emptyDescription="Ainda não há bens com situação registrada nas unidades visíveis para o seu perfil."
       skeleton={chartPlaceholder("Carregando bens por situação")}
+      wide={wide}
+      filtered={filtered}
       {...panelControls(prefs, "status", title, theme)}
     >
-      {(slices) =>
-        prefs.status === "loading" ? (
-          <div className="p-4 sm:p-5">{chartPlaceholder("Carregando preferências do gráfico")}</div>
-        ) : (
+      {(slices) => {
+        if (prefs.status === "loading") return PREFS_LOADING;
+        const selected = slices.find((s) => isPatchApplied(filters, situationFilter(s.id)))?.id ?? null;
+        return (
           <ChartSwap type={prefs.charts.status}>
             <Chart
               kind={prefs.charts.status}
@@ -463,19 +586,29 @@ function SituationBlock({ theme, prefs }: { theme: ChartThemeName; prefs: Dashbo
               data={buildSituationData(slices)}
               valueLabel="Bens"
               selectedKey={selected}
-              onSelectKey={setSelected}
+              onSelectKey={
+                onFilter
+                  ? (key) => {
+                      const target = key ?? selected;
+                      const patch = target ? situationFilter(target) : null;
+                      if (patch) onFilter(patch);
+                    }
+                  : undefined
+              }
+              isSelectableKey={(key) => situationFilter(key) !== null}
+              selectActionLabel="Filtrar por situação:"
               theme={theme}
               className="border-0 p-4 sm:p-5"
             />
           </ChartSwap>
-        )
-      }
+        );
+      }}
     </Block>
   );
 }
 
-function MonthlyBlock({ theme, prefs }: { theme: ChartThemeName; prefs: DashboardChartPrefs }) {
-  const query = useDashboardMonthlyAcquisitions();
+function MonthlyBlock({ theme, prefs, filters, filtered, wide }: PanelCtx) {
+  const query = useDashboardMonthlyAcquisitions(MONTHS_DEFAULT, filters);
   const title = "Aquisições mensais";
   const type = prefs.charts.monthly;
   const Chart = type === "line" ? AnimatedLineChart : type === "area" ? AnimatedAreaChart : AnimatedGroupedBarChart;
@@ -489,11 +622,13 @@ function MonthlyBlock({ theme, prefs }: { theme: ChartThemeName; prefs: Dashboar
       emptyTitle="Nenhuma aquisição no período"
       emptyDescription="Não há aquisições registradas nos últimos meses para as unidades visíveis ao seu perfil."
       skeleton={chartPlaceholder("Carregando aquisições mensais")}
+      wide={wide}
+      filtered={filtered}
       {...panelControls(prefs, "monthly", title, theme)}
     >
       {(series) =>
         prefs.status === "loading" ? (
-          <div className="p-4 sm:p-5">{chartPlaceholder("Carregando preferências do gráfico")}</div>
+          PREFS_LOADING
         ) : (
           <ChartSwap type={type}>
             <Chart
@@ -511,17 +646,370 @@ function MonthlyBlock({ theme, prefs }: { theme: ChartThemeName; prefs: Dashboar
   );
 }
 
-export function DashboardPanels({ theme = "screen", className }: { theme?: ChartThemeName; className?: string }) {
-  const unitQuery = useDashboardByUnit();
-  const model = useMemo(() => (unitQuery.data ? buildUnitModel(unitQuery.data) : undefined), [unitQuery.data]);
+function UnitLocationBlock({ theme, prefs, filters, filtered, wide, onFilter, units }: PanelCtx) {
+  const query = useDashboardUnitLocation(filters);
+  const title = "Localizados × não localizados por unidade";
+  const Chart = MULTI_BAR_CHARTS[prefs.charts.location];
+  return (
+    <Block
+      id="localizacao-por-unidade"
+      title={title}
+      query={query}
+      theme={theme}
+      isEmpty={(rows) => rows.length === 0 || rows.every((r) => r.total === 0)}
+      emptyTitle="Nenhum bem para classificar"
+      emptyDescription="Não há bens nas unidades visíveis para o seu perfil. Nenhum gráfico de exemplo é exibido."
+      skeleton={chartPlaceholder("Carregando localização por unidade")}
+      wide={wide}
+      filtered={filtered}
+      {...panelControls(prefs, "location", title, theme)}
+    >
+      {(rows) =>
+        prefs.status === "loading" ? (
+          PREFS_LOADING
+        ) : (
+          <>
+            <ChartSwap type={prefs.charts.location}>
+              <Chart
+                title="Situação de localização em cada unidade de uso"
+                description="Unidade de uso do bem; até 15 unidades, o restante somado em “Outras”."
+                data={buildUnitLocationData(rows)}
+                valueFormatter={formatInt}
+                theme={theme}
+                className="border-0 p-4 sm:p-5"
+                onMarkClick={
+                  onFilter
+                    ? (categoryKey, seriesKey) => {
+                        const row = rows[categoryIndex(categoryKey)];
+                        const patch = mergePatches(row ? unitFilter(row, units) : null, locationSeriesFilter(seriesKey));
+                        if (patch) onFilter(patch);
+                      }
+                    : undefined
+                }
+              />
+            </ChartSwap>
+            {onFilter ? (
+              <ChartFilterShortcuts
+                panelTitle={title}
+                groups={[
+                  unitShortcutGroup(rows, units),
+                  {
+                    label: "Localizado",
+                    options: LOCATION_SERIES.flatMap((s) => {
+                      const patch = locationSeriesFilter(s.key);
+                      return patch ? [{ key: s.key, label: s.label, patch }] : [];
+                    }),
+                  },
+                ]}
+                filters={filters}
+                onFilter={onFilter}
+              />
+            ) : null}
+          </>
+        )
+      }
+    </Block>
+  );
+}
+
+function BondBlock({ theme, prefs, filters, filtered, wide, onFilter }: PanelCtx) {
+  const query = useDashboardByBond(filters);
+  const title = "Bens por vínculo";
+  const type = prefs.charts.bond;
+  const Chart = type === "bar" ? CategoryBarChart : PieChart;
+  return (
+    <Block
+      id="por-vinculo"
+      title={title}
+      query={query}
+      theme={theme}
+      isEmpty={(items) => items.every((item) => item.value === 0)}
+      emptyTitle="Nenhum bem para classificar"
+      emptyDescription="Não há bens nas unidades visíveis para o seu perfil."
+      skeleton={chartPlaceholder("Carregando bens por vínculo")}
+      wide={wide}
+      filtered={filtered}
+      {...panelControls(prefs, "bond", title, theme)}
+    >
+      {(items) => {
+        if (prefs.status === "loading") return PREFS_LOADING;
+        const selected = items.find((item) => isPatchApplied(filters, bondFilter(item.id)))?.id ?? null;
+        return (
+          <ChartSwap type={type}>
+            <Chart
+              kind={type}
+              title="Quantidade de bens por vínculo"
+              description="Vínculo informado na planilha (até 8; o restante em “Outros”)."
+              data={buildLabeledData(items)}
+              valueLabel="Bens"
+              valueFormatter={formatInt}
+              selectedKey={selected}
+              onSelectKey={
+                onFilter
+                  ? (key) => {
+                      const target = key ?? selected;
+                      const patch = target ? bondFilter(target) : null;
+                      if (patch) onFilter(patch);
+                    }
+                  : undefined
+              }
+              isSelectableKey={(key) => bondFilter(key) !== null}
+              selectActionLabel="Filtrar por vínculo:"
+              theme={theme}
+              className="border-0 p-4 sm:p-5"
+            />
+          </ChartSwap>
+        );
+      }}
+    </Block>
+  );
+}
+
+function roomRows(items: LabeledCount[]): LabeledCount[] {
+  return items.filter((item) => item.value > 0); // mesma regra de buildRoomData (índices r0, r1...)
+}
+
+function RoomBlock({ theme, prefs, filters, filtered, wide, onFilter }: PanelCtx) {
+  const query = useDashboardByRoom(filters);
+  const title = "Bens por sala";
+  const type = prefs.charts.rooms;
+  const Chart = type === "bar" ? AnimatedGroupedBarChart : AnimatedHorizontalBarChart;
+  return (
+    <Block
+      id="por-sala"
+      title={title}
+      query={query}
+      theme={theme}
+      isEmpty={(items) => items.every((item) => item.value === 0)}
+      emptyTitle="Nenhum bem para classificar"
+      emptyDescription="Não há bens nas unidades visíveis para o seu perfil."
+      skeleton={chartPlaceholder("Carregando bens por sala")}
+      wide={wide}
+      filtered={filtered}
+      {...panelControls(prefs, "rooms", title, theme)}
+    >
+      {(items) => {
+        if (prefs.status === "loading") return PREFS_LOADING;
+        const rows = roomRows(items);
+        return (
+          <>
+            <ChartSwap type={type}>
+              <Chart
+                title="Quantidade de bens por sala"
+                description="Até 15 salas; o restante em “Outras” e os bens sem sala à parte."
+                data={buildRoomData(items)}
+                valueFormatter={formatInt}
+                kindLabel={type === "bar" ? "Gráfico de barras verticais" : undefined}
+                theme={theme}
+                className="border-0 p-4 sm:p-5"
+                onMarkClick={
+                  onFilter
+                    ? (categoryKey) => {
+                        const item = rows[categoryIndex(categoryKey)];
+                        const patch = item ? roomFilter(item.id) : null;
+                        if (patch) onFilter(patch);
+                      }
+                    : undefined
+                }
+              />
+            </ChartSwap>
+            {onFilter ? (
+              <ChartFilterShortcuts
+                panelTitle={title}
+                groups={[
+                  {
+                    label: "Sala",
+                    options: rows.flatMap((item, i) => {
+                      const patch = roomFilter(item.id);
+                      return patch ? [{ key: `r${i}`, label: item.label, patch }] : [];
+                    }),
+                  },
+                ]}
+                filters={filters}
+                onFilter={onFilter}
+              />
+            ) : null}
+          </>
+        );
+      }}
+    </Block>
+  );
+}
+
+/** Grade de cartões com números do backend (sem gráfico). */
+function CountCards({ label, stats, theme }: { label: string; stats: DashboardStat[]; theme: ChartThemeName }) {
+  return (
+    <ul aria-label={label} className="m-0 grid list-none grid-cols-2 gap-3 p-4 sm:p-5">
+      {stats.map((stat) => (
+        <li key={stat.id} className="min-w-0">
+          <StatCard stat={stat} theme={theme} className="h-full rounded-cards p-3 sm:p-5" />
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function pendingStats(data: RegistrationPending): DashboardStat[] {
+  return [
+    { id: "sem-responsavel", label: "Sem responsável", value: data.sem_responsavel },
+    { id: "sem-sala", label: "Sem sala", value: data.sem_sala },
+    { id: "ociosos", label: "Ociosos", value: data.ociosos, description: "Vínculo “Ocioso”" },
+    { id: "pendencia-nao-localizados", label: "Não localizados", value: data.nao_localizados },
+  ];
+}
+
+function inventoryStats(data: InventoryStatus): DashboardStat[] {
+  return [
+    { id: "conferidos", label: "Conferidos", value: data.conferidos, description: "Com conferência em inventário" },
+    { id: "nao-conferidos", label: "Não conferidos", value: data.nao_conferidos, description: "Sem nenhuma conferência" },
+    { id: "encontrados", label: "Encontrados", value: data.encontrados, description: "Na conferência mais recente" },
+    {
+      id: "nao-encontrados",
+      label: "Não encontrados",
+      value: data.nao_encontrados,
+      description: "Na conferência mais recente",
+    },
+  ];
+}
+
+function PendingBlock({ theme, filters, wide }: PanelCtx) {
+  const query = useDashboardPending(filters);
+  return (
+    <Block
+      id="pendencias-cadastro"
+      title="Pendências de cadastro"
+      query={query}
+      theme={theme}
+      isEmpty={() => false}
+      emptyTitle=""
+      emptyDescription=""
+      skeleton={<LoadingSkeleton variant="cards" count={4} label="Carregando pendências de cadastro" />}
+      wide={wide}
+    >
+      {(data) => (
+        <>
+          <CountCards label="Pendências de cadastro" stats={pendingStats(data)} theme={theme} />
+          <p className={cn("px-4 pb-4 text-body-sm sm:px-5", chartClasses(theme).legendValue)}>
+            Um mesmo bem pode aparecer em mais de uma pendência.
+          </p>
+        </>
+      )}
+    </Block>
+  );
+}
+
+function InventoryBlock({ theme, filters, wide }: PanelCtx) {
+  const query = useDashboardInventory(filters);
+  return (
+    <Block
+      id="inventario"
+      title="Inventário"
+      query={query}
+      theme={theme}
+      isEmpty={() => false}
+      emptyTitle=""
+      emptyDescription=""
+      skeleton={<LoadingSkeleton variant="cards" count={4} label="Carregando inventário" />}
+      wide={wide}
+    >
+      {(data) => <CountCards label="Situação no inventário" stats={inventoryStats(data)} theme={theme} />}
+    </Block>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Composição (ordem e visibilidade confirmadas pelo backend)
+// ---------------------------------------------------------------------------
+
+interface DashboardPanelsProps {
+  theme?: ChartThemeName;
+  className?: string;
+  /** Filtros da URL (já validados no parse); vão para todas as consultas. */
+  filters?: DashboardFilters;
+  /** Clique num gráfico → filtro da URL (só na tela; o relatório não recebe). */
+  onFilter?: (patch: FilterPatch) => void;
+}
+
+export function DashboardPanels(props: DashboardPanelsProps) {
+  return (
+    <ChartFocusProvider>
+      <PanelsGrid {...props} />
+    </ChartFocusProvider>
+  );
+}
+
+function PanelsGrid({ theme = "screen", className, filters = NO_DASHBOARD_FILTERS, onFilter: onFilterProp }: DashboardPanelsProps) {
+  const focus = useChartFocus();
+  const onFilter = useCallback(
+    (patch: FilterPatch) => {
+      focus?.remember();
+      onFilterProp?.(patch);
+    },
+    [focus, onFilterProp],
+  );
+  const interactive = theme === "screen" && !!onFilterProp;
+  const layoutPrefs = useDashboardLayoutPrefs();
   const chartPrefs = useDashboardChartPrefs();
+  const unitQuery = useDashboardByUnit(filters);
+  const model = useMemo(() => (unitQuery.data ? buildUnitModel(unitQuery.data) : undefined), [unitQuery.data]);
+  // Mesma consulta (e cache) do seletor "Unidade de uso": sigla → id no clique.
+  const access = useLookupAccess();
+  const accessibleUnits = useAccessibleUnits(access.ready && interactive);
+  const filtered = countDashboardFilters(filters) > 0;
+
+  if (layoutPrefs.status === "loading") {
+    return (
+      <div data-dashboard-panels className={cn("flex flex-col gap-4", className)}>
+        <LoadingSkeleton variant="cards" count={4} label="Carregando painéis do dashboard" />
+      </div>
+    );
+  }
+
+  const ids = visiblePanels(layoutPrefs.layout);
+  const spans = panelSpans(ids);
+  const ctxFor = (id: DashboardPanelId): PanelCtx => ({
+    theme,
+    filters,
+    filtered,
+    prefs: chartPrefs,
+    wide: spans[id] ?? false,
+    onFilter: interactive ? onFilter : undefined,
+    units: accessibleUnits.data?.units,
+  });
+
+  const render = (id: DashboardPanelId): ReactNode => {
+    const ctx = ctxFor(id);
+    switch (id) {
+      case "kpis":
+        return <KpiBlock {...ctx} />;
+      case "units":
+        return <UnitChartBlock {...ctx} model={model} query={unitQuery} />;
+      case "status":
+        return <SituationBlock {...ctx} />;
+      case "monthly":
+        return <MonthlyBlock {...ctx} />;
+      case "location":
+        return <UnitLocationBlock {...ctx} />;
+      case "bond":
+        return <BondBlock {...ctx} />;
+      case "pending":
+        return <PendingBlock {...ctx} />;
+      case "rooms":
+        return <RoomBlock {...ctx} />;
+      case "inventory":
+        return <InventoryBlock {...ctx} />;
+    }
+  };
 
   return (
-    <div data-dashboard-panels className={cn("grid grid-cols-1 gap-4 lg:grid-cols-2 lg:gap-6", className)}>
-      <KpiBlock theme={theme} />
-      <UnitChartBlock theme={theme} model={model} query={unitQuery} prefs={chartPrefs} />
-      <SituationBlock theme={theme} prefs={chartPrefs} />
-      <MonthlyBlock theme={theme} prefs={chartPrefs} />
+    <div
+      data-dashboard-panels
+      data-dashboard-order={ids.join(",")}
+      className={cn("grid grid-cols-1 gap-4 lg:grid-cols-2 lg:gap-6", className)}
+    >
+      {ids.map((id) => (
+        <Fragment key={id}>{render(id)}</Fragment>
+      ))}
       <Block
         id="detalhamento"
         title="Detalhamento por unidade"
@@ -531,7 +1019,8 @@ export function DashboardPanels({ theme = "screen", className }: { theme?: Chart
         emptyTitle="Nenhuma unidade com bens"
         emptyDescription="Não há unidades com bens para o seu perfil. Nenhum valor é exibido até que existam dados."
         skeleton={<LoadingSkeleton variant="table" count={4} columns={4} label="Carregando detalhamento por unidade" />}
-        className="lg:col-span-2"
+        wide
+        filtered={filtered}
       >
         {(rows) => model && <UnitTable rows={rows} model={model} theme={theme} />}
       </Block>

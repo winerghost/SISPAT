@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 
-import { defaultDashboard, emptyDashboard } from "./support/dashboard-mocks";
+import { EMPTY_BLOCKS, KPI_CARDS, defaultDashboard, emptyDashboard } from "./support/dashboard-mocks";
 import {
   installMocks,
   seedSession,
@@ -13,7 +13,9 @@ import { expectDashboardLoaded } from "./support/screens";
 
 // =============================================================================
 // /dashboard e /dashboard/relatorio. Contrato mockado:
-// GET /api/v1/dashboard/{resumo,por-unidade,por-situacao,aquisicoes-mensais}.
+// GET /api/v1/dashboard/{resumo,por-unidade,por-situacao,aquisicoes-mensais,
+// localizacao-por-unidade,por-vinculo,pendencias-cadastro,por-sala,inventario}.
+// (Filtros na URL: dashboard-filters-functional.spec.ts.)
 // Cobre números exatos do backend, variação, indicadores indisponíveis (nunca
 // números inventados), gráficos acessíveis, estados por bloco, validação por
 // allowlist, texto puro, navegação e impressão.
@@ -37,10 +39,12 @@ test.describe("dashboard", () => {
     await open(page, "/dashboard");
     await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
     const kpis = block(page, "indicadores");
-    await expect(kpis.locator("[data-stat-card]")).toHaveCount(4);
+    await expect(kpis.locator("[data-stat-card]")).toHaveCount(KPI_CARDS);
     await expect(kpis.locator("[data-stat-card=total-bens]")).toContainText(/1\.?234/);
     await expect(kpis.locator("[data-stat-card=total-bens]")).toContainText("37 novos nos últimos 30 dias");
     await expect(kpis.locator("[data-stat-card=localizados]")).toContainText(/1\.?100/);
+    await expect(kpis.locator("[data-stat-card=nao-localizados]")).toContainText("90");
+    await expect(kpis.locator("[data-stat-card=nao-localizados]")).toContainText("44 com localização desconhecida");
     await expect(kpis.locator("[data-stat-card=movimentacoes-pendentes]")).toContainText("12");
     await expect(kpis.locator("[data-stat-card=inventarios-abertos]")).toContainText("2");
   });
@@ -72,7 +76,7 @@ test.describe("dashboard", () => {
     const base = defaultDashboard().resumo;
     const resumo = { ...base, variacao: { ...base.variacao, total_bens: null } };
     await open(page, "/dashboard", { role: "USER", dashboard: { resumo } });
-    await expect(block(page, "indicadores").locator("[data-stat-card]")).toHaveCount(4);
+    await expect(block(page, "indicadores").locator("[data-stat-card]")).toHaveCount(KPI_CARDS);
     await expect(page.locator("[data-stat-delta]")).toHaveCount(0);
   });
 
@@ -148,10 +152,14 @@ test.describe("dashboard", () => {
 
   test("sem bens: estados vazios honestos, sem gráficos nem números de exemplo", async ({ page }) => {
     await open(page, "/dashboard", { role: "RH", dashboard: emptyDashboard() });
-    await expect(page.locator("[data-dashboard-empty]")).toHaveCount(4, { timeout: 15_000 });
+    await expect(page.locator("[data-dashboard-empty]")).toHaveCount(EMPTY_BLOCKS, { timeout: 15_000 });
     await expect(block(page, "por-unidade")).toContainText("Nenhum bem cadastrado");
     await expect(block(page, "por-situacao")).toContainText("Nenhum bem para classificar");
     await expect(block(page, "aquisicoes-mensais")).toContainText("Nenhuma aquisição no período");
+    await expect(block(page, "por-vinculo")).toContainText("Nenhum bem para classificar");
+    // Pendências e inventário: zeros REAIS do backend (cartões, sem gráfico).
+    await expect(block(page, "pendencias-cadastro").locator("[data-stat-card=sem-sala]")).toContainText("0");
+    await expect(block(page, "inventario").locator("[data-stat-card=conferidos]")).toContainText("0");
     await expect(page.locator("[data-chart-surface]")).toHaveCount(0);
     await expect(page.locator("figure")).toHaveCount(0);
     // KPIs reais (zeros do backend) continuam exibidos; sem variação.
@@ -165,7 +173,7 @@ test.describe("dashboard", () => {
     const retry = failed.getByRole("button", { name: "Tentar novamente" });
     await expect(retry).toBeVisible({ timeout: 20_000 });
     await expect(failed).not.toContainText("SISPAT_BACKEND_MSG");
-    await expect(block(page, "indicadores").locator("[data-stat-card]")).toHaveCount(4);
+    await expect(block(page, "indicadores").locator("[data-stat-card]")).toHaveCount(KPI_CARDS);
     await expect(block(page, "por-unidade").locator("figure")).toBeVisible({ timeout: 20_000 });
 
     state.dashboardStatus = {};
@@ -183,14 +191,14 @@ test.describe("dashboard", () => {
     await expect(page.locator("main")).not.toContainText("999");
   });
 
-  test("KPIs em 2 colunas no celular e 4 no desktop", async ({ page }) => {
+  test("KPIs em 2 colunas no celular e 5 (uma linha) no desktop largo", async ({ page }) => {
     await page.setViewportSize({ width: 375, height: 800 });
     await open(page, "/dashboard");
     const cards = block(page, "indicadores").locator("[data-stat-card]");
-    await expect(cards).toHaveCount(4);
+    await expect(cards).toHaveCount(KPI_CARDS);
     const distinctTops = async () =>
       new Set(await cards.evaluateAll((els) => els.map((el) => Math.round(el.getBoundingClientRect().top)))).size;
-    expect(await distinctTops()).toBe(2);
+    expect(await distinctTops()).toBe(3);
     await page.setViewportSize({ width: 1366, height: 800 });
     await expect.poll(distinctTops).toBe(1);
   });
@@ -225,7 +233,7 @@ test.describe("navegação", () => {
     test(`${role}: acessa /dashboard`, async ({ page }) => {
       await open(page, "/dashboard", { role });
       await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
-      await expect(block(page, "indicadores").locator("[data-stat-card]")).toHaveCount(4);
+      await expect(block(page, "indicadores").locator("[data-stat-card]")).toHaveCount(KPI_CARDS);
     });
   }
 });

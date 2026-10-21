@@ -15,7 +15,10 @@ resolve vínculos CONTRA O BANCO, somente leitura e sem criar nada:
   ``normalized_values['usuario_person_id']`` (``assets.assigned_user_id``
   referencia contas do sistema e permanece NULL).
 - 1ª ``RESPONSAVEL`` (``Ocioso``/``Servidor``...) é só situação
-  (``vinculo_situacao``): NUNCA é procurada como pessoa.
+  (``vinculo_situacao``): NUNCA é procurada como pessoa. Defesa em
+  profundidade (SEC-VF-01 item 2 / SEC-VF-04, ``screen_bond_status``): se
+  coincidir com a 2ª ``RESPONSAVEL`` da linha ou com uma pessoa ativa, ou se
+  for um valor reservado ``__...__``, NÃO é gravada (aviso na prévia).
 
 Pendências NÃO bloqueiam a confirmação de itens válidos.
 """
@@ -30,7 +33,12 @@ from sqlalchemy.orm import Session
 from app.models.people import ResponsiblePerson
 from app.models.units import Room, Unit, UnitAlias
 from app.services.catalog_normalizer import clean_text, is_placeholder_person, room_key
-from app.services.import_normalizer import person_match_key
+from app.services.import_normalizer import (
+    bond_status_text,
+    is_reserved_bond_value,
+    normalize_bond_status,
+    person_match_key,
+)
 
 # Códigos de pendência (contadores da prévia).
 UNIT_NO_ALIAS = "unidade_sem_alias"
@@ -71,9 +79,60 @@ _MESSAGES = {
 }
 _BLOCKING = (UNIT_NO_ALIAS, UNIT_INACTIVE, UNIT_MISSING)
 
+# Vínculo (1ª RESPONSAVEL) descartado na prévia/confirmação (aviso, não bloqueia).
+# Não entram em PENDING_CODES: são avisos por linha (`validation_errors`), não
+# pendências de cadastro. As mensagens nunca ecoam o valor (pode ser um nome).
+BOND_RESERVED = "vinculo_valor_reservado"
+BOND_IS_ROW_PERSON = "vinculo_igual_pessoa_da_linha"
+BOND_IS_KNOWN_PERSON = "vinculo_igual_pessoa_cadastrada"
+BOND_DISCARD_CODES = (BOND_RESERVED, BOND_IS_ROW_PERSON, BOND_IS_KNOWN_PERSON)
+_MESSAGES.update({
+    BOND_RESERVED: (
+        "1ª RESPONSAVEL (vínculo) usa um valor reservado do sistema "
+        "(__none__/__outros__); vínculo tratado como vazio"
+    ),
+    BOND_IS_ROW_PERSON: (
+        "1ª RESPONSAVEL (vínculo) é igual à 2ª RESPONSAVEL (pessoa) da linha; "
+        "vínculo não será gravado"
+    ),
+    BOND_IS_KNOWN_PERSON: (
+        "1ª RESPONSAVEL (vínculo) coincide com o nome de uma pessoa cadastrada; "
+        "vínculo não será gravado"
+    ),
+})
+
 
 def message_for(code: str) -> str:
     return _MESSAGES.get(code, code)
+
+
+def screen_bond_status(
+    raw: Any, *, row_person: Any, row_person_key: Any, person_keys: Any
+) -> tuple[str | None, str | None]:
+    """Valor a gravar em ``assets.bond_status`` + código de descarte (ou None).
+
+    - Sempre via ``normalize_bond_status`` (regra única de gravação).
+    - SEC-VF-04: valor reservado ``__...__`` -> (None, BOND_RESERVED).
+    - SEC-VF-01 item 2: se a chave de pessoa do vínculo for igual à da 2ª
+      ``RESPONSAVEL`` da linha ou à de uma pessoa ATIVA (``person_keys``, um
+      conjunto carregado UMA vez por operação), não grava (None + código).
+      Marcadores (``is_placeholder_person``, ex. ``Ocioso``) continuam válidos.
+    """
+    if is_reserved_bond_value(raw):
+        return None, BOND_RESERVED
+    bond = normalize_bond_status(raw)
+    if bond is None:
+        return None, None
+    if is_placeholder_person(bond, None):
+        return bond, None
+    keys = {person_match_key(bond_status_text(raw)), person_match_key(bond)} - {None}
+    row_key = row_person_key if isinstance(row_person_key, str) and row_person_key else None
+    row_key = row_key or person_match_key(row_person if isinstance(row_person, str) else None)
+    if row_key and row_key in keys:
+        return None, BOND_IS_ROW_PERSON
+    if any(key in person_keys for key in keys):
+        return None, BOND_IS_KNOWN_PERSON
+    return bond, None
 
 
 @dataclass
@@ -124,6 +183,16 @@ class ImportReferences:
                 self._people_by_key.setdefault(key, []).append(person.id)
             if person.email:
                 self._people_by_email.setdefault(person.email.strip().lower(), []).append(person.id)
+
+    def screen_bond(self, normalized: dict[str, Any]) -> tuple[str | None, str | None]:
+        """Vínculo a gravar para a linha (ver `screen_bond_status`), usando as
+        chaves das pessoas ativas já carregadas neste objeto (sem consulta)."""
+        return screen_bond_status(
+            normalized.get("vinculo_situacao"),
+            row_person=normalized.get("responsavel_pessoa"),
+            row_person_key=normalized.get("responsavel_pessoa_key"),
+            person_keys=self._people_by_key,
+        )
 
     def resolve(self, *, unit_sigla: Any, normalized: dict[str, Any]) -> LinkResolution:
         out = LinkResolution()
