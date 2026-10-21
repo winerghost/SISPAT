@@ -191,6 +191,11 @@ EXPECTED_POLICY: dict[tuple[str, str], tuple[str, str | None]] = {
     ("/api/v1/assets/<uuid:asset_id>/restore", "POST"): (ADMIN, "assets.delete"),
     # --- Movimentações: leitura via `assets.read` (não há `movements.read`); solicitar/
     # cancelar compartilhados ADM/USER; aprovar/rejeitar só ADM + AAL2.
+    # --- Relatórios/exportações: catálogo (`reports.read`) e arquivo (`exports.create`) ---
+    ("/api/v1/reports", "GET"): (READ, "reports.read"),
+    ("/api/v1/reports", "HEAD"): (READ, "reports.read"),
+    ("/api/v1/reports/<kind>/export", "GET"): (READ, "exports.create"),
+    ("/api/v1/reports/<kind>/export", "HEAD"): (READ, "exports.create"),
     ("/api/v1/movements", "GET"): (READ, "assets.read"),
     ("/api/v1/movements", "HEAD"): (READ, "assets.read"),
     ("/api/v1/movements/<uuid:movement_id>", "GET"): (READ, "assets.read"),

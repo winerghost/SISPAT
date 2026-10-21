@@ -188,6 +188,10 @@ def _result_expr():
     )
 
 
+# Expressão pública do resultado derivado (reutilizada pelos relatórios).
+item_result_expr = _result_expr
+
+
 class InventoryService:
     def __init__(self, db: Session, *, request_id: str | None = None) -> None:
         self._db = db

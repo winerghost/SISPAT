@@ -23,6 +23,7 @@ from app.api.v1.inventories import inventories_bp
 from app.api.v1.locations import locations_bp
 from app.api.v1.me import me_bp
 from app.api.v1.movements import movements_bp
+from app.api.v1.reports import reports_bp
 from app.api.v1.responsible_people import responsible_people_bp
 from app.api.v1.rooms import rooms_bp
 from app.api.v1.security import security_bp
@@ -44,6 +45,7 @@ api_v1_bp.register_blueprint(inventories_bp)
 api_v1_bp.register_blueprint(locations_bp)
 api_v1_bp.register_blueprint(me_bp)
 api_v1_bp.register_blueprint(movements_bp)
+api_v1_bp.register_blueprint(reports_bp)
 api_v1_bp.register_blueprint(responsible_people_bp)
 api_v1_bp.register_blueprint(rooms_bp)
 api_v1_bp.register_blueprint(security_bp)

@@ -5,10 +5,8 @@ import { installMocks, seedSession, waitForHydration } from "./support/mocks";
 import { VIEWPORTS, waitForAnimations } from "./support/screens";
 
 // =============================================================================
-// Dashboard (/) — estado vazio honesto (sem números fictícios), entrada
-// nomeada sfDashboardFrameIn aplicada UMA vez, reduced motion, overflow nas 9
-// resoluções, axe e console. Os componentes de gráfico (AnimatedChart,
-// StatCard com dados) não têm página com dados reais — não testados aqui.
+// Home (/) — sem texto de fase antiga nem painel falso, atalho para /dashboard,
+// entrada sequencial, reduced motion, overflow nas 9 resoluções, axe e console.
 // =============================================================================
 
 async function openDashboard(page: Page): Promise<void> {
@@ -20,35 +18,15 @@ async function openDashboard(page: Page): Promise<void> {
 }
 
 test.describe("dashboard", () => {
-  test("estado vazio honesto: nenhum número, skeleton, gráfico ou filtro falso", async ({ page }) => {
+  test("Home sem texto de fase antiga nem painel falso; atalho para /dashboard", async ({ page }) => {
     await openDashboard(page);
-    const frame = page.getByRole("region", { name: "Painel patrimonial" });
-    await expect(frame).toBeVisible();
-    await expect(frame.getByRole("heading", { name: "Indicadores ainda indisponíveis" })).toBeVisible();
-    await expect(frame).toContainText("Aguardando dados");
-    await expect(frame).toContainText("não usa dados de demonstração");
-
-    const text = (await frame.innerText()) ?? "";
-    expect(text, "nenhum dígito (número fictício) no painel").not.toMatch(/\d/);
-    await expect(frame.locator("[data-stat-card]")).toHaveCount(0);
-    await expect(frame.locator("[data-chart-surface], figure")).toHaveCount(0);
-    await expect(frame.getByRole("status")).toHaveCount(0);
-    await expect(frame.getByRole("group", { name: "Período" })).toHaveCount(0);
-  });
-
-  test("sfDashboardFrameIn aplicada uma única vez e termina visível", async ({ page }) => {
-    await openDashboard(page);
-    const names = await page.evaluate(() =>
-      Array.from(document.querySelectorAll("*")).filter(
-        (el) => getComputedStyle(el).animationName === "sfDashboardFrameIn",
-      ).length,
-    );
-    expect(names).toBe(1);
-    await waitForAnimations(page);
-    const frame = page.locator("[data-dashboard-frame]");
-    await expect
-      .poll(() => frame.evaluate((el) => getComputedStyle(el).opacity))
-      .toBe("1");
+    await expect(page.getByText("Fase 1 em andamento")).toHaveCount(0);
+    await expect(page.getByText("ainda não exibem dados reais")).toHaveCount(0);
+    await expect(page.getByRole("region", { name: "Painel patrimonial" })).toHaveCount(0);
+    await expect(page.locator("[data-dashboard-frame]")).toHaveCount(0);
+    const link = page.getByRole("main").getByRole("link", { name: "Abrir o Dashboard" });
+    await expect(link).toBeVisible();
+    await expect(link).toHaveAttribute("href", "/dashboard");
   });
 
   test("entrada sequencial em navegação client-side termina estável", async ({ page }) => {
@@ -72,12 +50,15 @@ test.describe("dashboard", () => {
       .toBe("1");
   });
 
-  test("reduced motion: painel visível sem deslocamento", async ({ page }) => {
+  test("reduced motion: introdução visível sem deslocamento", async ({ page }) => {
     await page.emulateMedia({ reducedMotion: "reduce" });
     await openDashboard(page);
     const style = await page
-      .locator("[data-dashboard-frame]")
-      .evaluate((el) => ({ opacity: getComputedStyle(el).opacity, transform: getComputedStyle(el).transform }));
+      .getByRole("heading", { level: 1, name: "SISPAT-AGU" })
+      .evaluate((el) => ({
+        opacity: getComputedStyle(el.parentElement!).opacity,
+        transform: getComputedStyle(el.parentElement!).transform,
+      }));
     expect(style.opacity).toBe("1");
     expect(["none", "matrix(1, 0, 0, 1, 0, 0)"]).toContain(style.transform);
   });
@@ -92,7 +73,7 @@ test.describe("dashboard", () => {
         return {
           doc: document.documentElement.scrollWidth,
           main: main.scrollWidth - main.clientWidth,
-          frameRight: document.querySelector("[data-dashboard-frame]")!.getBoundingClientRect().right,
+          frameRight: document.querySelector("main h1")!.getBoundingClientRect().right,
         };
       });
       expect(m.doc, `${viewport.width}: documento`).toBeLessThanOrEqual(viewport.width);

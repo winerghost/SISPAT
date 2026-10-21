@@ -166,8 +166,25 @@ Nenhum item do menu leva a 404 (status por módulo em `docs/ux/MENU_MODULOS.md`)
   `src/components/features/inventories/` e `src/lib/inventories-api.ts`; testes em
   `e2e/inventories-functional.spec.ts`, mock `e2e/support/inventory-mocks.ts` e telas
   `inventarios-*` de `e2e/support/screens.ts`.
-- **Sem backend:** `/relatorios` e,
-  só ADM, `/administracao/{perfis-permissoes,vinculos-unidades,auditoria,integracoes,
+- **Auditoria (real, só ADM):** `/administracao/auditoria` — `GET /api/v1/admin/audit-logs`
+  (filtros e janela máx. 90 dias validados no backend). Código em
+  `src/components/features/audit/`, `src/lib/audit-api.ts` e `src/lib/audit-filters.ts`;
+  testes em `e2e/audit-admin-functional.spec.ts` e `e2e/support/audit-mocks.ts`.
+- **Vínculos de unidades (real, só ADM, somente leitura):** `/administracao/vinculos-unidades`
+  — `GET /api/v1/admin/unit-access`; sem edição (vínculos se alteram em Usuários). Código em
+  `features/admin-access/unit-access-view.tsx` e `src/lib/unit-access-api.ts`; testes em
+  `e2e/unit-access-functional.spec.ts` e `e2e/support/unit-access-mocks.ts`.
+- **Relatórios (real, todos os perfis conforme `reports.read`/`exports.create`):** `/relatorios`
+  — catálogo `GET /api/v1/reports` e exportação CSV/XLSX em
+  `GET /api/v1/reports/<kind>/export` (contrato em `docs/architecture/reports-api.md`).
+  O download usa `requestFile` de `src/lib/api-client.ts`; API em `src/lib/reports-api.ts`;
+  testes em `e2e/reports-functional.spec.ts` e `e2e/support/reports-mocks.ts`. A
+  exportação ainda não está nos menus de Patrimônios, Movimentações e Inventários.
+- **Home (`/`):** sem selo "Fase 1"; traz o atalho `DashboardShortcut`
+  (`features/dashboard/dashboard-shortcut.tsx`) para `/dashboard`.
+- **Menu:** itens sem API usam o campo `comingSoon` de `nav-items.ts` e mostram o selo
+  "Em breve" (Integrações e Configurações do Sistema).
+- **Ainda sem backend (stubs):** só ADM, `/administracao/{integracoes,
   configuracoes-sistema}` usam `ModuleStatePanel` ("Módulo em preparação": o que
   fará, próxima entrega, link de volta; nenhum número/tabela). Textos em
   `features/modules/module-catalog.ts`.

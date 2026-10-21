@@ -1,8 +1,9 @@
 // =============================================================================
-// Módulos do menu que ainda NÃO têm backend. Fonte única do texto honesto do
-// `ModuleStatePanel` (e do docs/ux/MENU_MODULOS.md). Nada aqui é dado do
-// sistema: são descrições do que o módulo fará. Sem números, sem datas, sem
-// promessas de prazo.
+// Módulos do menu cuja tela real depende de API própria no backend. Fonte única
+// do texto honesto do `ModuleStatePanel` (e do docs/ux/MENU_MODULOS.md). Nada
+// aqui é dado do sistema: são descrições do que o módulo fará. Sem números, sem
+// datas, sem promessas de prazo. Quando a tela real de um módulo é entregue, a
+// página dele deixa de usar este catálogo e a entrada fica só como referência.
 // =============================================================================
 
 export type ModuleKey =
@@ -29,7 +30,7 @@ export interface ModuleDescriptor {
 }
 
 const WAITING_API =
-  "Depende da API correspondente no backend, que ainda não foi publicada. Esta tela real substituirá este aviso quando ela existir.";
+  "Esta tela depende de uma API própria no backend. Quando ela existir, a tela real substituirá este aviso.";
 
 const ADMIN_BACK = { backHref: "/administracao/usuarios", backLabel: "Voltar para Usuários" } as const;
 const HOME_BACK = { backHref: "/", backLabel: "Voltar ao início" } as const;
@@ -59,7 +60,7 @@ export const MODULES: Record<ModuleKey, ModuleDescriptor> = {
       "Apoiar a revisão periódica de acessos por unidade.",
     ],
     nextDelivery:
-      "Hoje os vínculos são gerenciados por usuário, em Usuários. Uma visão consolidada depende de API própria no backend.",
+      "Os vínculos de cada usuário são gerenciados em Usuários. A visão consolidada por unidade é uma tela própria, entregue separadamente.",
     adminOnly: true,
     ...ADMIN_BACK,
   },
@@ -73,7 +74,7 @@ export const MODULES: Record<ModuleKey, ModuleDescriptor> = {
       "Mostrar acessos negados e alterações críticas, sem expor segredos.",
     ],
     nextDelivery:
-      "Hoje o histórico de cada usuário está na aba Histórico, em Usuários. A consulta geral depende de API própria no backend.",
+      "O histórico de cada usuário está na aba Histórico, em Usuários. A consulta geral da trilha é uma tela própria, entregue separadamente.",
     adminOnly: true,
     ...ADMIN_BACK,
   },
@@ -87,7 +88,7 @@ export const MODULES: Record<ModuleKey, ModuleDescriptor> = {
       "Apoiar o acompanhamento das sincronizações.",
     ],
     nextDelivery:
-      "A importação do Google Sheets já funciona em Importação de Dados. O painel de integrações depende de API própria no backend.",
+      "A importação do Google Sheets já funciona em Importação de Dados. O painel de integrações ainda não tem API no backend.",
     adminOnly: true,
     ...ADMIN_BACK,
   },
@@ -101,7 +102,7 @@ export const MODULES: Record<ModuleKey, ModuleDescriptor> = {
       "Registrar na auditoria cada alteração de parâmetro.",
     ],
     nextDelivery:
-      "A configuração da Inteligência Artificial já está disponível em Configurações. Os demais parâmetros dependem de API própria no backend.",
+      "A configuração da Inteligência Artificial já está disponível em Configurações. Os demais parâmetros ainda não têm API no backend.",
     adminOnly: true,
     ...ADMIN_BACK,
   },

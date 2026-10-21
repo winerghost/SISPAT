@@ -100,7 +100,7 @@ test.describe("SSR sem JavaScript: nada protegido sai do servidor", () => {
 test("FE-SSR-01: conteúdo de Server Component protegido não vai no HTML sem sessão", async ({ request }) => {
   test.fail(true, "FE-SSR-01: children Server Component do AuthGuard são serializados no payload RSC");
   const html = await (await request.get("/", { headers: { accept: "text/html" } })).text();
-  expect(html).not.toContain("Fase 1 em andamento");
+  expect(html).not.toContain("Abrir o Dashboard");
 });
 
 test.describe("toda ação na API sai autenticada", () => {

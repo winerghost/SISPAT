@@ -179,9 +179,6 @@ async function openMobileMenuIfPresent(page: Page): Promise<void> {
 /** Módulos sem backend: painel honesto, sem dados. Perfil escolhido por módulo. */
 const MODULE_SCREENS: ScreenDef[] = (
   [
-    ["relatorios", "/relatorios", "Relatórios", "RH"],
-    ["vinculos-unidades", "/administracao/vinculos-unidades", "Vínculos de Unidades", "ADM"],
-    ["auditoria", "/administracao/auditoria", "Auditoria", "ADM"],
     ["integracoes", "/administracao/integracoes", "Integrações", "ADM"],
     ["configuracoes-sistema", "/administracao/configuracoes-sistema", "Configurações do Sistema", "ADM"],
   ] as const
@@ -196,6 +193,60 @@ const MODULE_SCREENS: ScreenDef[] = (
     await expect(page.getByRole("heading", { level: 2, name: "Módulo em preparação" })).toBeVisible();
   },
 }));
+
+/** Relatórios/exportações (`GET /api/v1/reports`): catálogo + formulário gerado dele. */
+const REPORT_SCREENS: ScreenDef[] = (
+  [
+    ["ADM", "Relatórios — ADM (inclui registros excluídos)"],
+    ["USER", "Relatórios — USER"],
+    ["RH", "Relatórios — RH (sem colunas de texto livre)"],
+  ] as const
+).map(([role, title]) => ({
+  id: `relatorios-${role.toLowerCase()}`,
+  title,
+  path: "/relatorios",
+  session: { role },
+  prepare: async (page: Page) => {
+    await expect(page.getByRole("heading", { level: 1, name: "Relatórios" })).toBeVisible();
+    await expect(page.getByTestId("report-form")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Exportar CSV" })).toBeVisible();
+  },
+}));
+
+const REPORT_ERROR_SCREENS: ScreenDef[] = [
+  {
+    id: "relatorios-erro",
+    title: "Relatórios — erro ao carregar o catálogo",
+    path: "/relatorios",
+    session: { role: "USER", reports: { catalogStatus: 500 } },
+    prepare: async (page) => {
+      await expect(page.getByRole("button", { name: "Tentar novamente" })).toBeVisible({ timeout: 15_000 });
+    },
+  },
+  {
+    id: "relatorios-limite",
+    title: "Relatórios — exportação acima do limite (413)",
+    path: "/relatorios",
+    session: { role: "USER" },
+    prepare: async (page) => {
+      await page.getByLabel("Busca (número ou descrição)").fill("limite");
+      await page.getByRole("button", { name: "Exportar CSV" }).click();
+      await expect(page.getByTestId("report-outcome")).toContainText("Refine os filtros");
+      // Volta ao topo: o cabeçalho fixo não deve cobrir controles rolados pelo clique.
+      await page.getByRole("main").evaluate((el) => el.scrollTo(0, 0));
+      await page.evaluate(() => window.scrollTo(0, 0));
+    },
+  },
+  {
+    id: "relatorios-mfa",
+    title: "Relatórios — ADM sem MFA (AAL1)",
+    path: "/relatorios",
+    session: { role: "ADM", aal: "aal1" },
+    prepare: async (page) => {
+      await expect(page.getByTestId("access-restricted")).toBeVisible();
+    },
+  },
+];
 
 /** Módulo administrativo aberto por quem não é ADM: nega por padrão. */
 const MODULE_DENIED_SCREEN: ScreenDef = {
@@ -495,6 +546,113 @@ export const SCREENS: ScreenDef[] = [
     session: { role: "USER" },
     prepare: async (page) => {
       await expect(page.getByTestId("access-restricted")).toBeVisible();
+    },
+  },
+  {
+    id: "vinculos-unidades",
+    title: "Vínculos de Unidades — lista paginada (ADM)",
+    path: "/administracao/vinculos-unidades",
+    session: { role: "ADM" },
+    prepare: async (page) => {
+      await expect(page.getByRole("heading", { level: 1, name: "Vínculos de Unidades" })).toBeVisible();
+      await expect(page.getByRole("table", { name: "Vínculos de usuários com unidades" })).toBeVisible();
+      await expect(page.getByText("Página 1 de 2 · 30 usuário(s)")).toBeVisible();
+    },
+  },
+  {
+    id: "vinculos-unidades-filtros",
+    title: "Vínculos de Unidades — filtros pela URL (perfil RH, inativos)",
+    path: "/administracao/vinculos-unidades?role=RH&active=false&sort=-name",
+    session: { role: "ADM" },
+    prepare: async (page) => {
+      await expect(page.getByRole("table", { name: "Vínculos de usuários com unidades" })).toBeVisible();
+      await expect(page.getByRole("button", { name: "Limpar filtros" })).toBeVisible();
+    },
+  },
+  {
+    id: "vinculos-unidades-vazio",
+    title: "Vínculos de Unidades — filtro sem resultado",
+    path: "/administracao/vinculos-unidades",
+    session: { role: "ADM", unitAccess: [] },
+    prepare: async (page) => {
+      await expect(page.getByText("Nenhum vínculo encontrado.")).toBeVisible();
+    },
+  },
+  {
+    id: "vinculos-unidades-erro",
+    title: "Vínculos de Unidades — erro com nova tentativa",
+    path: "/administracao/vinculos-unidades",
+    session: { role: "ADM", unitAccessStatus: 500 },
+    prepare: async (page) => {
+      await expect(page.getByRole("button", { name: "Tentar novamente" })).toBeVisible({ timeout: 15_000 });
+    },
+  },
+  {
+    id: "vinculos-unidades-negado",
+    title: "Vínculos de Unidades — acesso restrito (USER)",
+    path: "/administracao/vinculos-unidades",
+    session: { role: "USER" },
+    prepare: async (page) => {
+      await expect(page.getByTestId("access-restricted")).toBeVisible();
+    },
+  },
+  {
+    id: "auditoria",
+    title: "Auditoria — lista paginada (ADM)",
+    path: "/administracao/auditoria",
+    session: { role: "ADM" },
+    prepare: async (page) => {
+      await expect(page.getByRole("heading", { level: 1, name: "Auditoria" })).toBeVisible();
+      await expect(page.getByRole("table", { name: "Registros de auditoria" })).toBeVisible();
+      await expect(page.getByText("Página 1 de 2 · 30 registro(s)")).toBeVisible();
+    },
+  },
+  {
+    id: "auditoria-filtros",
+    title: "Auditoria — filtros aplicados na URL",
+    path: "/administracao/auditoria?result=FALHA&severity=high&entity_type=security_event",
+    session: { role: "ADM" },
+    prepare: async (page) => {
+      await expect(page.getByRole("table", { name: "Registros de auditoria" })).toBeVisible();
+      await expect(page.getByRole("button", { name: "Limpar filtros" })).toBeVisible();
+    },
+  },
+  {
+    id: "auditoria-detalhe",
+    title: "Auditoria — painel de detalhe (alterações)",
+    path: "/administracao/auditoria?id=a0000000-0000-4000-8000-000000000001",
+    session: { role: "ADM" },
+    prepare: async (page) => {
+      await expect(page.getByTestId("audit-detail")).toBeVisible();
+      await expect(page.getByTestId("audit-changes")).toBeVisible();
+    },
+  },
+  {
+    id: "auditoria-detalhe-seguranca",
+    title: "Auditoria — detalhe de evento de segurança (requisição, rede)",
+    path: "/administracao/auditoria?id=a0000000-0000-4000-8000-000000000002",
+    session: { role: "ADM" },
+    prepare: async (page) => {
+      await expect(page.getByRole("region", { name: "Requisição" })).toBeVisible();
+      await expect(page.getByText("203.0.113.0/24")).toBeVisible();
+    },
+  },
+  {
+    id: "auditoria-vazio",
+    title: "Auditoria — filtro sem resultado",
+    path: "/administracao/auditoria?entity_type=inexistente",
+    session: { role: "ADM" },
+    prepare: async (page) => {
+      await expect(page.getByText("Nenhum registro encontrado para os filtros atuais.")).toBeVisible();
+    },
+  },
+  {
+    id: "auditoria-erro",
+    title: "Auditoria — erro 500 com nova tentativa",
+    path: "/administracao/auditoria",
+    session: { role: "ADM", auditStatus: 500 },
+    prepare: async (page) => {
+      await expect(page.getByRole("button", { name: "Tentar novamente" })).toBeVisible({ timeout: 15_000 });
     },
   },
   {
@@ -1632,6 +1790,9 @@ export const SCREENS: ScreenDef[] = [
   // --- Menu sem 404: módulos ainda sem backend ("Módulo em preparação") --------
   ...MODULE_SCREENS,
   MODULE_DENIED_SCREEN,
+  // --- Relatórios e exportações ------------------------------------------------
+  ...REPORT_SCREENS,
+  ...REPORT_ERROR_SCREENS,
 ];
 
 /** Prepara mocks + sessão, navega e leva a tela ao estado desejado. */

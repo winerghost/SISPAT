@@ -330,6 +330,8 @@ Movimentações (`/api/v1/movements`: solicitar, aprovar/rejeitar só ADM+AAL2, 
 
 APIs administrativas de leitura (ADM + AAL2, sem escrita): `GET /api/v1/admin/audit-logs[/<id>]` (`audit.read`; projeção em allowlist, sem PII/segredos, escopo de unidade, janela máx. 90 dias, grava `AUDIT_VIEWED`), `GET /api/v1/admin/roles` e `/permissions` (`roles.manage`), `GET /api/v1/admin/unit-access` (`users.manage`): [`docs/architecture/admin-read-api.md`](./docs/architecture/admin-read-api.md).
 
+Relatórios e exportações (`GET /api/v1/reports` catálogo; `GET /api/v1/reports/<assets|movements|inventory-items>/export?format=csv|xlsx`, permissões `reports.read`/`exports.create`, escopo de unidade, bens excluídos fora, máx. 10 000 linhas, células à prova de formula injection e número patrimonial sempre texto, auditoria `REPORT_EXPORTED`; XLSX sem dependência nova): [`docs/architecture/reports-api.md`](./docs/architecture/reports-api.md).
+
 Inventários (`/api/v1/inventories`: campanhas de conferência por unidade; criar/iniciar/encerrar/cancelar só ADM+AAL2, conferir bens ADM/USER, resumo calculado no servidor; encerramento imutável; não altera `assets.located`) e locais (`GET /api/v1/locations`, somente leitura): [`docs/architecture/inventories-api.md`](./docs/architecture/inventories-api.md).
 
 Tela **Administração → Usuários** (ADM com MFA/AAL2) e **Configurações → Perfil**
@@ -381,6 +383,27 @@ A IA é **consultiva e somente leitura**: nunca altera dados nem executa ações
 - **Tela:** Configurações → Inteligência Artificial (somente ADM com MFA/AAL2).
 - **Worker:** tarefas de IA rodam no Celery (`app/celery_app.py`), com agendador embutido
   (`worker -B`); suba com `--profile worker`.
+
+## Estado da interface e pendências (2026-10-21)
+
+- **Home** sem selo "Fase 1", com atalho (`DashboardShortcut`) para `/dashboard`.
+- **Menu:** selo "Em breve" (campo `comingSoon`) em Integrações e Configurações do Sistema.
+- **Telas reais novas:** `/administracao/auditoria` (`GET /admin/audit-logs`),
+  `/administracao/vinculos-unidades` (`GET /admin/unit-access`, somente leitura) e
+  `/relatorios` (exportação CSV/XLSX via `/api/v1/reports` e `/reports/<kind>/export`;
+  `requestFile` em `api-client.ts`). API: `docs/architecture/reports-api.md`.
+- **Verificado sem mudança:** cancelar movimentação existe; inventários não usam `version`
+  nas transições.
+- **Pendências:**
+  - Rebuild: `docker compose build backend frontend && docker compose up -d backend frontend`.
+  - `test-responsive.sh --all` e build de produção ainda não rodados em ambiente ocioso.
+  - Stubs sem API: Integrações e Configurações do Sistema.
+  - Exportação ainda não está nos menus Patrimônios/Movimentações/Inventários (só em Relatórios).
+  - AUD-14-01: decisão de negócio pendente.
+  - Checklist operacional de convite: templates Supabase, SMTP, redirect URLs,
+    `INVITE_ALLOWED_REDIRECT_URLS`, MFA, certifi (`docs/deploy/PENDENCIAS_OPERACIONAIS_2026-10-20.md`).
+  - Importação de Bens bloqueada por: stamp da migração 0013, limite de 100 s da Cloudflare
+    e SEC-1021-01.
 
 ## Fases do projeto
 

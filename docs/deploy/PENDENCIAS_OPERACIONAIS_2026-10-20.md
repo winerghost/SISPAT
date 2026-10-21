@@ -663,3 +663,26 @@ timedatectl | grep 'Time zone'   # o horário do cron é o do host
    depois da primeira execução.
 
 Registre data e quantidade apagada no histórico de operações.
+
+---
+
+## Atualização 2026-10-21 (rodada de interface e relatórios)
+
+Mudanças: Home sem selo "Fase 1" e com atalho para `/dashboard`; selo "Em breve"
+no menu (Integrações, Configurações do Sistema); telas reais `/administracao/auditoria`,
+`/administracao/vinculos-unidades` (somente leitura) e `/relatorios` (exportação
+CSV/XLSX; ver `docs/architecture/reports-api.md`). Verificado sem mudança: cancelar
+movimentação existe; inventários não usam `version` nas transições.
+
+Pendências desta rodada (o responsável executa):
+
+- Rebuild na VPS (há código novo no backend e no frontend):
+  `cd /opt/SISPAT && docker compose build backend frontend && docker compose up -d backend frontend`
+- `test-responsive.sh --all` e o build de produção ainda não foram rodados em ambiente ocioso.
+- Stubs restantes sem API: Integrações e Configurações do Sistema.
+- Exportação ainda não está nos menus Patrimônios/Movimentações/Inventários (só em Relatórios).
+- AUD-14-01: decisão de negócio pendente.
+- Checklist operacional de convite (item 1 acima): templates Supabase, SMTP, redirect
+  URLs, `INVITE_ALLOWED_REDIRECT_URLS`, MFA e certifi.
+- Bloqueadores da importação de Bens: stamp da migração 0013, limite de 100 s da
+  Cloudflare (item 3) e SEC-1021-01.

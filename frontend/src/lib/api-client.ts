@@ -277,6 +277,66 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
+export interface ApiFileResult {
+  blob: Blob;
+  contentType: string;
+}
+
+/**
+ * `GET` que devolve um ARQUIVO (exportações CSV/XLSX). Mesmas proteções de
+ * `request` (Bearer só para a origem da API, `credentials: "omit"`, `no-store`,
+ * timeout cobrindo o corpo, 401 → evento, erros `{error:{code,message}}`), mas
+ * o corpo de sucesso é lido como Blob. O token nunca vai em URL/storage.
+ */
+export async function requestFile(
+  path: string,
+  { searchParams, timeoutMs, accept }: { searchParams?: ApiRequestOptions["searchParams"]; timeoutMs?: number; accept?: string } = {},
+): Promise<ApiFileResult> {
+  const headers = new Headers({ Accept: accept ?? "*/*" });
+  const url = buildUrl(path, searchParams);
+  const token = await getSessionAccessToken();
+  if (token) {
+    headers.set("Authorization", `Bearer ${token}`);
+    if (typeof window !== "undefined") {
+      assertApiOrigin(url, API_BASE_URL, window.location.origin, process.env.NODE_ENV === "production");
+    }
+  }
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs ?? 120_000);
+  let response: Response;
+  let blob: Blob;
+  try {
+    response = await fetch(url, { method: "GET", credentials: "omit", cache: "no-store", signal: controller.signal, headers });
+    blob = await response.blob();
+  } catch (cause) {
+    throw new ApiError("Falha de rede ao comunicar com a API. Verifique sua conexão e tente novamente.", 0, cause);
+  } finally {
+    clearTimeout(timer);
+  }
+
+  if (!response.ok) {
+    let parsed: unknown;
+    try {
+      parsed = safeJsonParse(await blob.text());
+    } catch {
+      parsed = undefined;
+    }
+    const { code, message } = extractError(parsed);
+    if (response.status === 401 && typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent(UNAUTHORIZED_EVENT, { detail: { path } }));
+    }
+    throw new ApiError(
+      message || `Erro ${response.status} ao chamar a API.`,
+      response.status,
+      parsed,
+      code,
+      parseRetryAfter(response.headers.get("Retry-After")),
+    );
+  }
+  return { blob, contentType: (response.headers.get("Content-Type") ?? blob.type ?? "").toLowerCase() };
+}
+
 export const apiClient = {
   get: <TResponse>(path: string, options?: ApiRequestOptions) =>
     request<TResponse>(path, { ...options, method: "GET" }),

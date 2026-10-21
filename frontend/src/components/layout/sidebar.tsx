@@ -433,6 +433,14 @@ function NavEntry({
                 >
                   <ChildIcon className="h-3.5 w-3.5 shrink-0" aria-hidden />
                   <span className="flex-1">{child.label}</span>
+                  {child.comingSoon && (
+                    <span
+                      data-nav-soon
+                      className="shrink-0 rounded-full border border-ash-stroke px-1.5 text-caption text-pale-stone"
+                    >
+                      Em breve
+                    </span>
+                  )}
                 </Link>
               </li>
             );

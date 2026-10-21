@@ -1,6 +1,9 @@
 import type { Page, Request, Route } from "@playwright/test";
 
 import { defaultAdminAccess, type AdminAccessMock } from "./admin-access-mocks";
+import { auditDetailReply, auditListReply, defaultAuditLogs, type AuditDetailMock } from "./audit-mocks";
+import { defaultUnitAccess, queryUnitAccess, type UnitAccessItemMock } from "./unit-access-mocks";
+import { defaultReportsState, handleReports, type ReportsMockState } from "./reports-mocks";
 import {
   defaultDashboard,
   handleDashboard,
@@ -64,6 +67,22 @@ export interface MockOptions {
   adminAccessStatus?: number;
   /** Atraso (ms) das respostas de `/admin/{roles,permissions}` — testa o estado "carregando". */
   adminAccessDelayMs?: number;
+  /** Registros de `GET /api/v1/admin/audit-logs[/<id>]` (padrão: 30 sintéticos). */
+  auditLogs?: AuditDetailMock[];
+  /** Status HTTP forçado em `/admin/audit-logs` (lista); ex.: 500, 403, 429. */
+  auditStatus?: number;
+  /** Status HTTP forçado no detalhe `/admin/audit-logs/<id>`. */
+  auditDetailStatus?: number;
+  /** Atraso (ms) das respostas de `/admin/audit-logs` — testa o estado "carregando". */
+  auditDelayMs?: number;
+  /** Vínculos de `GET /api/v1/admin/unit-access` (padrão: 30 usuários sintéticos). */
+  unitAccess?: UnitAccessItemMock[];
+  /** Status HTTP forçado em `GET /api/v1/admin/unit-access` (ex.: 500, 403); testes podem mutar `state.unitAccessStatus`. */
+  unitAccessStatus?: number;
+  /** Atraso (ms) de `/admin/unit-access` — testa o estado "carregando". */
+  unitAccessDelayMs?: number;
+  /** Comportamento de `GET /api/v1/reports` e da exportação (status forçados, atraso, linhas). */
+  reports?: Partial<ReportsMockState>;
   /** Sobrescreve o estado inicial de `GET /api/v1/settings/ai`. */
   ai?: Partial<AiSettingsMock>;
   /**
@@ -359,6 +378,15 @@ export interface MockState extends CatalogMockState, AssetMockState, MovementMoc
   adminAccess: AdminAccessMock;
   adminAccessStatus: number | null;
   adminAccessDelayMs: number;
+  auditLogs: AuditDetailMock[];
+  auditStatus: number | null;
+  auditDetailStatus: number | null;
+  auditDelayMs: number;
+  unitAccess: UnitAccessItemMock[];
+  unitAccessStatus: number | null;
+  unitAccessDelayMs: number;
+  /** Relatórios/exportações (testes podem mutar os status forçados). */
+  reports: ReportsMockState;
   /** Estado mutável das configurações de IA (testes podem simular edição concorrente). */
   ai: AiSettingsMock;
   /** Preferências de aparência do próprio usuário (testes podem simular edição concorrente). */
@@ -1036,6 +1064,14 @@ export async function installMocks(page: Page, opts: MockOptions = {}): Promise<
     adminAccess: opts.adminAccess ?? defaultAdminAccess(),
     adminAccessStatus: opts.adminAccessStatus ?? null,
     adminAccessDelayMs: opts.adminAccessDelayMs ?? 0,
+    auditLogs: opts.auditLogs ?? defaultAuditLogs(),
+    auditStatus: opts.auditStatus ?? null,
+    auditDetailStatus: opts.auditDetailStatus ?? null,
+    auditDelayMs: opts.auditDelayMs ?? 0,
+    unitAccess: opts.unitAccess ?? defaultUnitAccess(),
+    unitAccessStatus: opts.unitAccessStatus ?? null,
+    unitAccessDelayMs: opts.unitAccessDelayMs ?? 0,
+    reports: defaultReportsState(opts.reports),
     ai: { ...defaultAiSettings(), ...opts.ai },
     prefs: {
       ...defaultPreferences(),
@@ -1319,6 +1355,7 @@ export async function installMocks(page: Page, opts: MockOptions = {}): Promise<
     ) {
       return;
     }
+    if (await handleReports({ route, state, method, path, url, cors: corsHeaders(request) })) return;
     if (
       await handleInventories({
         state,
@@ -1378,6 +1415,21 @@ export async function installMocks(page: Page, opts: MockOptions = {}): Promise<
       return json(route, 200, { role: "USER", units: [] });
     }
 
+    // Vínculos usuário x unidades (somente leitura): ADM + AAL2, query em allowlist.
+    if (path === "/v1/admin/unit-access" && method === "GET") {
+      if (state.unitAccessDelayMs > 0) await new Promise((r) => setTimeout(r, state.unitAccessDelayMs));
+      if (state.unitAccessStatus) {
+        return json(route, state.unitAccessStatus, { error: { code: "ERRO", message: "detalhe interno sintético" } });
+      }
+      if (state.role !== "ADM") return json(route, 403, { error: { code: "FORBIDDEN", message: "Proibido" } });
+      if (state.aal !== "aal2") {
+        return json(route, 403, { error: { code: "AAL2_REQUIRED", message: "MFA obrigatório" } });
+      }
+      const result = queryUnitAccess(state.unitAccess, url.searchParams);
+      if (!result) return json(route, 400, { error: { code: "validation_error", message: "Consulta inválida" } });
+      return json(route, 200, result);
+    }
+
     // Perfis e permissões (somente leitura): ADM + AAL2 (USER/RH → 403; ADM aal1 → AAL2_REQUIRED).
     if ((path === "/v1/admin/roles" || path === "/v1/admin/permissions") && method === "GET") {
       if (state.adminAccessDelayMs > 0) await new Promise((r) => setTimeout(r, state.adminAccessDelayMs));
@@ -1392,6 +1444,23 @@ export async function installMocks(page: Page, opts: MockOptions = {}): Promise<
         return json(route, 200, { roles: state.adminAccess.roles, users_count_scope: "actor_units" });
       }
       return json(route, 200, { permissions: state.adminAccess.permissions });
+    }
+
+    // Auditoria (somente leitura): ADM + AAL2; filtros por allowlist como o backend.
+    if (path.startsWith("/v1/admin/audit-logs") && method === "GET") {
+      if (state.auditDelayMs > 0) await new Promise((r) => setTimeout(r, state.auditDelayMs));
+      const detailId = path.slice("/v1/admin/audit-logs/".length);
+      const isDetail = path.length > "/v1/admin/audit-logs".length;
+      const forced = isDetail ? state.auditDetailStatus : state.auditStatus;
+      if (forced) return json(route, forced, { error: { code: "ERRO", message: "detalhe interno sintético" } });
+      if (state.role !== "ADM") return json(route, 403, { error: { code: "FORBIDDEN", message: "Proibido" } });
+      if (state.aal !== "aal2") {
+        return json(route, 403, { error: { code: "AAL2_REQUIRED", message: "MFA obrigatório" } });
+      }
+      const reply = isDetail
+        ? auditDetailReply(state.auditLogs, detailId, url.searchParams)
+        : auditListReply(state.auditLogs, url.searchParams);
+      return json(route, reply.status, reply.body);
     }
 
     // Configurações de IA: ADM + AAL2 (como o backend: USER/RH → 403; ADM aal1 → AAL2_REQUIRED).

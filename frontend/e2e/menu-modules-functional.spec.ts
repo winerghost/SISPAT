@@ -49,13 +49,11 @@ const ADMIN_LEAVES = [
   "/administracao/configuracoes-sistema",
 ];
 const ADMIN_MODULES = [
-  "/administracao/vinculos-unidades",
-  "/administracao/auditoria",
   "/administracao/integracoes",
   "/administracao/configuracoes-sistema",
 ];
-/** Módulos sem backend abertos por todos os perfis. */
-const OPEN_MODULES: [string, string][] = [["/relatorios", "Relatórios"]];
+/** Módulos sem backend abertos por todos os perfis (nenhum no momento: /relatorios tem tela real). */
+const OPEN_MODULES: [string, string][] = [];
 
 /** Hrefs esperados no menu lateral por perfil (ordenados). */
 function expectedMenu(role: Role): string[] {

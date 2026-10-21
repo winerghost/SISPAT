@@ -1,21 +1,17 @@
 import { StaggerContainer, StaggerItem } from "@/components/animations";
-import { DashboardOverview } from "@/components/dashboard";
 import { AiInsightsWidget, AskSispatBox } from "@/components/features/dashboard/ai-insights-widget";
 import { AlertsWidget } from "@/components/features/dashboard/alerts-widget";
-import { Badge } from "@/components/ui/badge";
+import { DashboardShortcut } from "@/components/features/dashboard/dashboard-shortcut";
 
 // =============================================================================
-// Home / Dashboard — Fase 1.
+// Home — introdução, alertas, insights de IA e atalho para o Dashboard.
 // =============================================================================
-// NÃO existem endpoints de indicadores: o painel recebe
-// `status="unavailable"` e mostra um estado vazio honesto. Nenhum número de
-// demonstração, nenhum skeleton sem consulta real, nenhum filtro falso.
-// Quando o backend expuser indicadores, troque por um hook de dados (em
-// src/lib) que alimente `DashboardOverview` com `status`/`data` reais.
+// Os indicadores e gráficos reais (GET /dashboard/resumo e correlatos) vivem
+// em /dashboard (DashboardView). A Home NÃO repete números: oferece apenas o
+// atalho, sem dado de demonstração nem estado "indisponível" falso.
 //
 // Movimento: a introdução entra em sequência (StaggerContainer — só em
-// navegação client-side; a 1ª carga SSR já aparece pronta) e o frame usa a
-// entrada nomeada sfDashboardFrameIn uma única vez.
+// navegação client-side; a 1ª carga SSR já aparece pronta).
 // =============================================================================
 
 export default function HomePage() {
@@ -24,7 +20,7 @@ export default function HomePage() {
       <StaggerContainer className="flex flex-col gap-8">
         <StaggerItem index={0} className="flex items-center gap-3">
           <span className="h-1.5 w-1.5 rounded-full bg-signal-orange" aria-hidden />
-          <span className="text-eyebrow text-pale-stone">Status do sistema</span>
+          <span className="text-eyebrow text-pale-stone">Início</span>
         </StaggerItem>
 
         <StaggerItem index={1} className="flex flex-col gap-3">
@@ -34,17 +30,8 @@ export default function HomePage() {
           </p>
         </StaggerItem>
 
-        <StaggerItem
-          index={2}
-          className="flex max-w-lg flex-col gap-3 rounded-cards border border-ash-stroke p-card-padding"
-        >
-          <div className="flex items-center gap-2">
-            <Badge variant="warning">Fase 1 em andamento</Badge>
-          </div>
-          <p className="text-body-sm text-warm-granite">
-            Banco de dados, modelagem e permissionamento estão em desenvolvimento no backend. Os
-            módulos patrimoniais ainda não exibem dados reais.
-          </p>
+        <StaggerItem index={2} className="flex">
+          <DashboardShortcut />
         </StaggerItem>
       </StaggerContainer>
 
@@ -52,8 +39,6 @@ export default function HomePage() {
 
       <AiInsightsWidget />
       <AskSispatBox />
-
-      <DashboardOverview status="unavailable" />
     </div>
   );
 }

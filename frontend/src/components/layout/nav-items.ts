@@ -50,6 +50,8 @@ export interface NavLeaf {
   description?: string;
   /** Só exibido para o papel ADM (UX — a autorização real é do backend). */
   adminOnly?: boolean;
+  /** Módulo sem API no backend: exibe o selo textual "Em breve" (a página explica). */
+  comingSoon?: boolean;
 }
 
 export interface NavGroup {
@@ -107,7 +109,7 @@ export const NAV_ITEMS: NavGroup[] = [
       { label: "Perfis e Permissões", href: "/administracao/perfis-permissoes", icon: KeyRound },
       { label: "Vínculos de Unidades", href: "/administracao/vinculos-unidades", icon: Link2 },
       { label: "Auditoria", href: "/administracao/auditoria", icon: History },
-      { label: "Integrações", href: "/administracao/integracoes", icon: Plug },
+      { label: "Integrações", href: "/administracao/integracoes", icon: Plug, comingSoon: true },
       {
         label: "Importação de Dados → Google Sheets",
         href: "/administracao/importacao/google-sheets",
@@ -122,6 +124,7 @@ export const NAV_ITEMS: NavGroup[] = [
         label: "Configurações do Sistema",
         href: "/administracao/configuracoes-sistema",
         icon: SlidersHorizontal,
+        comingSoon: true,
       },
     ],
   },
