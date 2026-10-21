@@ -97,7 +97,7 @@ logs/
 # ---------------------------------------------------------------------------
 # Relatórios locais de testes/segurança (podem conter caminhos e metadados)
 # ---------------------------------------------------------------------------
-reports/
+/reports/
 coverage.xml
 junit.xml
 playwright-report/
