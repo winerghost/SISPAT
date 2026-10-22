@@ -15,7 +15,7 @@
 # --- Web framework ---
 flask==3.1.3              # CVE-2026-27205 corrigido em 3.1.3
 werkzeug==3.1.9           # transitiva do Flask; CVE-2026-102598 corrigido em 3.1.9
-gunicorn==23.0.0          # CVE-2024-6827 (request smuggling, TE.CL) corrigido em 23.0.0
+gunicorn==26.2.0          # CVE-2024-6827 (request smuggling, TE.CL) corrigido em 23.0.0
 
 # --- Banco de dados / ORM / Migrações ---
 sqlalchemy==2.0.54
