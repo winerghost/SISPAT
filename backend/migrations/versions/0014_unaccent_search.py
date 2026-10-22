@@ -21,11 +21,11 @@ branch_labels: Union[Sequence[str], None] = None
 depends_on: Union[Sequence[str], None] = None
 
 UP_SQL = """
-CREATE EXTENSION IF NOT EXISTS unaccent;
+CREATE EXTENSION IF NOT EXISTS unaccent WITH SCHEMA extensions;
 CREATE OR REPLACE FUNCTION public.sispat_unaccent(input text)
 RETURNS text LANGUAGE sql IMMUTABLE PARALLEL SAFE STRICT
-SET search_path = public, extensions
-AS $$ SELECT unaccent($1) $$;
+SET search_path = extensions, pg_catalog
+AS $$ SELECT extensions.unaccent($1) $$;
 """
 
 

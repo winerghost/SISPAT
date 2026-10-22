@@ -90,8 +90,13 @@ def test_migracao_0014_segura_idempotente_nao_destrutiva_e_espelhada():
     for text in (up, sql):
         assert "CREATE EXTENSION IF NOT EXISTS unaccent" in text
         assert "CREATE OR REPLACE FUNCTION public.sispat_unaccent" in text
-        assert re.search(r"SET search_path\s*=\s*public,\s*extensions", text)
-        assert "IMMUTABLE" in text and "STRICT" in text
+        assert "CREATE EXTENSION IF NOT EXISTS unaccent WITH SCHEMA extensions" in text
+        # search_path fixo e minimo (sem public) + chamada qualificada.
+        assert re.search(r"SET search_path\s*=\s*extensions,\s*pg_catalog\s*\n", text)
+        assert "public, extensions" not in text
+        assert re.search(r"AS \$\$ SELECT extensions\.unaccent\(\$1\) \$\$;", text)
+        assert not re.search(r"SELECT\s+unaccent\(", text)
+        assert "IMMUTABLE" in text and "PARALLEL SAFE" in text and "STRICT" in text
         assert not re.search(r"SECURITY\s+DEFINER", text, re.I)
         text = re.sub(r"--[^\n]*", "", text)  # comentários (rollback documentado)
         assert not re.search(r"\b(DROP|DELETE|TRUNCATE|ALTER\s+TABLE)\b", text, re.I)

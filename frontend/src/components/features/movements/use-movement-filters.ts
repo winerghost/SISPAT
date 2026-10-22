@@ -13,8 +13,11 @@ import type { MovementListParams, MovementSort } from "@/lib/movements-api";
 
 export type StatusFilter = "" | NonNullable<MovementListParams["status"]>;
 
+export type TypeFilter = "" | NonNullable<MovementListParams["movement_type"]>;
+
 export function useMovementFilters() {
   const [status, setStatus] = useState<StatusFilter>("");
+  const [movementType, setMovementType] = useState<TypeFilter>("");
   const [assetId, setAssetId] = useState("");
   const [originUnitId, setOriginUnitId] = useState("");
   const [destinationUnitId, setDestinationUnitId] = useState("");
@@ -32,6 +35,7 @@ export function useMovementFilters() {
 
   function clear() {
     setStatus("");
+    setMovementType("");
     setAssetId("");
     setOriginUnitId("");
     setDestinationUnitId("");
@@ -42,6 +46,7 @@ export function useMovementFilters() {
 
   return {
     status,
+    movementType,
     assetId,
     originUnitId,
     destinationUnitId,
@@ -53,6 +58,7 @@ export function useMovementFilters() {
     setPage: pg.setPage,
     setPageSize: pg.setPageSize,
     chooseStatus: resetPage(setStatus),
+    chooseType: resetPage(setMovementType),
     chooseAsset: resetPage(setAssetId),
     chooseOrigin: resetPage(setOriginUnitId),
     chooseDestination: resetPage(setDestinationUnitId),
@@ -60,6 +66,6 @@ export function useMovementFilters() {
     chooseTo: resetPage(setTo),
     chooseSort: resetPage(setSort),
     clear,
-    filtered: !!status || !!assetId || !!originUnitId || !!destinationUnitId || !!from || !!to,
+    filtered: !!status || !!movementType || !!assetId || !!originUnitId || !!destinationUnitId || !!from || !!to,
   };
 }

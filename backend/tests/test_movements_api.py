@@ -16,7 +16,7 @@ from typing import Any
 from unittest.mock import patch
 
 import pytest
-from sqlalchemy import CheckConstraint, MetaData, create_engine, select, text
+from sqlalchemy import CheckConstraint, MetaData, create_engine, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.pool import StaticPool
 from sqlalchemy.schema import DefaultClause
@@ -645,7 +645,9 @@ def test_listagem_rejeita_fora_da_allowlist(mv, query):
 
 def _set_created(mv, movement_id, when_utc):
     with mv.w.session() as db:
-        db.get(AssetMovement, uuid.UUID(movement_id)).created_at = when_utc
+        # Core (o ORM bloqueia mudança de histórico por design)
+        db.execute(update(AssetMovement).where(AssetMovement.id == uuid.UUID(movement_id))
+                   .values(created_at=when_utc))
 
 
 def test_filtro_de_data_usa_dia_civil_araguaina_borda_22h_a_02h(mv):

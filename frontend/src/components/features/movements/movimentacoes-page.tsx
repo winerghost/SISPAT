@@ -23,7 +23,7 @@ import { MovementsToolbar } from "./movements-toolbar";
 import { useMovementFilters } from "./use-movement-filters";
 
 // =============================================================================
-// /movimentacoes — lista real (`GET /api/v1/movements`). Filtros de estado, bem,
+// /movimentacoes — lista real (`GET /api/v1/movements`). Filtros de estado, tipo, bem,
 // unidade de origem/destino e período, ordenação (allowlist) e paginação vão como
 // parâmetros; o BACKEND aplica perfil, escopo (origem OU destino) e campos por
 // perfil. Esta tela é só apresentação: esconder botões por perfil é UX, nunca
@@ -47,6 +47,7 @@ export function MovimentacoesPage() {
 
   const params = {
     status: filters.status || undefined,
+    movement_type: filters.movementType || undefined,
     asset_id: filters.assetId || undefined,
     origin_unit_id: filters.originUnitId || undefined,
     destination_unit_id: filters.destinationUnitId || undefined,
@@ -107,7 +108,7 @@ export function MovimentacoesPage() {
         <>
           <MovementsTable
             movements={movements.data.movements}
-            pageKey={`${movements.data.page}|${movements.data.page_size}|${filters.status}|${filters.assetId}|${filters.originUnitId}|${filters.destinationUnitId}|${filters.from}|${filters.to}|${filters.sort}`}
+            pageKey={`${movements.data.page}|${movements.data.page_size}|${filters.status}|${filters.movementType}|${filters.assetId}|${filters.originUnitId}|${filters.destinationUnitId}|${filters.from}|${filters.to}|${filters.sort}`}
             busy={movements.isFetching && !movements.isPending}
             sort={filters.sort}
             onSortChange={filters.chooseSort}

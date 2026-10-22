@@ -132,7 +132,7 @@ def test_db_alembic_revision_chain_is_linear() -> None:
     down_targets = [d for d in revisions.values() if d is not None]
     assert len(down_targets) == len(set(down_targets)), "ramificação (branch) de revisões"
     heads = set(revisions) - set(down_targets)
-    assert heads == {"0013_dashboard_layout_prefs"}, heads
+    assert heads == {"0014_unaccent_search"}, heads
 
 
 def test_db_alembic_revision_ids_cabem_em_alembic_version() -> None:

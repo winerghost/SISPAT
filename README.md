@@ -392,6 +392,9 @@ A IA é **consultiva e somente leitura**: nunca altera dados nem executa ações
   `/administracao/vinculos-unidades` (`GET /admin/unit-access`, somente leitura) e
   `/relatorios` (exportação CSV/XLSX via `/api/v1/reports` e `/reports/<kind>/export`;
   `requestFile` em `api-client.ts`). API: `docs/architecture/reports-api.md`.
+- **Filtros de data:** `created_from/created_to` (movimentações e relatórios) e
+  `checked_from/checked_to` (itens de inventário) são dia civil em America/Araguaina,
+  convertido para UTC (`app/services/local_dates.py`); `GET /movements` ganhou `movement_type`.
 - **Verificado sem mudança:** cancelar movimentação existe; inventários não usam `version`
   nas transições.
 - **Pendências:**
@@ -419,4 +422,4 @@ A IA é **consultiva e somente leitura**: nunca altera dados nem executa ações
 
 ### Contrato de paginação (todas as listagens da API v1)
 
-`page` ≥ 1 (padrão 1) e `page_size` SOMENTE 50, 100 ou 200 (padrão 50); qualquer outro valor (25, 0, 500...) => 400. Resposta: `{total, page, page_size, pages, <itens>}` (`pages` = ceil(total/page_size), 0 se vazio). Definição única em `backend/app/services/pagination.py`; ordenação sempre com desempate por `id`. A busca (`q`/`search`) é sem caixa e sem acento (`app/security/text_search.py`: `sispat_unaccent(coluna) ILIKE :padrão`, escape de `%`/`_`). Exige a migração `0014_unaccent_search` (espelho `backend/migrations/sql/0017_unaccent_search.sql`), NÃO aplicada em produção: aplicar ANTES do deploy do backend.
+`page` ≥ 1 (padrão 1) e `page_size` SOMENTE 50, 100 ou 200 (padrão 50); qualquer outro valor (25, 0, 500...) => 400. Resposta: `{total, page, page_size, pages, <itens>}` (`pages` = ceil(total/page_size), 0 se vazio). Definição única em `backend/app/services/pagination.py`; ordenação sempre com desempate por `id`. A busca (`q`/`search`) é sem caixa e sem acento (`app/security/text_search.py`: `sispat_unaccent(coluna) ILIKE :padrão`, escape de `%`/`_`). Exige a migração `0014_unaccent_search` (espelho `backend/migrations/sql/0017_unaccent_search.sql`; extensão no schema `extensions` e wrapper `SECURITY INVOKER` com `search_path = extensions, pg_catalog` e chamada qualificada `extensions.unaccent`), NÃO aplicada em produção: aplicar ANTES do deploy do backend.

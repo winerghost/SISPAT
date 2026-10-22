@@ -49,3 +49,15 @@ def test_postgres_usa_funcao_e_bind():
     sql = str(select(Unit.id).where(contains_ci(Unit.name, "jo'ao"))
               .compile(dialect=postgresql.dialect()))
     assert "sispat_unaccent(units.name)" in sql and "jo'ao" not in sql
+
+
+def test_wrapper_sql_endurecido_search_path_fixo_e_chamada_qualificada():
+    """A função SQL não pode depender de `public` nem de resolução implícita."""
+    from pathlib import Path
+
+    sql = (Path(__file__).resolve().parents[1] / "migrations/sql/0017_unaccent_search.sql").read_text(
+        encoding="utf-8"
+    )
+    assert "SET search_path = extensions, pg_catalog" in sql
+    assert "extensions.unaccent($1)" in sql
+    assert "SECURITY DEFINER" not in sql.upper()

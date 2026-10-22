@@ -62,8 +62,12 @@ Rejeitar grava `approved_by`/`approved_at` (decisão); cancelar só muda o estad
 
 ## Leitura
 
-`GET /movements?status=&asset_id=&origin_unit_id=&destination_unit_id=&created_from=&created_to=
-&sort=&page=&page_size=` — `status` ∈ estados; datas `AAAA-MM-DD` (UTC, `created_to` inclusivo);
+`GET /movements?status=&movement_type=&asset_id=&origin_unit_id=&destination_unit_id=&created_from=&created_to=
+&sort=&page=&page_size=` — `status` ∈ estados; `movement_type` ∈
+`TRANSFERENCIA_UNIDADE|MUDANCA_SALA|TROCA_RESPONSAVEL` (outro valor: 400; nunca amplia o escopo);
+datas `AAAA-MM-DD` = **dia civil em America/Araguaina** (UTC-3, sem DST), convertido para o
+intervalo `[00:00 local, 00:00 local do dia seguinte)` em UTC (`created_to` inclusivo; o banco segue em UTC;
+helper `app/services/local_dates.py`, também usado nos relatórios de movimentações e de itens de inventário);
 `sort` ∈ `created_at|-created_at|status|-status` (padrão `-created_at`); `page_size` 50|100|200 (padrão 50).
 Parâmetro desconhecido/repetido/inválido: 400. Escopo: origem **ou** destino no escopo do usuário.
 Resposta: `{ total, page, page_size, pages, movements: [...] }`.

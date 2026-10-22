@@ -162,6 +162,72 @@ test.describe("movimentações — lista", () => {
     await expect(rows(page).first()).toContainText("000123");
   });
 
+  test("filtro Tipo: rótulos dos relatórios, só envia quando selecionado, reseta página e Limpar filtros limpa", async ({ page }) => {
+    const state = await open(page, { role: "ADM" }, (st) => {
+      const template = st.movements[0]!;
+      for (let i = 0; i < 60; i += 1) {
+        st.movements.push({ ...template, id: `d2000000-0000-4000-8000-${String(i).padStart(12, "0")}` });
+      }
+    });
+    const select = page.getByLabel("Tipo", { exact: true });
+    await expect(select).toBeVisible();
+    await expect(select.locator("option")).toHaveText([
+      "Todos os tipos",
+      "Transferência entre unidades",
+      "Mudança de sala",
+      "Troca de responsável",
+    ]);
+    const typeCalls = () =>
+      state.calls
+        .filter((c) => c.method === "GET" && /\/v1\/movements\?/.test(c.url))
+        .map((c) => new URL(c.url, "http://x").searchParams.get("movement_type"));
+    // Sem seleção: o parâmetro nem é enviado.
+    expect(typeCalls().every((value) => value === null)).toBe(true);
+
+    await page.getByRole("button", { name: "Próxima" }).click();
+    await expect(page.getByText(/Exibindo 51–/)).toBeVisible();
+
+    const byType = waitApi(page, "GET", "/v1/movements");
+    await select.selectOption("MUDANCA_SALA");
+    const query = new URL((await byType).url()).searchParams;
+    expect(query.get("movement_type")).toBe("MUDANCA_SALA");
+    expect(query.get("page")).toBe("1");
+    await expect(rows(page)).toHaveCount(1);
+
+    await page.getByRole("button", { name: "Limpar filtros" }).click();
+    await expect(select).toHaveValue("");
+    await expect(page.getByRole("button", { name: "Limpar filtros" })).toHaveCount(0);
+    await expect(page.getByText(/Exibindo 1–50 de 66/)).toBeVisible();
+  });
+
+  test("filtro Tipo: valor fora da allowlist recebe 400 do backend (mock fiel) e a UI mostra erro fixo", async ({ page }) => {
+    await open(page);
+    const invalid = waitApi(page, "GET", "/v1/movements");
+    await page.getByLabel("Tipo", { exact: true }).evaluate((el) => {
+      const select = el as HTMLSelectElement;
+      select.add(new Option("Fora da allowlist", "OUTRO"));
+      const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")!.set!;
+      setter.call(select, "OUTRO");
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    expect(new URL((await invalid).url()).searchParams.get("movement_type")).toBe("OUTRO");
+    await expect(page.getByText("A busca ou os filtros não foram aceitos.")).toBeVisible();
+  });
+
+  test("datas created_from/created_to vão exatamente como escolhidas (dia civil, sem conversão por Date/UTC)", async ({ page }) => {
+    await open(page);
+    const byFrom = waitApi(page, "GET", "/v1/movements");
+    await page.getByLabel("Solicitada a partir de").fill("2026-10-31");
+    const fromUrl = (await byFrom).url();
+    expect(new URL(fromUrl).searchParams.get("created_from")).toBe("2026-10-31");
+    expect(fromUrl).toContain("created_from=2026-10-31&");
+    const byTo = waitApi(page, "GET", "/v1/movements");
+    await page.getByLabel("Solicitada até").fill("2026-11-01");
+    const toUrl = (await byTo).url();
+    expect(new URL(toUrl).searchParams.get("created_to")).toBe("2026-11-01");
+    expect(toUrl).not.toMatch(/T\d{2}|%3A|Z(&|$)/);
+  });
+
   test("filtro por bem usa a busca de /assets e envia asset_id", async ({ page }) => {
     await open(page);
     await page.getByLabel(/Filtrar por bem — buscar/).fill("000123");
@@ -245,7 +311,7 @@ test.describe("movimentações — lista", () => {
     for (const query of queries) {
       expect(["50", "100", "200"]).toContain(query.get("page_size"));
       for (const key of query.keys()) {
-        expect(["status", "asset_id", "origin_unit_id", "destination_unit_id", "created_from", "created_to", "sort", "page", "page_size"]).toContain(key);
+        expect(["status", "movement_type", "asset_id", "origin_unit_id", "destination_unit_id", "created_from", "created_to", "sort", "page", "page_size"]).toContain(key);
       }
     }
   });

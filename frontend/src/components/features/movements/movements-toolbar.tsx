@@ -10,8 +10,9 @@ import type { AccessibleUnit } from "@/lib/catalog-api";
 import type { MovementSort } from "@/lib/movements-api";
 import { unitLabel } from "@/components/features/users/unit-checkbox-list";
 import { AssetPicker } from "./asset-picker";
-import { STATUS_LABEL, STATUS_OPTIONS } from "./movement-labels";
-import type { StatusFilter, useMovementFilters } from "./use-movement-filters";
+import { optionLabel } from "@/components/features/reports/report-labels";
+import { STATUS_LABEL, STATUS_OPTIONS, TYPE_OPTIONS } from "./movement-labels";
+import type { StatusFilter, TypeFilter, useMovementFilters } from "./use-movement-filters";
 
 // =============================================================================
 // Filtros de Movimentações. Controles nativos estilizados (sem dependências
@@ -79,7 +80,7 @@ export function MovementsToolbar({
   ));
   return (
     <section aria-label="Filtros" className="flex flex-col gap-4">
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
         <SelectField
           id="movimentacoes-filtro-estado"
           label="Estado"
@@ -90,6 +91,19 @@ export function MovementsToolbar({
           {STATUS_OPTIONS.map((status) => (
             <option key={status} value={status}>
               {STATUS_LABEL[status]}
+            </option>
+          ))}
+        </SelectField>
+        <SelectField
+          id="movimentacoes-filtro-tipo"
+          label="Tipo"
+          value={filters.movementType}
+          onChange={(value) => filters.chooseType(value as TypeFilter)}
+        >
+          <option value="">Todos os tipos</option>
+          {TYPE_OPTIONS.map((type) => (
+            <option key={type} value={type}>
+              {optionLabel(type)}
             </option>
           ))}
         </SelectField>

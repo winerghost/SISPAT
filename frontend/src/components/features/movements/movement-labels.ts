@@ -8,7 +8,7 @@
 
 import { ApiError } from "@/lib/api-client";
 import { rateLimitMessage } from "@/lib/api-errors";
-import type { MovementRecord, MovementStatus } from "@/lib/movements-api";
+import type { MovementRecord, MovementStatus, MovementType } from "@/lib/movements-api";
 import { AAL2_MESSAGE, errorCode, formatDateTime } from "@/components/features/users/user-labels";
 
 export { formatDateTime };
@@ -38,6 +38,9 @@ export const TYPE_LABEL: Record<string, string> = {
   MUDANCA_SALA: "Mudança de sala",
   TROCA_RESPONSAVEL: "Troca de responsável",
 };
+
+/** Filtro "Tipo": os três valores aceitos pelo backend (outro valor → 400). */
+export const TYPE_OPTIONS = ["TRANSFERENCIA_UNIDADE", "MUDANCA_SALA", "TROCA_RESPONSAVEL"] as const satisfies readonly MovementType[];
 
 export function typeLabel(type: string): string {
   return TYPE_LABEL[type] ?? "Movimentação";

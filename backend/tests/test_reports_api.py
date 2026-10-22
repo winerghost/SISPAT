@@ -389,18 +389,19 @@ def test_filtros_de_movimentacao(api):
 
 
 def test_relatorio_movimentacoes_dia_civil_araguaina_borda_noturna(api):
-    asset = add_asset(api, api.ua, "1")
+    assets = iter((add_asset(api, api.ua, "1"), add_asset(api, api.ua, "2")))
     with api.w.session() as db:
         for created in (datetime(2026, 3, 11, 1, 0, tzinfo=timezone.utc),   # 22h do dia 10 local
                         datetime(2026, 3, 11, 5, 0, tzinfo=timezone.utc)):  # 02h do dia 11 local
             db.add(AssetMovement(
-                id=uuid.uuid4(), asset_id=asset, origin_unit_id=api.ua, destination_unit_id=api.ua,
+                id=uuid.uuid4(), asset_id=next(assets), origin_unit_id=api.ua, destination_unit_id=api.ua,
                 movement_type="MUDANCA_SALA", status="PENDENTE", requested_by=api.users["ua"],
                 created_at=created))
     assert len(csv_rows(export(api, "movements", "?created_from=2026-03-10&created_to=2026-03-10"))) == 2
     assert len(csv_rows(export(api, "movements", "?created_from=2026-03-11&created_to=2026-03-11"))) == 2
     assert len(csv_rows(export(api, "movements", "?created_from=2026-03-11"))) == 2
     assert len(csv_rows(export(api, "movements", "?created_to=2026-03-10"))) == 2
+    assert len(csv_rows(export(api, "movements", "?created_from=2026-03-10&created_to=2026-03-11"))) == 3
 
 
 # --- inventários ----------------------------------------------------------------------------

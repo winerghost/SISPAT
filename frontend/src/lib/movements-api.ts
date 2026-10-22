@@ -73,12 +73,14 @@ export type MovementSort = "created_at" | "-created_at" | "status" | "-status";
 
 export interface MovementListParams {
   status?: Exclude<MovementStatus, "CONCLUIDA">;
+  /** Só enviado quando selecionado; qualquer outro valor → 400 no backend. */
+  movement_type?: MovementType;
   asset_id?: string;
   origin_unit_id?: string;
   destination_unit_id?: string;
-  /** AAAA-MM-DD (UTC). */
+  /** AAAA-MM-DD: dia civil em America/Araguaina (enviado exatamente como escolhido). */
   created_from?: string;
-  /** AAAA-MM-DD (UTC, inclusivo). */
+  /** AAAA-MM-DD: dia civil em America/Araguaina, inclusivo (sem conversão). */
   created_to?: string;
   sort?: MovementSort;
   page?: number;
@@ -127,6 +129,7 @@ export function listMovements(params: MovementListParams = {}): Promise<Movement
   return apiClient.get<MovementsListResponse>(MOVEMENTS, {
     searchParams: {
       status: params.status,
+      movement_type: params.movement_type || undefined,
       asset_id: params.asset_id || undefined,
       origin_unit_id: params.origin_unit_id || undefined,
       destination_unit_id: params.destination_unit_id || undefined,

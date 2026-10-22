@@ -173,6 +173,7 @@ const ROUTE_RE = /^\/v1\/movements(?:\/([^/]+)(?:\/(approve|reject|cancel))?)?$/
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const LIST_PARAMS = new Set([
   "status",
+  "movement_type",
   "asset_id",
   "origin_unit_id",
   "destination_unit_id",
@@ -183,6 +184,7 @@ const LIST_PARAMS = new Set([
   "page_size",
 ]);
 const STATUSES = new Set(["PENDENTE", "APROVADA", "REJEITADA", "CANCELADA", "CONCLUIDA"]);
+const MOVEMENT_TYPES = new Set(["TRANSFERENCIA_UNIDADE", "MUDANCA_SALA", "TROCA_RESPONSAVEL"]);
 const SORTS = new Set(["created_at", "status"]);
 const CREATE_KEYS = new Set([
   "asset_id",
@@ -317,6 +319,7 @@ async function list(ctx: MovementRequestContext, err: Err): Promise<boolean> {
     return err(400, "validation_error");
   }
   const status = searchParams.get("status");
+  const movementType = searchParams.get("movement_type");
   const sort = searchParams.get("sort") ?? "-created_at";
   const field = sort.replace(/^-/, "");
   const page = mockPage(searchParams);
@@ -330,6 +333,7 @@ async function list(ctx: MovementRequestContext, err: Err): Promise<boolean> {
   const badDate = (value: string | null) => value !== null && (!/^\d{4}-\d{2}-\d{2}$/.test(value) || Number.isNaN(Date.parse(value)));
   if (
     (status !== null && !STATUSES.has(status)) ||
+    (movementType !== null && !MOVEMENT_TYPES.has(movementType)) ||
     !SORTS.has(field) ||
     badDate(from) ||
     badDate(to) ||
@@ -347,6 +351,7 @@ async function list(ctx: MovementRequestContext, err: Err): Promise<boolean> {
       (m) =>
         readable(state, m) &&
         (!status || m.status === status) &&
+        (!movementType || m.movement_type === movementType) &&
         (!assetId || m.asset_id === assetId) &&
         (!origin || m.origin_unit_id === origin) &&
         (!destination || m.destination_unit_id === destination) &&
