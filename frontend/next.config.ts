@@ -35,6 +35,9 @@ const securityHeaders = [
 ];
 
 const nextConfig: NextConfig = {
+  // Só para testes em paralelo (ex.: NEXT_DIST_DIR=.next-e2e-a): evita que dois
+  // `next dev` corrompam o mesmo .next. Em build/produção fica o padrão (.next).
+  distDir: process.env.NEXT_DIST_DIR || ".next",
   output: "standalone",
   reactStrictMode: true,
   poweredByHeader: false,

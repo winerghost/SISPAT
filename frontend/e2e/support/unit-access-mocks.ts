@@ -1,9 +1,11 @@
 // =============================================================================
 // Mock sintético de `GET /api/v1/admin/unit-access` (contrato:
 // backend/app/api/v1/admin_schemas.py::UnitAccessQuery e
-// backend/app/services/admin_access_service.py). Dados fictícios: 30 usuários
-// (2 páginas de 25), sem e-mail/telefone, como o backend.
+// backend/app/services/admin_access_service.py). Dados fictícios: 30 usuários (padrão; `count` gera mais)
+//, sem e-mail/telefone, como o backend.
 // =============================================================================
+
+import { mockPage, mockPageSize } from "./page-size";
 
 export interface UnitAccessItemMock {
   user_id: string;
@@ -19,10 +21,10 @@ const UNIT_C = { id: "60000000-0000-4000-8000-000000000003", code: "NUC-03" };
 
 export const UNIT_ACCESS_XSS_NAME = `<img src=x onerror="window.__xss=1"> Vinculado`;
 
-export function defaultUnitAccess(): UnitAccessItemMock[] {
+export function defaultUnitAccess(count = 30): UnitAccessItemMock[] {
   const roles = ["USER", "RH", "ADM"] as const;
   const combos = [[UNIT_A], [UNIT_B], [UNIT_A, UNIT_B], [UNIT_C], [UNIT_A, UNIT_B, UNIT_C]];
-  const items: UnitAccessItemMock[] = Array.from({ length: 30 }, (_, i) => ({
+  const items: UnitAccessItemMock[] = Array.from({ length: count }, (_, i) => ({
     user_id: `70000000-0000-4000-8000-${String(i + 1).padStart(12, "0")}`,
     name: `Pessoa Vinculada ${String(i + 1).padStart(2, "0")}`,
     role: roles[i % 3]!,
@@ -42,12 +44,12 @@ export function queryUnitAccess(items: UnitAccessItemMock[], params: URLSearchPa
   const active = params.get("active");
   const unit = params.get("unit_id");
   const sort = params.get("sort") ?? "name";
-  const page = Number(params.get("page") ?? 1);
-  const pageSize = Number(params.get("page_size") ?? 25);
+  const page = mockPage(params);
+  const pageSize = mockPageSize(params);
   if (role && !["ADM", "USER", "RH"].includes(role)) return null;
   if (active && !["true", "false"].includes(active)) return null;
   if (!["name", "-name"].includes(sort)) return null;
-  if (!Number.isInteger(page) || page < 1 || !Number.isInteger(pageSize) || pageSize < 1 || pageSize > 100) return null;
+  if (page === null || pageSize === null) return null;
   const dir = sort === "-name" ? -1 : 1;
   const list = items
     .filter(

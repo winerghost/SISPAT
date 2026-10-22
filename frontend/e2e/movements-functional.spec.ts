@@ -101,7 +101,7 @@ test.describe("movimentações — lista", () => {
       await expect(table(page).getByRole("columnheader", { name: new RegExp(header) })).toBeVisible();
     }
     // 7 movimentações no mock, 1 totalmente fora do escopo (nunca aparece).
-    await expect(page.getByText("Página 1 de 1 · 6 movimentação(ões)")).toBeVisible();
+    await expect(page.getByText("Exibindo 1–6 de 6 movimentação(ões)")).toBeVisible();
     await expect(rows(page)).toHaveCount(6);
 
     const first = rows(page).filter({ hasText: "000123" });
@@ -213,18 +213,72 @@ test.describe("movimentações — lista", () => {
     await expect(page.getByRole("main").getByRole("alert").first()).toContainText("verificação em duas etapas (AAL2)");
   });
 
-  test("paginação mostra o total confirmado pelo backend", async ({ page }) => {
-    await open(page, { role: "ADM" }, (state) => {
-      const template = state.movements[0]!;
-      for (let i = 0; i < 25; i += 1) {
-        state.movements.push({ ...template, id: `d2000000-0000-4000-8000-${String(i).padStart(12, "0")}` });
+  test("paginação 50/100/200: total confirmado, navegação e page_size sempre válido", async ({ page }) => {
+    const state = await open(page, { role: "ADM" }, (st) => {
+      const template = st.movements[0]!;
+      for (let i = 0; i < 125; i += 1) {
+        st.movements.push({ ...template, id: `d2000000-0000-4000-8000-${String(i).padStart(12, "0")}` });
       }
     });
-    await expect(page.getByText("Página 1 de 2 · 31 movimentação(ões)")).toBeVisible();
-    await expect(rows(page)).toHaveCount(25);
+    await expect(page.getByText("Exibindo 1–50 de 131 movimentação(ões)")).toBeVisible();
+    await expect(rows(page)).toHaveCount(50);
     await page.getByRole("button", { name: "Próxima" }).click();
-    await expect(page.getByText("Página 2 de 2 · 31 movimentação(ões)")).toBeVisible();
+    await expect(page.getByText("Exibindo 51–100 de 131 movimentação(ões)")).toBeVisible();
+    await page.getByRole("button", { name: "Última" }).click();
+    await expect(page.getByText("Exibindo 101–131 de 131 movimentação(ões)")).toBeVisible();
+    await expect(rows(page)).toHaveCount(31);
+    await page.getByLabel("Registros por página").selectOption("100");
+    await expect(page.getByText("Exibindo 1–100 de 131 movimentação(ões)")).toBeVisible();
+    await page.getByLabel("Registros por página").selectOption("200");
+    await expect(rows(page)).toHaveCount(131);
+
+    // Filtrar na página 2 volta à página 1.
+    await page.getByLabel("Registros por página").selectOption("50");
+    await page.getByRole("button", { name: "Próxima" }).click();
+    await expect(page.getByText("Exibindo 51–100 de 131 movimentação(ões)")).toBeVisible();
+    await page.getByLabel("Estado", { exact: true }).selectOption("PENDENTE");
+    await expect(page.getByText(/Exibindo 1–50 de \d+ movimentação\(ões\)/)).toBeVisible();
+
+    const queries = state.calls
+      .filter((c) => c.method === "GET" && /\/v1\/movements\?/.test(c.url))
+      .map((c) => new URL(c.url, "http://x").searchParams);
+    for (const query of queries) {
+      expect(["50", "100", "200"]).toContain(query.get("page_size"));
+      for (const key of query.keys()) {
+        expect(["status", "asset_id", "origin_unit_id", "destination_unit_id", "created_from", "created_to", "sort", "page", "page_size"]).toContain(key);
+      }
+    }
+  });
+
+  test("zebra nas linhas e seletor de bem do filtro usa page_size válido", async ({ page }) => {
+    const state = await open(page);
     await expect(rows(page)).toHaveCount(6);
+    await page.mouse.move(0, 0);
+    const bg = (n: number) => rows(page).nth(n).evaluate((el) => getComputedStyle(el).backgroundColor);
+    const [a, b, c] = [await bg(0), await bg(1), await bg(2)];
+    expect(a).toBe(c);
+    expect(b).not.toBe(a);
+
+    await page.getByLabel(/Filtrar por bem — buscar/).fill("000123");
+    await expect(page.getByLabel(/Filtrar por bem — resultados/)).toBeVisible();
+    const lookups = state.calls.filter((c) => c.method === "GET" && /\/v1\/assets\?/.test(c.url));
+    expect(lookups.length).toBeGreaterThan(0);
+    for (const call of lookups) {
+      expect(["50", "100", "200"]).toContain(new URL(call.url, "http://x").searchParams.get("page_size"));
+    }
+  });
+
+  test("busca de bem: trim e limite de 100 caracteres", async ({ page }) => {
+    const state = await open(page);
+    const search = page.getByLabel(/Filtrar por bem — buscar/);
+    await search.fill("   000123   ");
+    await expect(page.getByLabel(/Filtrar por bem — resultados/)).toBeVisible();
+    const q = state.calls
+      .filter((c) => /\/v1\/assets\?/.test(c.url))
+      .map((c) => new URL(c.url, "http://x").searchParams.get("q"));
+    expect(q.at(-1)).toBe("000123");
+    await search.fill("y".repeat(150));
+    await expect(search).toHaveValue("y".repeat(100));
   });
 });
 
@@ -377,7 +431,7 @@ test.describe("movimentações — solicitar", () => {
     });
     await expect(dialog).toBeHidden();
     await expect(page.getByText("Solicitação registrada. O bem só será alterado se um administrador aprovar.")).toBeVisible();
-    await expect(page.getByText("Página 1 de 1 · 7 movimentação(ões)")).toBeVisible();
+    await expect(page.getByText("Exibindo 1–7 de 7 movimentação(ões)")).toBeVisible();
     await expect(rows(page).first()).toContainText("00123");
     // Nada mudou no bem: a aprovação é outra etapa.
     expect(asset(state, ASSET_IDS.similar)).toEqual(before);

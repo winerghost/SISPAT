@@ -354,7 +354,7 @@ test.describe("responsáveis — lista e telefone (LGPD)", () => {
     const rows = page.getByRole("table", { name: "Pessoas responsáveis" }).locator("tbody tr");
     await expect(rows).toHaveCount(4);
     const search = waitApi(page, "GET", "/v1/responsible-people");
-    await page.getByLabel("Buscar pessoa por nome ou e-mail").fill("inativa.sint");
+    await page.getByLabel("Buscar pessoa por nome, e-mail ou identificador").fill("inativa.sint");
     expect(new URL((await search).url()).searchParams.get("q")).toBe("inativa.sint");
     await expect(rows).toHaveCount(1);
     await page.getByRole("button", { name: "Limpar filtros" }).click();
@@ -482,7 +482,7 @@ test.describe("unidades", () => {
     await expect(table).toContainText("Escritório Sintético Avançado");
     await expect(table.getByRole("row").filter({ hasText: "INAT-07" })).toContainText("Inativa");
     await expect(table.getByRole("row").filter({ hasText: "ESC-02" })).toContainText("Ativa");
-    await expect(page.getByText("4 unidade(s)")).toBeVisible();
+    await expect(page.getByText("Exibindo 1–4 de 4 registro(s)")).toBeVisible();
     expect(await expectNoXss(page)).toEqual({ executed: undefined, injectedImgs: 0 });
   });
 

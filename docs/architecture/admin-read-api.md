@@ -7,8 +7,8 @@ require_permission(...) -> rate_limit` (fail-closed). USER/RH recebem 403
 desconhecido -> 400 auditado (`MASS_ASSIGNMENT_REJECTED` /
 `PRIVILEGE_ESCALATION_ATTEMPT`); parâmetro repetido ou fora da allowlist -> 400
 `validation_error` (valores nunca ecoados). Paginação: `page` (>=1),
-`page_size` (1..100, padrão 25); listas devolvem
-`{total, page, page_size, items}`. Nenhuma migração foi criada.
+`page_size` (50, 100 ou 200; padrão 50); listas devolvem
+`{total, page, page_size, pages, items}`. Nenhuma migração foi criada.
 
 | Rota | Permissão | Descrição |
 |---|---|---|

@@ -5,7 +5,7 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { Link2 } from "lucide-react";
 
-import { CatalogNotice, CatalogPagination, ActiveBadge } from "@/components/features/catalog/catalog-parts";
+import { CatalogNotice, ActiveBadge } from "@/components/features/catalog/catalog-parts";
 import { SortableHead } from "@/components/features/catalog/catalog-tables";
 import { AccessRestrictedPanel, SESSION_UNCONFIRMED_MESSAGE } from "@/components/features/modules/access-restricted";
 import { ManageLink } from "@/components/features/lookup/manage-link";
@@ -17,6 +17,7 @@ import { Button } from "@/components/ui/button";
 import { FilterPill } from "@/components/ui/filter-pill";
 import { selectControlClassName } from "@/components/ui/form-field";
 import { LoadingSkeleton } from "@/components/ui/loading-skeleton";
+import { PaginationBar } from "@/components/ui/pagination-bar";
 import {
   AnimatedTableBody,
   AnimatedTableRow,
@@ -28,12 +29,12 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { adminAccessErrorMessage, ApiError, isAccessDenied } from "@/lib/admin-access-api";
+import { parsePageSize } from "@/lib/pagination";
 import { useMe } from "@/lib/session";
 import {
   getUnitAccess,
   parseUnitAccessFilters,
   unitAccessQueryString,
-  UNIT_ACCESS_PAGE_SIZE,
   type UnitAccessActive,
   type UnitAccessFilters,
   type UnitAccessSort,
@@ -77,12 +78,17 @@ function useUrlFilters() {
   const update = useCallback(
     (patch: Partial<UnitAccessFilters>) => {
       const next = { ...filters, ...patch };
+      // Filtro/ordem/tamanho de página voltam à página 1; só `page` preserva a página.
       if (!("page" in patch)) next.page = 1;
       write(unitAccessQueryString(next));
     },
     [filters, write],
   );
-  const clear = useCallback(() => write(""), [write]);
+  // Limpar filtros preserva o tamanho de página escolhido.
+  const clear = useCallback(
+    () => write(unitAccessQueryString({ sort: "name", page: 1, page_size: filters.page_size })),
+    [write, filters.page_size],
+  );
   return { filters, update, clear, filtered: !!filters.unit_id || !!filters.role || !!filters.active };
 }
 
@@ -133,16 +139,17 @@ export function UnitAccessView() {
               sort={filters.sort}
               filtered={filtered}
               busy={query.isFetching}
-              pageKey={`${query.data.page}|${unitAccessQueryString({ ...filters, page: 1 })}`}
+              pageKey={`${query.data.page}|${query.data.page_size}|${unitAccessQueryString({ ...filters, page: 1 })}`}
               onSort={(sort) => update({ sort })}
             />
-            <CatalogPagination
-              page={query.data.page}
+            <PaginationBar
+              page={filters.page}
+              pageSize={filters.page_size}
               total={query.data.total}
-              pageSize={UNIT_ACCESS_PAGE_SIZE}
               noun="usuário(s)"
-              loading={query.isPlaceholderData}
-              onPage={(page) => update({ page })}
+              busy={query.isFetching}
+              onPageChange={(page) => update({ page })}
+              onPageSizeChange={(size) => update({ page_size: parsePageSize(size) })}
             />
           </>
         )}

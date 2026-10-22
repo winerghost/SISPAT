@@ -19,6 +19,7 @@ from app.authorization.rbac import get_accessible_unit_ids
 from app.models.rbac import Permission, Role, RolePermission, User, UserRole
 from app.models.units import Unit, UserUnitAccess
 from app.services.user_admin_service import primary_role
+from app.services.pagination import page_count
 
 _ROLE_ORDER = {"ADM": 0, "USER": 1, "RH": 2}
 
@@ -106,7 +107,7 @@ class AdminAccessService:
 
     def list_unit_access(self, actor_id: Any, query: Any) -> dict[str, Any]:
         page, page_size = int(query.page), int(query.page_size)
-        empty = {"total": 0, "page": page, "page_size": page_size, "items": []}
+        empty = {"total": 0, "page": page, "page_size": page_size, "pages": 0, "items": []}
         actor_units = get_accessible_unit_ids(actor_id, self._db)
         if not actor_units:
             return empty
@@ -168,7 +169,7 @@ class AdminAccessService:
         return {
             "total": int(total),
             "page": page,
-            "page_size": page_size,
+            "page_size": page_size, "pages": page_count(total, page_size),
             "items": [
                 {
                     "user_id": str(u.id),

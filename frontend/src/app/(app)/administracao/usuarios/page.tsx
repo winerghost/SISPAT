@@ -11,7 +11,7 @@ import { selectControlClassName } from "@/components/ui/form-field";
 import { FormMessage } from "@/components/ui/form-message";
 import { Input } from "@/components/ui/input";
 import { LoadingSkeleton } from "@/components/ui/loading-skeleton";
-import { StatusIndicator } from "@/components/ui/status-indicator";
+import { PaginationBar } from "@/components/ui/pagination-bar";
 import { InviteUserDialog } from "@/components/features/users/invite-user-dialog";
 import { unitLabel, useUnits } from "@/components/features/users/unit-checkbox-list";
 import { UserDetailSheet } from "@/components/features/users/user-detail-sheet";
@@ -21,6 +21,7 @@ import { ADMIN_ROLE } from "@/components/layout/nav-items";
 import { useMe } from "@/lib/session";
 import { ApiError, listUsers, USER_ROLES, type UserRole, type UserSort, type UserSummary } from "@/lib/users-api";
 import { rateLimitMessage } from "@/lib/api-errors";
+import { usePagination } from "@/lib/pagination";
 
 // =============================================================================
 // /administracao/usuarios — gestão de usuários (ADM).
@@ -34,7 +35,6 @@ import { rateLimitMessage } from "@/lib/api-errors";
 // aria-busy) até a próxima resposta chegar.
 // =============================================================================
 
-const PAGE_SIZE = 25;
 const SEARCH_DEBOUNCE_MS = 300;
 const SEARCH_MAX = 100;
 
@@ -53,7 +53,8 @@ export default function AdministracaoUsuariosPage() {
   const [unitId, setUnitId] = useState("");
   const [active, setActive] = useState<ActiveFilter>("all");
   const [sort, setSort] = useState<UserSort>("name");
-  const [page, setPage] = useState(1);
+  const pg = usePagination();
+  const resetPage = pg.resetPage;
   const [inviteOpen, setInviteOpen] = useState(false);
   const [selected, setSelected] = useState<UserSummary | null>(null);
   const [sheetOpen, setSheetOpen] = useState(false);
@@ -61,10 +62,10 @@ export default function AdministracaoUsuariosPage() {
   useEffect(() => {
     const handle = setTimeout(() => {
       setQ(search.trim());
-      setPage(1);
+      resetPage();
     }, SEARCH_DEBOUNCE_MS);
     return () => clearTimeout(handle);
-  }, [search]);
+  }, [search, resetPage]);
 
   const params = {
     q: q || undefined,
@@ -72,8 +73,8 @@ export default function AdministracaoUsuariosPage() {
     unit_id: unitId || undefined,
     active: active === "all" ? undefined : active === "true",
     sort,
-    page,
-    page_size: PAGE_SIZE,
+    page: pg.page,
+    page_size: pg.pageSize,
   };
 
   const usersQuery = useQuery({
@@ -85,20 +86,17 @@ export default function AdministracaoUsuariosPage() {
   });
 
   const filtered = !!q || !!role || !!unitId || active !== "all";
-  const totalPages = usersQuery.data ? Math.max(1, Math.ceil(usersQuery.data.total / PAGE_SIZE)) : 1;
   const busy = usersQuery.isFetching && !usersQuery.isPending;
-  const changing = usersQuery.isPlaceholderData;
-
-  function resetPage<T>(setter: (value: T) => void) {
+  function withReset<T>(setter: (value: T) => void) {
     return (value: T) => {
       setter(value);
-      setPage(1);
+      resetPage();
     };
   }
-  const chooseRole = resetPage(setRole);
-  const chooseActive = resetPage(setActive);
-  const chooseUnit = resetPage(setUnitId);
-  const chooseSort = resetPage(setSort);
+  const chooseRole = withReset(setRole);
+  const chooseActive = withReset(setActive);
+  const chooseUnit = withReset(setUnitId);
+  const chooseSort = withReset(setSort);
 
   function clearFilters() {
     setSearch("");
@@ -106,7 +104,7 @@ export default function AdministracaoUsuariosPage() {
     setRole(undefined);
     setUnitId("");
     setActive("all");
-    setPage(1);
+    resetPage();
   }
 
   return (
@@ -223,7 +221,7 @@ export default function AdministracaoUsuariosPage() {
         <>
           <UsersTable
             users={usersQuery.data.users}
-            pageKey={`${usersQuery.data.page}|${q}|${role ?? ""}|${unitId}|${active}|${sort}`}
+            pageKey={`${usersQuery.data.page}|${usersQuery.data.page_size}|${q}|${role ?? ""}|${unitId}|${active}|${sort}`}
             busy={busy}
             sort={sort}
             onSortChange={chooseSort}
@@ -234,32 +232,15 @@ export default function AdministracaoUsuariosPage() {
             }}
           />
 
-          <div className="flex flex-wrap items-center justify-between gap-4">
-            <div className="flex flex-wrap items-center gap-3">
-              <span className="text-body-sm text-warm-granite" aria-live="polite">
-                Página {usersQuery.data.page} de {totalPages} · {usersQuery.data.total} usuário(s)
-              </span>
-              {changing ? <StatusIndicator state="loading" label="Carregando…" /> : null}
-            </div>
-            <div className="flex gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={page <= 1 || changing}
-                onClick={() => setPage((p) => Math.max(1, p - 1))}
-              >
-                Anterior
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={page >= totalPages || changing}
-                onClick={() => setPage((p) => p + 1)}
-              >
-                Próxima
-              </Button>
-            </div>
-          </div>
+          <PaginationBar
+            page={pg.page}
+            pageSize={pg.pageSize}
+            total={usersQuery.data.total}
+            onPageChange={pg.setPage}
+            onPageSizeChange={pg.setPageSize}
+            busy={usersQuery.isFetching}
+            noun="usuário(s)"
+          />
         </>
       )}
 

@@ -65,3 +65,42 @@ def _cliente_redis_sem_cache_entre_testes():
     reset_redis_client_cache()
     yield
     reset_redis_client_cache()
+
+
+def pytest_configure(config):
+    config.addinivalue_line(
+        "markers", "strict_page_size: usa o contrato real de paginação (50/100/200)."
+    )
+
+
+@pytest.fixture(autouse=True)
+def _page_size_pequeno_para_testes_de_paginacao(request, monkeypatch):
+    """Permite `page_size` pequeno (1..10) só para os testes que paginam poucos dados.
+
+    O contrato de produção (somente 50/100/200) é verificado pelos testes
+    marcados com `strict_page_size` (ex.: `test_pagination_contract.py`).
+    """
+    if request.node.get_closest_marker("strict_page_size"):
+        return
+    monkeypatch.setattr(
+        "app.services.pagination.ALLOWED_PAGE_SIZES", (1, 2, 3, 5, 10, 50, 100, 200)
+    )
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _sqlite_unaccent():
+    """Registra `sispat_unaccent` (equivalente ao wrapper de `unaccent` do PostgreSQL) no SQLite."""
+    import sqlite3
+
+    from sqlalchemy import event
+    from sqlalchemy.engine import Engine
+
+    from app.security.text_search import register_sqlite_functions
+
+    def _on_connect(dbapi_connection, _record):
+        if isinstance(dbapi_connection, sqlite3.Connection):
+            register_sqlite_functions(dbapi_connection)
+
+    event.listen(Engine, "connect", _on_connect)
+    yield
+    event.remove(Engine, "connect", _on_connect)

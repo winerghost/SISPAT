@@ -9,6 +9,7 @@
 // =============================================================================
 
 import { apiClient } from "@/lib/api-client";
+import { DEFAULT_PAGE_SIZE, parsePageSize, type PageSize } from "@/lib/pagination";
 import type { UserRole } from "@/lib/users-api";
 
 export interface UnitAccessUnit {
@@ -41,13 +42,14 @@ export interface UnitAccessFilters {
   active?: UnitAccessActive;
   sort: UnitAccessSort;
   page: number;
+  /** Backend aceita só 50, 100 ou 200. */
+  page_size: PageSize;
 }
 
-export const UNIT_ACCESS_PAGE_SIZE = 25;
 const MAX_PAGE = 100_000;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const ROLES: readonly UserRole[] = ["ADM", "USER", "RH"];
-const ALLOWED_KEYS = new Set(["unit_id", "role", "active", "sort", "page"]);
+const ALLOWED_KEYS = new Set(["unit_id", "role", "active", "sort", "page", "page_size"]);
 
 /**
  * Lê os filtros da URL: chave desconhecida/repetida ou valor inválido é
@@ -70,6 +72,7 @@ export function parseUnitAccessFilters(params: URLSearchParams): UnitAccessFilte
     active: active === "true" || active === "false" ? active : undefined,
     sort: sort === "-name" ? "-name" : "name",
     page: pageNumber >= 1 && pageNumber <= MAX_PAGE ? pageNumber : 1,
+    page_size: parsePageSize(one("page_size")),
   };
 }
 
@@ -81,6 +84,7 @@ export function unitAccessQueryString(filters: UnitAccessFilters): string {
   if (filters.active) out.set("active", filters.active);
   if (filters.sort !== "name") out.set("sort", filters.sort);
   if (filters.page > 1) out.set("page", String(filters.page));
+  if (filters.page_size !== DEFAULT_PAGE_SIZE) out.set("page_size", String(parsePageSize(filters.page_size)));
   return out.toString();
 }
 
@@ -93,7 +97,7 @@ export function getUnitAccess(filters: UnitAccessFilters): Promise<UnitAccessRes
       active: filters.active,
       sort: filters.sort,
       page: filters.page,
-      page_size: UNIT_ACCESS_PAGE_SIZE,
+      page_size: parsePageSize(filters.page_size),
     },
   });
 }

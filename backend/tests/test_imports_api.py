@@ -226,7 +226,8 @@ def test_list_items_sucesso_retorna_200(client):
     mock_service.list_preview_items.return_value = {
         "total": 1,
         "page": 1,
-        "page_size": 25,
+        "page_size": 50,
+        "pages": 1,
         "items": [item],
     }
 
@@ -236,7 +237,7 @@ def test_list_items_sucesso_retorna_200(client):
             "app.api.v1.imports._bens_preview_exists", return_value=True
         ):
             response = client.get(
-                _items_url(preview_id) + "?status=NOVO&search=100&page=1&page_size=25",
+                _items_url(preview_id) + "?status=NOVO&search=100&page=1&page_size=50",
                 headers=_auth_headers(token),
             )
 
@@ -245,7 +246,7 @@ def test_list_items_sucesso_retorna_200(client):
     assert body["total"] == 1
     assert body["items"][0]["patrimony_number"] == "100"
     mock_service.list_preview_items.assert_called_once_with(
-        preview_id, status="NOVO", search="100", page=1, page_size=25
+        preview_id, status="NOVO", search="100", page=1, page_size=50
     )
 
 

@@ -11,7 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { FormMessage } from "@/components/ui/form-message";
 import { LoadingSkeleton } from "@/components/ui/loading-skeleton";
-import { StatusIndicator } from "@/components/ui/status-indicator";
+import { PaginationBar } from "@/components/ui/pagination-bar";
 import {
   AnimatedTableBody,
   AnimatedTableRow,
@@ -23,6 +23,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { ApiError } from "@/lib/api-client";
+import { usePagination } from "@/lib/pagination";
 import {
   getGoogleSheetsPreviewItems,
   type ImportItemClassification,
@@ -61,8 +62,11 @@ import { CLASSIFICATION_META } from "./classification";
 // Não há ordenação: o endpoint não aceita parâmetro de ordenação.
 // =============================================================================
 
-const PAGE_SIZE = 20;
+// Limite de linhas animadas na entrada (o resto aparece pronto).
+const ANIMATED_ROWS = 20;
 const SEARCH_DEBOUNCE_MS = 400;
+// Mesmo limite do backend (ImportItemsQuery.search max_length=200).
+const SEARCH_MAX = 200;
 
 const CLASSIFICATIONS = Object.keys(CLASSIFICATION_META) as ImportItemClassification[];
 
@@ -97,7 +101,8 @@ interface PreviewItemsTableProps {
 }
 
 export function PreviewItemsTable({ previewId, onSelectionSummaryChange }: PreviewItemsTableProps) {
-  const [page, setPage] = useState(1);
+  const pg = usePagination();
+  const { page, pageSize } = pg;
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<ImportItemClassification | undefined>(undefined);
@@ -105,20 +110,27 @@ export function PreviewItemsTable({ previewId, onSelectionSummaryChange }: Previ
 
   const itemsCacheRef = useRef<Map<string, ImportPreviewItem>>(new Map());
 
+  const appliedSearch = useRef("");
+  const { resetPage } = pg;
+
   useEffect(() => {
     const handle = setTimeout(() => {
-      setDebouncedSearch(search);
-      setPage(1);
+      const next = search.trim();
+      // Só volta à 1ª página se o termo realmente mudou (não ao montar).
+      if (next === appliedSearch.current) return;
+      appliedSearch.current = next;
+      setDebouncedSearch(next);
+      resetPage();
     }, SEARCH_DEBOUNCE_MS);
     return () => clearTimeout(handle);
-  }, [search]);
+  }, [search, resetPage]);
 
   const { data, isLoading, isFetching, isPlaceholderData, isError, error, refetch } = useQuery({
-    queryKey: ["import-preview-items", previewId, page, PAGE_SIZE, statusFilter, debouncedSearch],
+    queryKey: ["import-preview-items", previewId, page, pageSize, statusFilter, debouncedSearch],
     queryFn: () =>
       getGoogleSheetsPreviewItems(previewId, {
         page,
-        page_size: PAGE_SIZE,
+        page_size: pageSize,
         status: statusFilter,
         search: debouncedSearch || undefined,
       }),
@@ -131,7 +143,7 @@ export function PreviewItemsTable({ previewId, onSelectionSummaryChange }: Previ
   // Chave do <tbody>: só muda quando os dados do NOVO filtro/página chegam
   // (nunca durante o placeholder), remontando o corpo para a entrada
   // escalonada. Atribuição idempotente durante o render (sem efeito colateral).
-  const filterKey = `${page}|${statusFilter ?? ""}|${debouncedSearch}`;
+  const filterKey = `${page}|${pageSize}|${statusFilter ?? ""}|${debouncedSearch}`;
   const shownKeyRef = useRef(filterKey);
   if (data && !isPlaceholderData) shownKeyRef.current = filterKey;
   const busy = isFetching && !isLoading;
@@ -246,7 +258,20 @@ export function PreviewItemsTable({ previewId, onSelectionSummaryChange }: Previ
 
   const items = data?.items ?? [];
   const total = data?.total ?? 0;
-  const pageCount = total > 0 ? Math.ceil(total / PAGE_SIZE) : 1;
+  const pageCount = total > 0 ? Math.ceil(total / pageSize) : 1;
+  const filtered = statusFilter !== undefined || debouncedSearch !== "";
+
+  function chooseStatus(next: ImportItemClassification | undefined) {
+    setStatusFilter(next);
+    resetPage();
+  }
+
+  function clearFilters() {
+    setSearch("");
+    appliedSearch.current = "";
+    setDebouncedSearch("");
+    chooseStatus(undefined);
+  }
 
   const table = useReactTable({
     data: items,
@@ -264,29 +289,29 @@ export function PreviewItemsTable({ previewId, onSelectionSummaryChange }: Previ
           value={search}
           onChange={(event) => setSearch(event.target.value)}
           className="w-full sm:max-w-xs"
+          maxLength={SEARCH_MAX}
           aria-label="Buscar itens da prévia"
         />
         <div className="flex flex-wrap gap-2" role="group" aria-label="Filtrar por classificação">
           <FilterPill
             label="Todos"
             active={statusFilter === undefined}
-            onClick={() => {
-              setStatusFilter(undefined);
-              setPage(1);
-            }}
+            onClick={() => chooseStatus(undefined)}
           />
           {CLASSIFICATIONS.map((key) => (
             <FilterPill
               key={key}
               label={CLASSIFICATION_META[key].label}
               active={statusFilter === key}
-              onClick={() => {
-                setStatusFilter(key);
-                setPage(1);
-              }}
+              onClick={() => chooseStatus(key)}
             />
           ))}
         </div>
+        {filtered || search !== "" ? (
+          <Button variant="link" size="sm" className="min-h-8" onClick={clearFilters}>
+            Limpar filtros
+          </Button>
+        ) : null}
       </div>
 
       {isError && (
@@ -317,7 +342,7 @@ export function PreviewItemsTable({ previewId, onSelectionSummaryChange }: Previ
               </TableRow>
             ))}
           </TableHeader>
-          <AnimatedTableBody key={shownKeyRef.current} limit={PAGE_SIZE}>
+          <AnimatedTableBody key={shownKeyRef.current} limit={ANIMATED_ROWS}>
             {table.getRowModel().rows.length === 0 ? (
               <TableEmpty
                 colSpan={columns.length}
@@ -344,32 +369,15 @@ export function PreviewItemsTable({ previewId, onSelectionSummaryChange }: Previ
         </Table>
       )}
 
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex flex-wrap items-center gap-3">
-          <span className="text-caption text-pale-stone" aria-live="polite">
-            {total > 0 ? `Página ${page} de ${pageCount} — ${total} item(ns)` : "—"}
-          </span>
-          {busy ? <StatusIndicator state="loading" label="Atualizando…" /> : null}
-        </div>
-        <div className="flex gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={page <= 1 || isFetching}
-            onClick={() => setPage((current) => Math.max(1, current - 1))}
-          >
-            Anterior
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={page >= pageCount || isFetching}
-            onClick={() => setPage((current) => current + 1)}
-          >
-            Próxima
-          </Button>
-        </div>
-      </div>
+      <PaginationBar
+        page={page}
+        pageSize={pageSize}
+        total={total}
+        onPageChange={pg.setPage}
+        onPageSizeChange={pg.setPageSize}
+        busy={isFetching}
+        noun="item(ns)"
+      />
     </div>
   );
 }

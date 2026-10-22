@@ -4,6 +4,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { installMocks, seedSession, waitForHydration, type MockOptions, type MockState } from "./support/mocks";
 import { defaultUnitAccess } from "./support/unit-access-mocks";
 
+
 // =============================================================================
 // /administracao/vinculos-unidades — consulta SOMENTE LEITURA (ADM).
 // Mock sintético de GET /v1/admin/unit-access. A autorização é do BACKEND
@@ -51,21 +52,65 @@ test.describe("ADM — lista", () => {
     await expect(page.getByRole("heading", { level: 1, name: "Vínculos de Unidades" })).toBeVisible();
     const table = page.getByRole("table", { name: TABLE });
     await expect(table).toBeVisible();
-    await expect(table.getByTestId("unit-access-row")).toHaveCount(25);
-    await expect(page.getByText("Página 1 de 2 · 30 usuário(s)")).toBeVisible();
+    await expect(table.getByTestId("unit-access-row")).toHaveCount(30);
+    await expect(page.getByText("Exibindo 1–30 de 30 usuário(s)")).toBeVisible();
     await expect(table.getByRole("list", { name: "Unidades de Pessoa Vinculada 05" }).getByText("PSU-TO")).toBeVisible();
     await expect(page.getByRole("main")).not.toContainText("@");
     await expect(page.getByRole("main").getByRole("button", { name: /^(Nov|Editar|Salvar|Excluir|Inativar|Vincular)/ })).toHaveCount(0);
-    expect(accessCalls(state)).toEqual(["GET /api/v1/admin/unit-access?sort=name&page=1&page_size=25"]);
+    expect(accessCalls(state)).toEqual(["GET /api/v1/admin/unit-access?sort=name&page=1&page_size=50"]);
   });
 
-  test("paginação grava ?page= na URL e mostra o restante", async ({ page }) => {
-    await open(page);
+  test("paginação 50/100/200 grava page/page_size na URL e mostra o restante", async ({ page }) => {
+    const state = await open(page, { role: "ADM", unitAccess: defaultUnitAccess(130) });
     await expect(page.getByRole("table", { name: TABLE })).toBeVisible();
+    await expect(page.getByText("Exibindo 1–50 de 130 usuário(s)")).toBeVisible();
+    await expect(page.getByTestId("unit-access-row")).toHaveCount(50);
     await page.getByRole("button", { name: "Próxima" }).click();
     await expect(page).toHaveURL(/\?page=2$/);
-    await expect(page.getByText("Página 2 de 2 · 30 usuário(s)")).toBeVisible();
-    await expect(page.getByTestId("unit-access-row")).toHaveCount(5);
+    await expect(page.getByText("Exibindo 51–100 de 130 usuário(s)")).toBeVisible();
+    await page.getByRole("button", { name: "Última" }).click();
+    await expect(page).toHaveURL(/\?page=3$/);
+    await expect(page.getByTestId("unit-access-row")).toHaveCount(30);
+
+    await page.getByLabel("Registros por página").selectOption("100");
+    await expect(page).toHaveURL(/\?page_size=100$/);
+    await expect(page.getByText("Exibindo 1–100 de 130 usuário(s)")).toBeVisible();
+    await page.getByLabel("Registros por página").selectOption("200");
+    await expect(page.getByTestId("unit-access-row")).toHaveCount(130);
+
+    for (const call of accessCalls(state)) {
+      const size = new URL(call.split(" ")[1]!, "http://x").searchParams.get("page_size");
+      expect(["50", "100", "200"]).toContain(size);
+    }
+  });
+
+  test("zebra nas linhas", async ({ page }) => {
+    await open(page);
+    const rows = page.getByTestId("unit-access-row");
+    await expect(rows).toHaveCount(30);
+    await page.mouse.move(0, 0);
+    const bg = (n: number) => rows.nth(n).evaluate((el) => getComputedStyle(el).backgroundColor);
+    const [a, b, c] = [await bg(0), await bg(1), await bg(2)];
+    expect(a).toBe(c);
+    expect(b).not.toBe(a);
+  });
+
+  test("filtro volta à página 1; 'Limpar filtros' preserva o tamanho de página", async ({ page }) => {
+    await open(page, { role: "ADM", unitAccess: defaultUnitAccess(130) }, `${PATH}?page=2&page_size=100`);
+    await expect(page.getByText("Exibindo 101–130 de 130 usuário(s)")).toBeVisible();
+    await page.getByRole("group", { name: "Filtrar por perfil" }).getByRole("button", { name: "RH" }).click();
+    await expect(page).toHaveURL(/\?role=RH&page_size=100$/);
+    await expect(page.getByText(/Exibindo 1–\d+ de \d+ usuário\(s\)/)).toBeVisible();
+    await page.getByRole("button", { name: "Limpar filtros" }).click();
+    await expect(page).toHaveURL(/\?page_size=100$/);
+    await expect(page.getByText("Exibindo 1–100 de 130 usuário(s)")).toBeVisible();
+  });
+
+  test("page_size inválido na URL (25) é normalizado e nunca chega ao backend", async ({ page }) => {
+    const state = await open(page, { role: "ADM" }, `${PATH}?page_size=25`);
+    await expect(page.getByRole("table", { name: TABLE })).toBeVisible();
+    await expect(page).toHaveURL(/\/administracao\/vinculos-unidades$/);
+    for (const call of accessCalls(state)) expect(call).not.toContain("page_size=25");
   });
 
   test("nome vindo da API é texto inerte (sem HTML)", async ({ page }) => {
@@ -82,14 +127,14 @@ test.describe("ADM — filtros na URL", () => {
     await expect(page.getByRole("table", { name: TABLE })).toBeVisible();
     await page.getByRole("group", { name: "Filtrar por perfil" }).getByRole("button", { name: "RH" }).click();
     await expect(page).toHaveURL(/\?role=RH$/);
-    await expect(page.getByText("Página 1 de 1 · 10 usuário(s)")).toBeVisible();
+    await expect(page.getByText("Exibindo 1–10 de 10 usuário(s)")).toBeVisible();
     await page.getByRole("group", { name: "Filtrar por situação" }).getByRole("button", { name: "Inativos" }).click();
     await expect(page).toHaveURL(/\?role=RH&active=false$/);
     await page.getByRole("button", { name: /Usuário/ }).click();
     await expect(page).toHaveURL(/sort=-name/);
     await page.getByRole("button", { name: "Limpar filtros" }).click();
     await expect(page).toHaveURL(/\/administracao\/vinculos-unidades$/);
-    await expect(page.getByText("Página 1 de 2 · 30 usuário(s)")).toBeVisible();
+    await expect(page.getByText("Exibindo 1–30 de 30 usuário(s)")).toBeVisible();
   });
 
   test("filtro por unidade usa a lista de unidades do escopo", async ({ page }) => {
@@ -98,7 +143,7 @@ test.describe("ADM — filtros na URL", () => {
     await expect(page.getByLabel("Unidade", { exact: true }).locator("option")).toHaveCount(4);
     await page.getByLabel("Unidade", { exact: true }).selectOption(UNIT_B);
     await expect(page).toHaveURL(new RegExp(`\\?unit_id=${UNIT_B}$`));
-    await expect(page.getByText(/Página 1 de 1 · \d+ usuário\(s\)/)).toBeVisible();
+    await expect(page.getByText(/Exibindo 1–\d+ de \d+ usuário\(s\)/)).toBeVisible();
     expect(accessCalls(state).some((c) => c.includes(`unit_id=${UNIT_B}`))).toBe(true);
   });
 

@@ -18,6 +18,7 @@
 // =============================================================================
 
 import { ACTOR_ID, ASSET_IDS, OUT_OF_SCOPE_UNIT_ID, type AssetHandlerState, type AssetMock } from "./asset-mocks";
+import { mockPage, mockPageSize } from "./page-size";
 import type { CatalogUnitRef } from "./catalog-mocks";
 import { PERSON_IDS, ROOM_IDS } from "./catalog-mocks";
 
@@ -318,8 +319,8 @@ async function list(ctx: MovementRequestContext, err: Err): Promise<boolean> {
   const status = searchParams.get("status");
   const sort = searchParams.get("sort") ?? "-created_at";
   const field = sort.replace(/^-/, "");
-  const page = Number(searchParams.get("page") ?? 1);
-  const pageSize = Number(searchParams.get("page_size") ?? 25);
+  const page = mockPage(searchParams);
+  const pageSize = mockPageSize(searchParams);
   const from = searchParams.get("created_from");
   const to = searchParams.get("created_to");
   for (const key of ["asset_id", "origin_unit_id", "destination_unit_id"]) {
@@ -332,11 +333,8 @@ async function list(ctx: MovementRequestContext, err: Err): Promise<boolean> {
     !SORTS.has(field) ||
     badDate(from) ||
     badDate(to) ||
-    !Number.isInteger(page) ||
-    page < 1 ||
-    !Number.isInteger(pageSize) ||
-    pageSize < 1 ||
-    pageSize > 100
+    page === null ||
+    pageSize === null
   ) {
     return err(400, "validation_error");
   }

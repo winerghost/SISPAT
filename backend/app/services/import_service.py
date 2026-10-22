@@ -124,6 +124,8 @@ from app.integrations.google_sheets_client import GoogleSheetsClient, GoogleShee
 from app.models.assets import Asset
 from app.models.audit import AuditLog
 from app.models.imports import ImportPreview, ImportPreviewItem
+from app.security.text_search import contains_ci
+from app.services.pagination import DEFAULT_PAGE_SIZE, coerce_page_size, page_count
 from app.models.sync import RawImportRecord, SyncJob
 from app.services.patrimony_lock import (
     acquire_patrimony_lock,
@@ -137,9 +139,7 @@ from app.services.import_references import (
     message_for,
 )
 from app.security.sanitize import (
-    LIKE_ESCAPE_CHAR,
     canonical_header,
-    escape_like,
     has_control_chars,
     normalize_identifier,
 )
@@ -749,7 +749,7 @@ class ImportService:
         status: str | None = None,
         search: str | None = None,
         page: int = 1,
-        page_size: int = 25,
+        page_size: int = DEFAULT_PAGE_SIZE,
     ) -> dict[str, Any]:
         """Lista, de forma paginada, os itens de uma `ImportPreview`.
 
@@ -768,7 +768,7 @@ class ImportService:
             raise PreviewNotFoundError(f"pré-visualização {preview_id} não encontrada")
 
         safe_page = min(max(page, 1), MAX_PAGE)
-        safe_page_size = max(1, min(page_size, 100))
+        safe_page_size = coerce_page_size(page_size)
 
         normalized_status = status.strip().upper() if isinstance(status, str) else None
         if normalized_status and normalized_status not in _ALLOWED_CLASSIFICATIONS:
@@ -776,7 +776,7 @@ class ImportService:
                 "preview": preview,
                 "total": 0,
                 "page": safe_page,
-                "page_size": safe_page_size,
+                "page_size": safe_page_size, "pages": 0,
                 "items": [],
             }
 
@@ -787,13 +787,10 @@ class ImportService:
             query = query.filter(ImportPreviewItem.classification == normalized_status)
         search_term = search.strip()[:MAX_SEARCH_LENGTH] if isinstance(search, str) else ""
         if search_term:
-            like_pattern = f"%{escape_like(search_term)}%"
             query = query.filter(
                 or_(
-                    ImportPreviewItem.patrimony_number.ilike(
-                        like_pattern, escape=LIKE_ESCAPE_CHAR
-                    ),
-                    ImportPreviewItem.description.ilike(like_pattern, escape=LIKE_ESCAPE_CHAR),
+                    contains_ci(ImportPreviewItem.patrimony_number, search_term),
+                    contains_ci(ImportPreviewItem.description, search_term),
                 )
             )
 
@@ -812,7 +809,7 @@ class ImportService:
             "preview": preview,
             "total": total,
             "page": safe_page,
-            "page_size": safe_page_size,
+            "page_size": safe_page_size, "pages": page_count(total, safe_page_size),
             "items": results,
         }
 

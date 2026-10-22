@@ -1,15 +1,16 @@
 "use client";
 
-import { useState } from "react";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { History } from "lucide-react";
 
 import { StaggerContainer, StaggerItem } from "@/components/animations";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { PaginationBar } from "@/components/ui/pagination-bar";
 import { EmptyState } from "@/components/ui/empty-state";
 import { FormMessage } from "@/components/ui/form-message";
 import { LoadingSkeleton } from "@/components/ui/loading-skeleton";
+import { usePagination } from "@/lib/pagination";
 import { cn } from "@/lib/utils";
 import { getUserAudit, type UserAuditEvent } from "@/lib/users-api";
 import { CHANGE_FIELD_LABEL, formatDateTime, OPERATION_LABEL, userErrorMessage } from "./user-labels";
@@ -20,8 +21,6 @@ import { CHANGE_FIELD_LABEL, formatDateTime, OPERATION_LABEL, userErrorMessage }
 // active, avatar, sessions_revoked_at) é exibido SEMPRE como texto escapado
 // pelo React — nunca HTML. Datas em America/Araguaina.
 // =============================================================================
-
-const PAGE_SIZE = 10;
 
 export const userAuditQueryKey = (userId: string) => ["users", "audit", userId] as const;
 
@@ -61,10 +60,12 @@ export function describeChanges(changes: UserAuditEvent["changes"]): string[] {
 }
 
 export function UserAuditList({ userId }: { userId: string }) {
-  const [page, setPage] = useState(1);
+  // Histórico no painel lateral: tamanho próprio (não herda o das listas).
+  const pg = usePagination({ persist: false });
+  const { page, pageSize } = pg;
   const audit = useQuery({
-    queryKey: [...userAuditQueryKey(userId), page],
-    queryFn: () => getUserAudit(userId, { page, page_size: PAGE_SIZE }),
+    queryKey: [...userAuditQueryKey(userId), page, pageSize],
+    queryFn: () => getUserAudit(userId, { page, page_size: pageSize }),
     placeholderData: keepPreviousData,
     retry: false,
   });
@@ -83,7 +84,6 @@ export function UserAuditList({ userId }: { userId: string }) {
   }
 
   const { events, total } = audit.data;
-  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   if (events.length === 0) {
     return <EmptyState icon={History} title="Nenhum evento registrado para este usuário." />;
@@ -93,7 +93,7 @@ export function UserAuditList({ userId }: { userId: string }) {
     <div className="flex flex-col gap-4">
       <StaggerContainer
         as="ol"
-        key={page}
+        key={`${page}-${pageSize}`}
         aria-label="Histórico de alterações"
         aria-busy={audit.isPlaceholderData || undefined}
         className={cn("flex flex-col gap-3 transition-opacity duration-base ease-factory", audit.isPlaceholderData && "opacity-60")}
@@ -126,24 +126,16 @@ export function UserAuditList({ userId }: { userId: string }) {
         })}
       </StaggerContainer>
 
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <span className="text-body-sm text-warm-granite" aria-live="polite">
-          Página {audit.data.page} de {totalPages} · {total} evento(s)
-        </span>
-        <div className="flex gap-2">
-          <Button variant="outline" size="sm" disabled={page <= 1 || audit.isPlaceholderData} onClick={() => setPage((p) => p - 1)}>
-            Anterior
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={page >= totalPages || audit.isPlaceholderData}
-            onClick={() => setPage((p) => p + 1)}
-          >
-            Próxima
-          </Button>
-        </div>
-      </div>
+      <PaginationBar
+        page={page}
+        pageSize={pageSize}
+        total={total}
+        onPageChange={pg.setPage}
+        onPageSizeChange={pg.setPageSize}
+        busy={audit.isFetching}
+        noun="evento(s)"
+        label="Paginação do histórico"
+      />
     </div>
   );
 }

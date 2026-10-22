@@ -61,5 +61,5 @@ nunca o texto de observações/motivo). 404 de escopo gera `UNIT_SCOPE_DENIED`.
 ## Locais (`GET /api/v1/locations`)
 
 Somente leitura, `units.read`, AAL2 só ADM, escopo de unidade. Filtros `unit_id`, `room_id`,
-`active`, `q`; `sort` = `name|created_at|updated_at` (com `-`); `page`, `page_size`<=100.
+`active`, `q`; `sort` = `name|created_at|updated_at` (com `-`); `page`, `page_size` 50|100|200 (padrão 50).
 `GET /locations/<id>`: inexistente, malformado ou alheio = 404 uniforme.

@@ -10,7 +10,7 @@
 // =============================================================================
 
 import { apiClient, ApiError } from "@/lib/api-client";
-import { dayEndUtc, dayStartUtc, type AuditFilters, AUDIT_PAGE_SIZE } from "@/lib/audit-filters";
+import { dayEndUtc, dayStartUtc, type AuditFilters } from "@/lib/audit-filters";
 
 /** Valor escalar já projetado pelo backend (texto curto, número, booleano ou null). */
 export type AuditScalar = string | number | boolean | null;
@@ -53,7 +53,7 @@ export interface AuditLogDetail extends AuditLogSummary {
 }
 
 /** `GET /api/v1/admin/audit-logs` — filtros por allowlist, página e ordenação. */
-export function listAuditLogs(filters: AuditFilters, page: number): Promise<AuditLogsResponse> {
+export function listAuditLogs(filters: AuditFilters, page: number, pageSize: number): Promise<AuditLogsResponse> {
   return apiClient.get<AuditLogsResponse>("/v1/admin/audit-logs", {
     searchParams: {
       event_type: filters.event_type,
@@ -66,7 +66,7 @@ export function listAuditLogs(filters: AuditFilters, page: number): Promise<Audi
       to: filters.to ? dayEndUtc(filters.to) : undefined,
       sort: filters.sort,
       page,
-      page_size: AUDIT_PAGE_SIZE,
+      page_size: pageSize,
     },
   });
 }

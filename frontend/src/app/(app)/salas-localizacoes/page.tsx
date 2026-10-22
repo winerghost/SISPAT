@@ -3,10 +3,10 @@
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 
 import { LoadingSkeleton } from "@/components/ui/loading-skeleton";
-import { CatalogHeader, CatalogNotice, CatalogPagination } from "@/components/features/catalog/catalog-parts";
+import { PaginationBar } from "@/components/ui/pagination-bar";
+import { CatalogHeader, CatalogNotice } from "@/components/features/catalog/catalog-parts";
 import { CatalogToolbar } from "@/components/features/catalog/catalog-toolbar";
-import { PAGE_SIZE } from "@/components/features/catalog/catalog-labels";
-import { useCatalogFilters } from "@/components/features/catalog/use-catalog-filters";
+import { useCatalogFilters, useClampPage } from "@/components/features/catalog/use-catalog-filters";
 import {
   lookupErrorMessage,
   SESSION_ERROR_MESSAGE,
@@ -36,7 +36,7 @@ export default function SalasLocalizacoesPage() {
     active: filters.activeParam,
     sort: filters.sort,
     page: filters.page,
-    page_size: PAGE_SIZE,
+    page_size: filters.pageSize,
   };
   const rooms = useQuery({
     queryKey: ["lookup", "rooms", params],
@@ -45,6 +45,8 @@ export default function SalasLocalizacoesPage() {
     placeholderData: keepPreviousData,
     retry: noClientRetry,
   });
+
+  useClampPage(filters.pg, rooms.data?.total, !rooms.isPlaceholderData);
 
   return (
     <div className="flex flex-col gap-8 p-4 sm:p-6 lg:p-8">
@@ -57,8 +59,8 @@ export default function SalasLocalizacoesPage() {
 
       <CatalogToolbar
         idPrefix="consulta-salas"
-        searchLabel="Buscar sala por nome"
-        searchPlaceholder="Buscar sala por nome…"
+        searchLabel="Buscar sala por nome ou andar"
+        searchPlaceholder="Buscar por nome ou andar…"
         search={filters.search}
         onSearch={filters.setSearch}
         units={{ items: units.data?.units, value: filters.unitId, onChange: filters.chooseUnit }}
@@ -85,19 +87,19 @@ export default function SalasLocalizacoesPage() {
           <RoomsReadTable
             rooms={rooms.data.rooms}
             units={units.data?.units}
-            pageKey={`${rooms.data.page}|${filters.q}|${filters.unitId}|${filters.active}|${filters.sort}`}
+            pageKey={`${rooms.data.page}|${filters.pageSize}|${filters.q}|${filters.unitId}|${filters.active}|${filters.sort}`}
             busy={rooms.isFetching && !rooms.isPending}
             sort={filters.sort}
             onSortChange={filters.chooseSort}
             filtered={filters.filtered}
           />
-          <CatalogPagination
-            page={rooms.data.page}
+          <PaginationBar
+            page={filters.page}
+            pageSize={filters.pageSize}
             total={rooms.data.total}
-            pageSize={PAGE_SIZE}
-            noun="sala(s)"
-            loading={rooms.isPlaceholderData}
-            onPage={filters.setPage}
+            onPageChange={filters.setPage}
+            onPageSizeChange={filters.setPageSize}
+            busy={rooms.isPlaceholderData}
           />
         </>
       )}

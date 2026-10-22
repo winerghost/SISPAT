@@ -35,6 +35,7 @@ from app.authorization.rbac import get_accessible_unit_ids
 from app.models.audit import AuditLog
 from app.models.units import UserUnitAccess
 from app.services.user_admin_service import iso_utc
+from app.services.pagination import page_count
 
 SECURITY_ENTITY_TYPE = "security_event"
 REDACTED = "[redacted]"
@@ -293,7 +294,7 @@ class AdminAuditService:
         return {
             "total": int(total),
             "page": page,
-            "page_size": page_size,
+            "page_size": page_size, "pages": page_count(total, page_size),
             "window": {"from": iso_utc(query.from_), "to": iso_utc(query.to_)},
             "items": [project_summary(row) for row in rows],
         }

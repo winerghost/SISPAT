@@ -16,6 +16,7 @@ from datetime import date
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator
+from app.api.v1.pagination import DEFAULT_PAGE_SIZE, PageSize
 
 from app.api.v1.catalog_schemas import clean_text
 
@@ -23,6 +24,7 @@ REASON_MAX = 500
 _VERSION = Field(ge=1, le=2_147_483_647)
 _ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 MovementStatus = Literal["PENDENTE", "APROVADA", "REJEITADA", "CONCLUIDA", "CANCELADA"]
+MovementType = Literal["TRANSFERENCIA_UNIDADE", "MUDANCA_SALA", "TROCA_RESPONSAVEL"]
 MovementSortKey = Literal["created_at", "-created_at", "status", "-status"]
 
 
@@ -72,6 +74,7 @@ class _Query(BaseModel):
 
 class MovementListQuery(_Query):
     status: MovementStatus | None = None
+    movement_type: MovementType | None = None
     asset_id: uuid.UUID | None = None
     origin_unit_id: uuid.UUID | None = None
     destination_unit_id: uuid.UUID | None = None
@@ -79,7 +82,7 @@ class MovementListQuery(_Query):
     created_to: str | None = Field(default=None, max_length=10)
     sort: MovementSortKey = "-created_at"
     page: int = Field(default=1, ge=1, le=100_000)
-    page_size: int = Field(default=25, ge=1, le=100)
+    page_size: PageSize = DEFAULT_PAGE_SIZE
 
     @field_validator("created_from", "created_to")
     @classmethod

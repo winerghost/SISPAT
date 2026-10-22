@@ -1,6 +1,7 @@
 "use client";
 
 import { Search } from "lucide-react";
+import { useRef } from "react";
 
 import { Button } from "@/components/ui/button";
 import { FilterPill } from "@/components/ui/filter-pill";
@@ -43,6 +44,7 @@ export function CatalogToolbar({
   onClear,
 }: CatalogToolbarProps) {
   const unitSelectId = `${idPrefix}-filtro-unidade`;
+  const searchRef = useRef<HTMLInputElement>(null);
   return (
     <section aria-label="Busca e filtros" className="flex flex-col gap-4">
       <div className="flex flex-col gap-4 md:flex-row md:flex-wrap md:items-end">
@@ -52,7 +54,10 @@ export function CatalogToolbar({
             aria-hidden
           />
           <Input
+            ref={searchRef}
             type="search"
+            autoComplete="off"
+            enterKeyHint="search"
             aria-label={searchLabel}
             placeholder={searchPlaceholder}
             maxLength={SEARCH_MAX}
@@ -96,7 +101,16 @@ export function CatalogToolbar({
           </div>
         ) : null}
         {filtered ? (
-          <Button variant="link" size="sm" className="min-h-8" onClick={onClear}>
+          <Button
+            variant="link"
+            size="sm"
+            className="min-h-8"
+            onClick={() => {
+              onClear();
+              // O botão some ao limpar: devolve o foco ao campo de busca.
+              searchRef.current?.focus();
+            }}
+          >
             Limpar filtros
           </Button>
         ) : null}

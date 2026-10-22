@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { FilterPill } from "@/components/ui/filter-pill";
 import { Input } from "@/components/ui/input";
 import { LoadingSkeleton } from "@/components/ui/loading-skeleton";
+import { PaginationBar } from "@/components/ui/pagination-bar";
 import {
   AnimatedTableBody,
   AnimatedTableRow,
@@ -19,7 +20,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { CatalogNotice, CatalogPagination } from "@/components/features/catalog/catalog-parts";
+import { CatalogNotice } from "@/components/features/catalog/catalog-parts";
 import { SortableHead } from "@/components/features/catalog/catalog-tables";
 import {
   getCatalogImportItems,
@@ -28,6 +29,7 @@ import {
   type CatalogImportSort,
 } from "@/lib/catalog-imports-api";
 import type { ImportItemClassification } from "@/lib/imports-api";
+import { usePagination } from "@/lib/pagination";
 import { cn } from "@/lib/utils";
 
 import { CLASSIFICATION_META } from "./classification";
@@ -51,7 +53,8 @@ import {
 // fica esmaecida (`busy`). Rola na horizontal só dentro do contêiner.
 // =============================================================================
 
-const PAGE_SIZE = 25;
+// Linhas animadas na entrada (o resto aparece pronto).
+const ANIMATED_ROWS = 20;
 const SEARCH_DEBOUNCE_MS = 400;
 const SEARCH_MAX = 100;
 const CLASSIFICATIONS = Object.keys(CLASSIFICATION_META) as ImportItemClassification[];
@@ -183,7 +186,8 @@ export function CatalogImportItemsTable({
   onPreviewGone,
   disabled = false,
 }: Props) {
-  const [page, setPage] = useState(1);
+  const pg = usePagination();
+  const { page, pageSize, resetPage } = pg;
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [status, setStatus] = useState<ImportItemClassification | undefined>(undefined);
@@ -197,17 +201,17 @@ export function CatalogImportItemsTable({
       if (next === appliedSearch.current) return;
       appliedSearch.current = next;
       setDebouncedSearch(next);
-      setPage(1);
+      resetPage();
     }, SEARCH_DEBOUNCE_MS);
     return () => clearTimeout(handle);
-  }, [search]);
+  }, [search, resetPage]);
 
   const query = useQuery({
-    queryKey: ["catalog-import-items", previewId, page, status, debouncedSearch, sort],
+    queryKey: ["catalog-import-items", previewId, page, pageSize, status, debouncedSearch, sort],
     queryFn: () =>
       getCatalogImportItems(previewId, {
         page,
-        page_size: PAGE_SIZE,
+        page_size: pageSize,
         status,
         search: debouncedSearch || undefined,
         sort,
@@ -235,17 +239,17 @@ export function CatalogImportItemsTable({
   const aliasOptedOnPage = aliasCandidates.filter((item) => aliasOptIn[item.id]).length;
   const aliasTotalOpted = Object.values(aliasOptIn).filter(Boolean).length;
   const noun = CATALOG_KIND_LABEL[kind].plural;
-  const pageKey = `${query.data?.page ?? page}|${status ?? ""}|${debouncedSearch}|${sort}`;
+  const pageKey = `${query.data?.page ?? page}|${pageSize}|${status ?? ""}|${debouncedSearch}|${sort}`;
   const columns = 7;
 
   function chooseStatus(next: ImportItemClassification | undefined) {
     setStatus(next);
-    setPage(1);
+    resetPage();
   }
 
   function chooseSort(next: CatalogImportSort) {
     setSort(next);
-    setPage(1);
+    resetPage();
   }
 
   return (
@@ -282,7 +286,7 @@ export function CatalogImportItemsTable({
               />
             ))}
           </div>
-          {filtered ? (
+          {filtered || search !== "" ? (
             <Button
               variant="link"
               size="sm"
@@ -376,7 +380,7 @@ export function CatalogImportItemsTable({
                 <TableHead>Avisos</TableHead>
               </TableRow>
             </TableHeader>
-            <AnimatedTableBody key={pageKey} limit={PAGE_SIZE}>
+            <AnimatedTableBody key={pageKey} limit={ANIMATED_ROWS}>
               {items.length === 0 ? (
                 <TableEmpty
                   colSpan={columns}
@@ -443,13 +447,14 @@ export function CatalogImportItemsTable({
               )}
             </AnimatedTableBody>
           </Table>
-          <CatalogPagination
-            page={query.data.page}
+          <PaginationBar
+            page={page}
+            pageSize={pageSize}
             total={total}
-            pageSize={PAGE_SIZE}
+            onPageChange={pg.setPage}
+            onPageSizeChange={pg.setPageSize}
+            busy={query.isFetching}
             noun="item(ns)"
-            loading={query.isPlaceholderData}
-            onPage={setPage}
           />
         </>
       ) : null}

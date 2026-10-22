@@ -106,7 +106,7 @@ export interface CatalogImportItemsParams {
   search?: string;
   sort?: CatalogImportSort;
   page?: number;
-  /** 1 a 100. */
+  /** 50, 100 ou 200. */
   page_size?: number;
 }
 

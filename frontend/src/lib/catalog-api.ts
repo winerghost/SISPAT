@@ -70,7 +70,7 @@ export interface CatalogListParams<TSort extends string> {
   active?: boolean;
   sort?: TSort;
   page?: number;
-  /** 1 a 100 (padrão do backend: 25). */
+  /** 50, 100 ou 200 (padrão do backend: 50). */
   page_size?: number;
 }
 

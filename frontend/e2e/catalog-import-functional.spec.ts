@@ -129,9 +129,8 @@ test.describe("cadastros — prévia, relatório e itens", () => {
     await expect(report.getByRole("region", { name: "Nomes suspeitos: 1" })).toContainText("JÕAO Sintético");
     await expect(report.getByRole("region", { name: "IDs repetidos: 1" })).toContainText("ID 35");
 
-    await expect(page.getByText("Página 1 de 2 · 30 item(ns)")).toBeVisible();
-    await page.getByRole("button", { name: "Próxima" }).click();
-    await expect(page.getByText("Página 2 de 2 · 30 item(ns)")).toBeVisible();
+    // 30 itens cabem numa página de 50 (padrão): sem próxima página.
+    await expect(page.getByText("Exibindo 1–30 de 30 item(ns)")).toBeVisible();
     await expect(page.getByRole("button", { name: "Próxima" })).toBeDisabled();
 
     // Dados da prévia só em memória: nem storage nem cookies.
@@ -140,6 +139,64 @@ test.describe("cadastros — prévia, relatório e itens", () => {
     const cookies = JSON.stringify(await page.context().cookies());
     for (const marker of ["p***@", "JÕAO", "Pessoa Sintética 0"]) expect(cookies).not.toContain(marker);
     expect(await expectNoXss(page)).toEqual({ executed: undefined, injectedImgs: 0 });
+  });
+
+  test("paginação 50/100/200: resumo, navegação, troca de tamanho e parâmetros aceitos", async ({ page }) => {
+    // 30 + 100 extras = 130 itens: 3 páginas de 50; 2 de 100; 1 de 200.
+    const state = await open(page, CADASTROS_PATH, { role: "ADM", catalogImport: { extraPeople: 100 } });
+    await generateCatalogPreview(page, "people");
+    const rows = page.getByRole("table", { name: "Itens da prévia de pessoas" }).locator("tbody tr");
+
+    await expect(page.getByText("Exibindo 1–50 de 130 item(ns)")).toBeVisible();
+    await expect(rows).toHaveCount(50);
+    await expect(page.getByRole("button", { name: "Anterior" })).toBeDisabled();
+    await page.getByRole("button", { name: "Próxima" }).click();
+    await expect(page.getByText("Exibindo 51–100 de 130 item(ns)")).toBeVisible();
+    await page.getByRole("button", { name: "Última" }).click();
+    await expect(page.getByText("Exibindo 101–130 de 130 item(ns)")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Próxima" })).toBeDisabled();
+
+    // Trocar o tamanho volta à página 1.
+    await page.getByLabel("Registros por página").selectOption("100");
+    await expect(page.getByText("Exibindo 1–100 de 130 item(ns)")).toBeVisible();
+    await expect(rows).toHaveCount(100);
+    await page.getByLabel("Registros por página").selectOption("200");
+    await expect(page.getByText("Exibindo 1–130 de 130 item(ns)")).toBeVisible();
+    await expect(rows).toHaveCount(130);
+
+    // Buscar/filtrar volta à página 1 (e o tamanho escolhido é mantido).
+    await page.getByLabel("Registros por página").selectOption("50");
+    await page.getByRole("button", { name: "Próxima" }).click();
+    await page.getByLabel("Buscar pessoas responsáveis na prévia").fill("extra 1");
+    await expect(page.getByText(/Exibindo 1–\d+ de \d+ item\(ns\)/)).toBeVisible();
+
+    const itemCalls = calls(state, "GET", `/v1/catalog-imports/${CATALOG_PREVIEW_IDS.people}/items`);
+    const sizes = new Set(itemCalls.map((c) => new URL(c.url, "http://x").searchParams.get("page_size")));
+    for (const size of sizes) expect(["50", "100", "200"]).toContain(size);
+    expect(sizes.has("100") && sizes.has("200")).toBe(true);
+  });
+
+  test("busca: espaços são aparados, limite de 100 e 'Limpar filtros' zera tudo", async ({ page }) => {
+    const state = await open(page, CADASTROS_PATH);
+    await generateCatalogPreview(page, "units");
+    const search = page.getByLabel("Buscar unidades na prévia");
+    await expect(search).toHaveAttribute("maxlength", "100");
+
+    await search.fill("   procuradoria   ");
+    await expect.poll(() => calls(state, "GET", "/items").some((c) => c.url.includes("search=procuradoria"))).toBe(true);
+    expect(calls(state, "GET", "/items").some((c) => /search=(%20|\+)/.test(c.url))).toBe(false);
+
+    // Só espaços não é busca: nenhum `search=` novo.
+    await page.getByRole("button", { name: "Limpar filtros" }).click();
+    await expect(search).toHaveValue("");
+    const before = calls(state, "GET", "/items").length;
+    await search.fill("    ");
+    await page.waitForTimeout(700);
+    expect(calls(state, "GET", "/items").length).toBe(before);
+    await expect(page.getByRole("button", { name: "Limpar filtros" })).toBeVisible();
+    await page.getByRole("button", { name: "Limpar filtros" }).click();
+    await expect(search).toHaveValue("");
+    await expect(page.getByRole("button", { name: "Limpar filtros" })).toHaveCount(0);
   });
 
   test("prévia sem pendências mostra o relatório limpo", async ({ page }) => {

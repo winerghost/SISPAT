@@ -38,7 +38,7 @@ google-api-python-client==2.201.0
 google-auth==2.62.0
 
 # --- Imagens (foto de perfil: validação + re-encode WebP sem metadados) ---
-pillow==12.3.0            # publicada 2026-07-01; única dep. nova da Etapa 2 (ver avatar_service)
+pillow==13.0.0            # 13.x corrige os CVEs do pip-audit (requer Python >=3.11; imagem usa 3.12); única dep. nova da Etapa 2 (ver avatar_service)
 
 # --- Autenticação (Supabase Auth via JWT) ---
 PyJWT==2.15.1

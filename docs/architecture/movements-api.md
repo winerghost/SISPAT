@@ -64,9 +64,9 @@ Rejeitar grava `approved_by`/`approved_at` (decisão); cancelar só muda o estad
 
 `GET /movements?status=&asset_id=&origin_unit_id=&destination_unit_id=&created_from=&created_to=
 &sort=&page=&page_size=` — `status` ∈ estados; datas `AAAA-MM-DD` (UTC, `created_to` inclusivo);
-`sort` ∈ `created_at|-created_at|status|-status` (padrão `-created_at`); `page_size` ≤ 100.
+`sort` ∈ `created_at|-created_at|status|-status` (padrão `-created_at`); `page_size` 50|100|200 (padrão 50).
 Parâmetro desconhecido/repetido/inválido: 400. Escopo: origem **ou** destino no escopo do usuário.
-Resposta: `{ total, page, page_size, movements: [...] }`.
+Resposta: `{ total, page, page_size, pages, movements: [...] }`.
 
 Objeto: `id, asset_id, asset{id,patrimony_number,description,deleted}, movement_type, status,
 origin_unit_id/origin_unit{id,code,name}, destination_unit_id/destination_unit, origin_room_id/

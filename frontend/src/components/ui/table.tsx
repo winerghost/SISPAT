@@ -22,12 +22,21 @@ import { cn } from "@/lib/utils";
 // aria-busy enquanto a próxima página/filtro carrega.
 // =============================================================================
 
+// Zebra (padrão de toda tabela): linhas pares com carbon-lift a 30% sobre o
+// canvas (texto bone segue > 15:1). Variantes even < hover < focus-within <
+// selected na ordem do Tailwind, então hover/foco/seleção sempre prevalecem.
+// Opt-out: <Table zebra={false}>.
 const ROW_CLASSES =
-  "border-b border-carbon-lift transition-factory hover:bg-carbon-lift/40 focus-within:bg-carbon-lift/40 data-[state=selected]:bg-carbon-lift";
+  "border-b border-carbon-lift transition-factory even:bg-carbon-lift/30 hover:bg-carbon-lift/50 focus-within:bg-carbon-lift/50 data-[state=selected]:bg-carbon-lift";
+
+const ZEBRA_OFF_CLASSES =
+  "[&_tbody_tr:nth-child(even):not(:hover):not(:focus-within):not([data-state=selected])]:bg-transparent";
 
 interface TableProps extends React.HTMLAttributes<HTMLTableElement> {
   /** Carregando nova página/filtro com dados anteriores visíveis. */
   busy?: boolean;
+  /** Linhas zebradas (padrão). `false` desliga a alternância de fundo. */
+  zebra?: boolean;
   /**
    * Nome da região rolável. Quando informado, o contêiner de rolagem vira uma
    * região focável por teclado (WCAG 2.1.1; axe scrollable-region-focusable) —
@@ -37,7 +46,7 @@ interface TableProps extends React.HTMLAttributes<HTMLTableElement> {
 }
 
 const Table = React.forwardRef<HTMLTableElement, TableProps>(
-  ({ className, busy = false, regionLabel, ...props }, ref) => (
+  ({ className, busy = false, zebra = true, regionLabel, ...props }, ref) => (
     // `relative`: elementos absolutos internos (ex.: textos sr-only nos
     // cabeçalhos) ficam contidos na rolagem da tabela, nunca na da página.
     <div
@@ -53,6 +62,7 @@ const Table = React.forwardRef<HTMLTableElement, TableProps>(
         className={cn(
           "w-full caption-bottom text-body-sm transition-opacity duration-base ease-factory",
           busy && "opacity-60",
+          !zebra && ZEBRA_OFF_CLASSES,
           className,
         )}
         {...props}

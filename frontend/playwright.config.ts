@@ -47,7 +47,7 @@ export default defineConfig({
   },
   projects: [
     // Unitário puro (sem navegador): helper `cn` e tokens do DESIGN.md.
-    { name: "unit", testMatch: /cn\.spec\.ts/ },
+    { name: "unit", testMatch: /(cn|pagination)\.spec\.ts/ },
     { name: "responsive", testMatch: /responsive\.spec\.ts/ },
     { name: "a11y", testMatch: /a11y\.spec\.ts/ },
     { name: "e2e", testMatch: /functional\.spec\.ts/ },

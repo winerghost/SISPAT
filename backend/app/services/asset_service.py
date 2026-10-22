@@ -54,7 +54,8 @@ from app.models.assets import Asset
 from app.models.audit import AuditLog
 from app.models.people import ResponsiblePerson
 from app.models.units import Location, Room, Unit
-from app.security.sanitize import LIKE_ESCAPE_CHAR, escape_like
+from app.services.pagination import page_count
+from app.security.text_search import contains_ci
 from app.services.import_normalizer import normalize_bond_status
 from app.services.patrimony_lock import (
     acquire_patrimony_lock,
@@ -187,7 +188,7 @@ def _json_value(value: Any) -> Any:
 
 
 def _like(column_expr: Any, term: str) -> Any:
-    return column_expr.ilike(f"%{escape_like(term)}%", escape=LIKE_ESCAPE_CHAR)
+    return contains_ci(column_expr, term)
 
 
 def asset_scope_clause(actor_id: Any, db: Session) -> Any:
@@ -435,7 +436,7 @@ class AssetService:
             .all()
         )
         return {
-            "total": int(total), "page": query.page, "page_size": query.page_size,
+            "total": int(total), "page": query.page, "page_size": query.page_size, "pages": page_count(total, query.page_size),
             "assets": self._serialize_many(list(rows)),
         }
 
@@ -509,7 +510,7 @@ class AssetService:
                 entry["actor_user_id"] = str(r.actor_user_id) if r.actor_user_id else None
             entries.append(entry)
         return {
-            "total": int(total), "page": query.page, "page_size": query.page_size,
+            "total": int(total), "page": query.page, "page_size": query.page_size, "pages": page_count(total, query.page_size),
             "entries": entries,
         }
 

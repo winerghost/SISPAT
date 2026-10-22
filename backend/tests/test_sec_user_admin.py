@@ -256,7 +256,7 @@ def test_filtro_por_unidade_alheia_nao_revela_quem_tem_vinculo_nela(scene):
     api = scene.api
     alheia = api.client.get(f"/api/v1/users?unit_id={scene.y}", headers=_h()).get_json()
     inexistente = api.client.get(f"/api/v1/users?unit_id={uuid.uuid4()}", headers=_h()).get_json()
-    assert alheia == inexistente == {"total": 0, "page": 1, "page_size": 25, "users": []}
+    assert alheia == inexistente == {"total": 0, "page": 1, "page_size": 50, "pages": 0, "users": []}
 
 
 @pytest.mark.parametrize("case", ["promover", "desativar_adm_multi", "promover_orfao"])

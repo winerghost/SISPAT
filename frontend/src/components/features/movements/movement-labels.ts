@@ -17,9 +17,9 @@ export const movementsQueryKey = ["movements"] as const;
 export const movementListKey = (params: unknown) => [...movementsQueryKey, "list", params] as const;
 export const movementDetailKey = (id: string) => [...movementsQueryKey, "detail", id] as const;
 
-export const MOVEMENT_PAGE_SIZE = 25;
 export const REASON_MAX = 500;
-export const ASSET_PICK_PAGE_SIZE = 10;
+/** Lookup interno do seletor de bem: page_size precisa estar em {50,100,200}. */
+export const ASSET_PICK_PAGE_SIZE = 50;
 export const ASSET_SEARCH_MAX = 100;
 
 export const STATUS_LABEL: Record<MovementStatus, string> = {

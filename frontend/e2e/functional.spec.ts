@@ -250,7 +250,7 @@ test.describe("importação Google Sheets", () => {
     await page.goto("/administracao/importacao/google-sheets");
     await waitForHydration(page);
     await page.getByRole("button", { name: "Pré-visualizar Importação" }).click();
-    await expect(page.getByText("Página 1 de 1 — 8 item(ns)")).toBeVisible();
+    await expect(page.getByText("Exibindo 1–8 de 8 item(ns)")).toBeVisible();
   });
 
   test("filtro por classificação envia status e filtra linhas", async ({ page }) => {
@@ -258,21 +258,21 @@ test.describe("importação Google Sheets", () => {
     await page.getByRole("button", { name: "Inválido" }).click();
     await request;
     await expect(page.getByRole("button", { name: "Inválido" })).toHaveAttribute("aria-pressed", "true");
-    await expect(page.getByText("Página 1 de 1 — 1 item(ns)")).toBeVisible();
+    await expect(page.getByText("Exibindo 1–1 de 1 item(ns)")).toBeVisible();
     const rows = page.getByRole("table").locator("tbody tr");
     await expect(rows).toHaveCount(1);
     // Linha inválida: checkbox desabilitado, com motivo acessível.
     await expect(rows.first().getByRole("checkbox")).toBeDisabled();
 
     await page.getByRole("button", { name: "Todos" }).click();
-    await expect(page.getByText("Página 1 de 1 — 8 item(ns)")).toBeVisible();
+    await expect(page.getByText("Exibindo 1–8 de 8 item(ns)")).toBeVisible();
   });
 
   test("pesquisa (debounce) envia search e filtra", async ({ page }) => {
     const request = page.waitForRequest((r) => r.url().includes("/items") && r.url().includes("search=cadeira"));
     await page.getByLabel("Buscar itens da prévia").fill("cadeira");
     await request;
-    await expect(page.getByText("Página 1 de 1 — 3 item(ns)")).toBeVisible();
+    await expect(page.getByText("Exibindo 1–3 de 3 item(ns)")).toBeVisible();
     await page.getByLabel("Buscar itens da prévia").fill("inexistente-xyz");
     await expect(page.getByText("Nenhum item encontrado para os filtros atuais.")).toBeVisible();
   });

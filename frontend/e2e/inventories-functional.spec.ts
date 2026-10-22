@@ -56,6 +56,14 @@ function waitApi(page: Page, method: string, suffix: string | RegExp): Promise<R
 const table = (page: Page) => page.getByRole("table", { name: "Inventários" });
 const rows = (page: Page) => table(page).locator("tbody tr");
 
+/** Acrescenta `count` inventários no escopo (clones do 1º do mock com ids únicos). */
+function seedInventories(state: MockState, count: number) {
+  const template = state.inventories[0]!;
+  for (let i = 0; i < count; i += 1) {
+    state.inventories.push({ ...template, id: `e4000000-0000-4000-8000-${String(i).padStart(12, "0")}` });
+  }
+}
+
 function inventory(state: MockState, id: string): InventoryMock {
   return state.inventories.find((i) => i.id === id)!;
 }
@@ -103,7 +111,7 @@ test.describe("inventários — lista", () => {
       await expect(table(page).getByRole("columnheader", { name: new RegExp(header) })).toBeVisible();
     }
     // 6 inventários no mock, 1 totalmente fora do escopo (nunca aparece).
-    await expect(page.getByText("Página 1 de 1 · 5 inventário(s)")).toBeVisible();
+    await expect(page.getByText("Exibindo 1–5 de 5 inventário(s)")).toBeVisible();
     await expect(rows(page)).toHaveCount(5);
 
     const running = rows(page).filter({ hasText: "Inventário Anual PSU-TO" });
@@ -202,19 +210,145 @@ test.describe("inventários — lista", () => {
     await expect(page.getByRole("main").getByRole("alert").first()).toContainText("verificação em duas etapas (AAL2)");
   });
 
-  test("paginação mostra o total confirmado pelo backend", async ({ page }) => {
-    await open(page, { role: "ADM" }, (state) => {
-      const template = state.inventories[1]!;
-      for (let i = 0; i < 25; i += 1) {
-        state.inventories.push({ ...template, id: `e4000000-0000-4000-8000-${String(i).padStart(12, "0")}` });
+  test("paginação 50/100/200: total do backend, troca de tamanho volta à página 1", async ({ page }) => {
+    const state = await open(page, { role: "ADM" }, (s) => seedInventories(s, 125));
+    // 5 no escopo + 125 = 130.
+    await expect(page.getByText("Exibindo 1–50 de 130 inventário(s)")).toBeVisible();
+    await expect(rows(page)).toHaveCount(50);
+    const bar = page.getByRole("navigation", { name: "Paginação" });
+    await expect(bar.getByLabel("Registros por página")).toHaveValue("50");
+
+    const next = waitApi(page, "GET", "/v1/inventories");
+    await bar.getByRole("button", { name: "Próxima" }).click();
+    const nextParams = new URL((await next).url()).searchParams;
+    expect(nextParams.get("page")).toBe("2");
+    expect(nextParams.get("page_size")).toBe("50");
+    await expect(page.getByText("Exibindo 51–100 de 130 inventário(s)")).toBeVisible();
+
+    await bar.getByRole("button", { name: "Última" }).click();
+    await expect(page.getByText("Exibindo 101–130 de 130 inventário(s)")).toBeVisible();
+    await expect(rows(page)).toHaveCount(30);
+
+    const bigger = waitApi(page, "GET", "/v1/inventories");
+    await bar.getByLabel("Registros por página").selectOption("100");
+    const params = new URL((await bigger).url()).searchParams;
+    expect(params.get("page_size")).toBe("100");
+    expect(params.get("page")).toBe("1");
+    await expect(rows(page)).toHaveCount(100);
+
+    await bar.getByLabel("Registros por página").selectOption("200");
+    await expect(page.getByText("Exibindo 1–130 de 130 inventário(s)")).toBeVisible();
+    await expect(rows(page)).toHaveCount(130);
+
+    const sizes = state.calls
+      .filter((c) => c.method === "GET")
+      .map((c) => new URL(c.url, "http://x").searchParams.get("page_size"))
+      .filter((v): v is string => v !== null);
+    for (const size of sizes) expect(["50", "100", "200"]).toContain(size);
+  });
+
+  test("zebra: linhas pares têm fundo próprio e as ímpares não", async ({ page }) => {
+    await open(page);
+    await expect(rows(page)).toHaveCount(5);
+    await page.mouse.move(0, 0);
+    const background = (index: number) =>
+      rows(page).nth(index).evaluate((el) => getComputedStyle(el).backgroundColor);
+    expect(await background(0)).toBe("rgba(0, 0, 0, 0)");
+    expect(await background(1)).not.toBe("rgba(0, 0, 0, 0)");
+  });
+
+  test("busca (aparada), estado, unidade e ordenação enviam só a allowlist e voltam à página 1", async ({ page }) => {
+    const state = await open(page, { role: "ADM" }, (s) => seedInventories(s, 125));
+    const bar = page.getByRole("navigation", { name: "Paginação" });
+    await expect(page.getByText("Exibindo 1–50 de 130 inventário(s)")).toBeVisible();
+    await bar.getByRole("button", { name: "Próxima" }).click();
+    await expect(page.getByText("Exibindo 51–100 de 130 inventário(s)")).toBeVisible();
+
+    // Só espaços: não vira filtro nem muda a página.
+    await page.getByLabel("Buscar inventário por nome").fill("   ");
+    await page.waitForTimeout(600);
+    await expect(page.getByText("Exibindo 51–100 de 130 inventário(s)")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Limpar filtros" })).toHaveCount(0);
+    await expect(page.getByLabel("Buscar inventário por nome")).toHaveAttribute("maxlength", "100");
+
+    const search = waitApi(page, "GET", "/v1/inventories");
+    await page.getByLabel("Buscar inventário por nome").fill("  Anual  ");
+    const searchParams = new URL((await search).url()).searchParams;
+    expect(searchParams.get("q")).toBe("Anual");
+    expect(searchParams.get("page")).toBe("1");
+    await expect(rows(page)).toHaveCount(1);
+
+    await page.getByRole("button", { name: "Limpar filtros" }).click();
+    await expect(page.getByText("Exibindo 1–50 de 130 inventário(s)")).toBeVisible();
+
+    const byStatus = waitApi(page, "GET", "/v1/inventories");
+    await page.getByLabel("Estado", { exact: true }).selectOption("EM_ANDAMENTO");
+    const statusParams = new URL((await byStatus).url()).searchParams;
+    expect(statusParams.get("status")).toBe("EM_ANDAMENTO");
+    expect(statusParams.get("page")).toBe("1");
+
+    const byUnit = waitApi(page, "GET", "/v1/inventories");
+    await page.getByLabel("Unidade", { exact: true }).selectOption({ label: U1_LABEL });
+    expect(new URL((await byUnit).url()).searchParams.get("unit_id")).toBe(U1.id);
+
+    const bySort = waitApi(page, "GET", "/v1/inventories");
+    await page.getByLabel("Ordenar por").selectOption("name");
+    expect(new URL((await bySort).url()).searchParams.get("sort")).toBe("name");
+
+    const allowed = new Set(["q", "unit_id", "status", "sort", "page", "page_size"]);
+    for (const call of state.calls.filter((c) => c.method === "GET" && /\/v1\/inventories\?/.test(c.url))) {
+      for (const key of new URL(call.url, "http://x").searchParams.keys()) expect(allowed.has(key)).toBe(true);
+    }
+  });
+
+  test("itens conferidos e bens da unidade usam PaginationBar (50/100/200)", async ({ page }) => {
+    const state = await open(page, { role: "ADM" }, (s) => {
+      for (let i = 0; i < 55; i += 1) {
+        s.inventoryItems.push({
+          id: `e5000000-0000-4000-8000-${String(i).padStart(12, "0")}`,
+          inventory_id: INVENTORY_IDS.running,
+          asset_id: ASSET_IDS.zeros,
+          found: true,
+          observed_location_id: null,
+          checked_by: "00000000-0000-4000-8000-0000000000e2",
+          checked_at: new Date(Date.UTC(2026, 9, 5, 12, i)).toISOString(),
+          notes: null,
+        });
       }
     });
-    await expect(page.getByText("Página 1 de 2 · 30 inventário(s)")).toBeVisible();
-    await expect(rows(page)).toHaveCount(25);
-    await page.getByRole("button", { name: "Próxima" }).click();
-    await expect(page.getByText("Página 2 de 2 · 30 inventário(s)")).toBeVisible();
-    await expect(rows(page)).toHaveCount(5);
+    const sheet = await openSheet(page, RUNNING_NAME, "Em andamento");
+    await expect(sheet.getByText(/Exibindo 1–50 de \d+ conferência\(s\)/)).toBeVisible();
+    const items = sheet.getByRole("list", { name: "Itens conferidos" });
+    await expect(items.locator(":scope > li")).toHaveCount(50);
+    const next = waitApi(page, "GET", /\/v1\/inventories\/[^/]+\/items$/);
+    await sheet.getByRole("button", { name: "Próxima" }).click();
+    const params = new URL((await next).url()).searchParams;
+    expect(params.get("page")).toBe("2");
+    expect(params.get("page_size")).toBe("50");
+
+    await sheet.getByRole("tab", { name: "Bens da unidade" }).click();
+    await expect(sheet.getByRole("list", { name: "Bens da unidade" })).toBeVisible();
+    await expect(sheet.getByText(/Exibindo 1–\d+ de \d+ bem\(ns\)/)).toBeVisible();
+    await expect(sheet.getByLabel("Registros por página")).toHaveValue("50");
+
+    for (const call of state.calls.filter((c) => c.method === "GET")) {
+      const size = new URL(call.url, "http://x").searchParams.get("page_size");
+      if (size !== null) expect(["50", "100", "200"]).toContain(size);
+    }
   });
+
+  for (const width of [320, 375]) {
+    test(`lista com paginação sem rolagem horizontal da página a ${width}px`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 800 });
+      await open(page, { role: "ADM" }, (s) => seedInventories(s, 60));
+      await expect(page.getByText("Exibindo 1–50 de 65 inventário(s)")).toBeVisible();
+      await expect(page.getByRole("navigation", { name: "Paginação" }).getByLabel("Registros por página")).toBeVisible();
+      const overflow = await page.evaluate(
+        () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      );
+      expect(overflow).toBeLessThanOrEqual(0);
+    });
+  }
 
   test("USER: lista sem o botão de criar e com texto explicativo", async ({ page }) => {
     await open(page, { role: "USER" });
@@ -419,7 +553,7 @@ test.describe("inventários — criar", () => {
     expect((await request).postDataJSON()).toEqual({ name: "Inventário   de teste", unit_id: U1.id });
     await expect(dialog).toBeHidden();
     await expect(page.getByText("Inventário criado. Ele só aceita conferências depois de iniciado.")).toBeVisible();
-    await expect(page.getByText("Página 1 de 1 · 6 inventário(s)")).toBeVisible();
+    await expect(page.getByText("Exibindo 1–6 de 6 inventário(s)")).toBeVisible();
     await expect(rows(page).first()).toContainText("Inventário de teste");
     await expect(rows(page).first()).toContainText("Aberto");
     expect(state.inventories.at(-1)).toMatchObject({ status: "ABERTO", unit_id: U1.id });
@@ -897,7 +1031,9 @@ test.describe("inventários — segurança de apresentação", () => {
     await open(page);
     const sheet = await openSheet(page, RUNNING_NAME, "Em andamento");
     await expect(sheet.getByRole("list", { name: "Itens conferidos" })).toBeVisible();
+    // Teste de segurança: LÊ o storage só para provar que nenhum dado da tela foi gravado.
     const stored = await page.evaluate(() =>
+      // eslint-disable-next-line no-restricted-properties
       JSON.stringify({ local: { ...window.localStorage }, session: { ...window.sessionStorage }, cookie: document.cookie }),
     );
     for (const text of ["Conferido na bancada", "Inventário Anual", INVENTORY_IDS.running, "000123"]) {

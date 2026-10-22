@@ -10,6 +10,7 @@ import uuid
 from typing import Literal
 
 from pydantic import Field, field_validator
+from app.api.v1.pagination import DEFAULT_PAGE_SIZE, PageSize
 
 from app.api.v1.schemas import _StrictModel
 
@@ -47,7 +48,7 @@ class CatalogItemsQuery(_StrictModel):
     search: str | None = Field(default=None, max_length=100)
     sort: CatalogItemSort = "label"
     page: int = Field(default=1, ge=1, le=100_000)
-    page_size: int = Field(default=25, ge=1, le=100)
+    page_size: PageSize = DEFAULT_PAGE_SIZE
 
     @field_validator("status", "search", mode="after")
     @classmethod

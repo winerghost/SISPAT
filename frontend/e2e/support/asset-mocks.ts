@@ -241,6 +241,8 @@ const LIST_PARAMS = new Set([
 ]);
 const SORTS = new Set(["patrimony_number", "description", "bond_status", "created_at", "updated_at"]);
 const LOCATED = new Set(["SIM", "NAO", "DESCONHECIDO"]);
+// Contrato do backend: page_size ∈ {50, 100, 200} (padrão 50); outro valor => 400.
+const PAGE_SIZES = new Set([50, 100, 200]);
 const CREATE_KEYS = new Set([
   "unit_id",
   "patrimony_number",
@@ -429,7 +431,7 @@ async function listAssets(ctx: AssetRequestContext, err: Err): Promise<boolean> 
   const located = searchParams.get("located");
   const bond = searchParams.get("bond_status");
   const page = Number(searchParams.get("page") ?? 1);
-  const pageSize = Number(searchParams.get("page_size") ?? 25);
+  const pageSize = Number(searchParams.get("page_size") ?? 50);
   for (const key of ["unit_id", "owner_unit_id", "room_id", "responsible_person_id"]) {
     const value = searchParams.get(key);
     if (value !== null && !UUID_RE.test(value)) return err(400, "validation_error");
@@ -441,9 +443,7 @@ async function listAssets(ctx: AssetRequestContext, err: Err): Promise<boolean> 
     (located !== null && !LOCATED.has(located)) ||
     !Number.isInteger(page) ||
     page < 1 ||
-    !Number.isInteger(pageSize) ||
-    pageSize < 1 ||
-    pageSize > 100
+    !PAGE_SIZES.has(pageSize)
   ) {
     return err(400, "validation_error");
   }
@@ -532,8 +532,8 @@ async function history(ctx: AssetRequestContext, id: string, err: Err): Promise<
     return err(state.forceHistoryStatus, state.forceHistoryStatus === 403 ? "FORBIDDEN" : "INTERNAL", "SISPAT_BACKEND_MSG");
   }
   const page = Number(searchParams.get("page") ?? 1);
-  const pageSize = Number(searchParams.get("page_size") ?? 25);
-  if (!(page >= 1) || !(pageSize >= 1 && pageSize <= 100)) return err(400, "validation_error");
+  const pageSize = Number(searchParams.get("page_size") ?? 50);
+  if (!(page >= 1) || !PAGE_SIZES.has(pageSize)) return err(400, "validation_error");
   const entries = state.history
     .filter((h) => h.asset_id === id)
     .sort((a, b) => b.occurred_at.localeCompare(a.occurred_at))

@@ -33,7 +33,8 @@ from app.models.assets import Asset
 from app.models.audit import AuditLog
 from app.models.inventory import Inventory, InventoryItem
 from app.models.units import Location, Unit
-from app.security.sanitize import LIKE_ESCAPE_CHAR, escape_like
+from app.services.pagination import page_count
+from app.security.text_search import contains_ci
 from app.services.catalog_service import _iso, _parse_uuid
 
 logger = logging.getLogger(__name__)
@@ -283,14 +284,14 @@ class InventoryService:
             scoped = scoped.filter(Inventory.status == query.status)
         if query.q:
             scoped = scoped.filter(
-                Inventory.name.ilike(f"%{escape_like(query.q)}%", escape=LIKE_ESCAPE_CHAR)
+                contains_ci(Inventory.name, query.q)
             )
         total = scoped.with_entities(func.count(Inventory.id)).order_by(None).scalar()
         rows = (
             scoped.order_by(*_SORTS[query.sort])
             .offset((query.page - 1) * query.page_size).limit(query.page_size).all()
         )
-        return {"total": int(total), "page": query.page, "page_size": query.page_size,
+        return {"total": int(total), "page": query.page, "page_size": query.page_size, "pages": page_count(total, query.page_size),
                 "inventories": self._serialize(list(rows))}
 
     def get(self, actor_id: Any, inventory_id: uuid.UUID) -> dict[str, Any]:
@@ -340,7 +341,7 @@ class InventoryService:
             base.order_by(order, InventoryItem.id)
             .offset((query.page - 1) * query.page_size).limit(query.page_size)
         ).all()
-        return {"total": int(total), "page": query.page, "page_size": query.page_size,
+        return {"total": int(total), "page": query.page, "page_size": query.page_size, "pages": page_count(total, query.page_size),
                 "items": [self._serialize_item(i, a, r) for i, a, r in rows]}
 
     # -- escrita -------------------------------------------------------------

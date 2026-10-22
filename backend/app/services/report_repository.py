@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
-from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import func, or_, select
@@ -28,10 +27,11 @@ from app.models.assets import Asset, AssetMovement
 from app.models.inventory import Inventory, InventoryItem
 from app.models.people import ResponsiblePerson
 from app.models.units import Location, Room, Unit
-from app.security.sanitize import LIKE_ESCAPE_CHAR, escape_like
+from app.security.text_search import contains_ci
 from app.services.asset_service import asset_filter_clauses, asset_scope_clause
 from app.services.import_normalizer import normalize_bond_status
 from app.services.inventory_service import item_result_expr
+from app.services.local_dates import local_day_end_exclusive_utc, local_day_start_utc
 from app.services.report_export import utc_iso
 
 
@@ -69,10 +69,6 @@ class InventoryItemFilters:
     result: str | None = None
     checked_from: str | None = None
     checked_to: str | None = None
-
-
-def _day_start(raw: str) -> datetime:
-    return datetime.combine(date.fromisoformat(raw), time.min, tzinfo=timezone.utc)
 
 
 def _name(value: Any) -> str:
@@ -114,10 +110,9 @@ def fetch_assets(
     if not include_deleted:
         where.append(Asset.deleted_at.is_(None))
     if flt.q:
-        term = f"%{escape_like(flt.q)}%"
         where.append(or_(
-            Asset.patrimony_number.ilike(term, escape=LIKE_ESCAPE_CHAR),
-            func.coalesce(Asset.description, "").ilike(term, escape=LIKE_ESCAPE_CHAR),
+            contains_ci(Asset.patrimony_number, flt.q),
+            contains_ci(func.coalesce(Asset.description, ""), flt.q),
         ))
     total = int(db.execute(select(func.count(Asset.id)).where(*where)).scalar_one())
     if total > limit:
@@ -189,9 +184,9 @@ def fetch_movements(
         if value is not None:
             where.append(getattr(AssetMovement, field) == value)
     if flt.created_from:
-        where.append(AssetMovement.created_at >= _day_start(flt.created_from))
+        where.append(AssetMovement.created_at >= local_day_start_utc(flt.created_from))
     if flt.created_to:
-        where.append(AssetMovement.created_at < _day_start(flt.created_to) + timedelta(days=1))
+        where.append(AssetMovement.created_at < local_day_end_exclusive_utc(flt.created_to))
     total = int(db.execute(
         select(func.count(AssetMovement.id)).join(Asset, Asset.id == AssetMovement.asset_id).where(*where)
     ).scalar_one())
@@ -274,9 +269,9 @@ def fetch_inventory_items(
     if flt.result is not None:
         where.append(result == flt.result)
     if flt.checked_from:
-        where.append(InventoryItem.checked_at >= _day_start(flt.checked_from))
+        where.append(InventoryItem.checked_at >= local_day_start_utc(flt.checked_from))
     if flt.checked_to:
-        where.append(InventoryItem.checked_at < _day_start(flt.checked_to) + timedelta(days=1))
+        where.append(InventoryItem.checked_at < local_day_end_exclusive_utc(flt.checked_to))
 
     def scoped(stmt: Any) -> Any:
         stmt = stmt.select_from(InventoryItem).join(

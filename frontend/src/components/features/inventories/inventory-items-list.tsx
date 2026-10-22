@@ -4,17 +4,19 @@ import { useState } from "react";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 
 import { selectControlClassName } from "@/components/ui/form-field";
+import { PaginationBar } from "@/components/ui/pagination-bar";
 import { LoadingSkeleton } from "@/components/ui/loading-skeleton";
 import { listInventoryItems, type InventoryItemResult, type InventoryItemSort } from "@/lib/inventories-api";
 import { PatrimonyNumber } from "@/components/features/assets/assets-table";
-import { CatalogNotice, CatalogPagination } from "@/components/features/catalog/catalog-parts";
+import { useClampPage } from "@/components/features/assets/use-clamp-page";
+import { usePagination } from "@/lib/pagination";
+import { CatalogNotice } from "@/components/features/catalog/catalog-parts";
 import { noClientRetry } from "@/components/features/lookup/use-lookup";
 import { ResultBadge } from "./inventories-table";
 import {
   formatDateTime,
   inventoryItemsKey,
   inventoryListErrorMessage,
-  ITEMS_PAGE_SIZE,
   RESULT_EXPLANATION,
   RESULT_LABEL,
 } from "./inventory-labels";
@@ -36,14 +38,15 @@ function shortId(value: string): string {
 export function InventoryItemsList({ inventoryId, unitId }: { inventoryId: string; unitId: string }) {
   const [result, setResult] = useState<"" | InventoryItemResult>("");
   const [sort, setSort] = useState<InventoryItemSort>("-checked_at");
-  const [page, setPage] = useState(1);
-  const params = { result: result || undefined, sort, page, page_size: ITEMS_PAGE_SIZE };
+  const pg = usePagination({ persist: false });
+  const params = { result: result || undefined, sort, page: pg.page, page_size: pg.pageSize };
   const items = useQuery({
     queryKey: inventoryItemsKey(inventoryId, params),
     queryFn: () => listInventoryItems(inventoryId, params),
     placeholderData: keepPreviousData,
     retry: noClientRetry,
   });
+  useClampPage(pg, items.data?.total, !items.isPlaceholderData);
   const locations = useUnitLocations(unitId, true);
   const locationName = (id: string | null): string | null => {
     if (!id) return null;
@@ -63,7 +66,7 @@ export function InventoryItemsList({ inventoryId, unitId }: { inventoryId: strin
             value={result}
             onChange={(event) => {
               setResult(event.target.value as "" | InventoryItemResult);
-              setPage(1);
+              pg.resetPage();
             }}
           >
             <option value="">Todos os resultados</option>
@@ -84,7 +87,7 @@ export function InventoryItemsList({ inventoryId, unitId }: { inventoryId: strin
             value={sort}
             onChange={(event) => {
               setSort(event.target.value as InventoryItemSort);
-              setPage(1);
+              pg.resetPage();
             }}
           >
             <option value="-checked_at">Conferidos mais recentemente</option>
@@ -157,13 +160,15 @@ export function InventoryItemsList({ inventoryId, unitId }: { inventoryId: strin
               })}
             </ul>
           )}
-          <CatalogPagination
-            page={items.data.page}
+          <PaginationBar
+            page={pg.page}
+            pageSize={pg.pageSize}
             total={items.data.total}
-            pageSize={ITEMS_PAGE_SIZE}
+            onPageChange={pg.setPage}
+            onPageSizeChange={pg.setPageSize}
+            busy={items.isPlaceholderData}
             noun="conferência(s)"
-            loading={items.isPlaceholderData}
-            onPage={setPage}
+            label="Paginação das conferências"
           />
         </>
       ) : null}

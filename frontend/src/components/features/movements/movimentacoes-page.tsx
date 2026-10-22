@@ -7,13 +7,13 @@ import { Button } from "@/components/ui/button";
 import { LoadingSkeleton } from "@/components/ui/loading-skeleton";
 import type { AssetRecord } from "@/lib/assets-api";
 import { listMovements, type MovementRecord } from "@/lib/movements-api";
-import { CatalogHeader, CatalogNotice, CatalogPagination } from "@/components/features/catalog/catalog-parts";
+import { PaginationBar } from "@/components/ui/pagination-bar";
+import { CatalogHeader, CatalogNotice } from "@/components/features/catalog/catalog-parts";
 import { SESSION_ERROR_MESSAGE } from "@/components/features/lookup/lookup-labels";
 import { noClientRetry, useAccessibleUnits, useLookupAccess } from "@/components/features/lookup/use-lookup";
 import { MovementDetailSheet } from "./movement-detail-sheet";
 import {
   MOVEMENT_LOOKUPS_ERROR_MESSAGE,
-  MOVEMENT_PAGE_SIZE,
   movementListErrorMessage,
   movementListKey,
 } from "./movement-labels";
@@ -54,7 +54,7 @@ export function MovimentacoesPage() {
     created_to: filters.to || undefined,
     sort: filters.sort,
     page: filters.page,
-    page_size: MOVEMENT_PAGE_SIZE,
+    page_size: filters.pageSize,
   };
   const movements = useQuery({
     queryKey: movementListKey(params),
@@ -107,7 +107,7 @@ export function MovimentacoesPage() {
         <>
           <MovementsTable
             movements={movements.data.movements}
-            pageKey={`${movements.data.page}|${filters.status}|${filters.assetId}|${filters.originUnitId}|${filters.destinationUnitId}|${filters.from}|${filters.to}|${filters.sort}`}
+            pageKey={`${movements.data.page}|${movements.data.page_size}|${filters.status}|${filters.assetId}|${filters.originUnitId}|${filters.destinationUnitId}|${filters.from}|${filters.to}|${filters.sort}`}
             busy={movements.isFetching && !movements.isPending}
             sort={filters.sort}
             onSortChange={filters.chooseSort}
@@ -117,13 +117,14 @@ export function MovimentacoesPage() {
               setDetailOpen(true);
             }}
           />
-          <CatalogPagination
-            page={movements.data.page}
+          <PaginationBar
+            page={filters.page}
+            pageSize={filters.pageSize}
             total={movements.data.total}
-            pageSize={MOVEMENT_PAGE_SIZE}
             noun="movimentação(ões)"
-            loading={movements.isPlaceholderData}
-            onPage={filters.setPage}
+            busy={movements.isFetching}
+            onPageChange={filters.setPage}
+            onPageSizeChange={filters.setPageSize}
           />
         </>
       )}

@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import type { InventorySort, InventoryStatus } from "@/lib/inventories-api";
 import { SEARCH_DEBOUNCE_MS } from "@/components/features/catalog/catalog-labels";
+import { usePagination } from "@/lib/pagination";
 
 // =============================================================================
 // Estado de busca/filtros/ordenação/paginação da lista de inventários. A busca
@@ -19,29 +20,36 @@ export function useInventoryFilters() {
   const [status, setStatus] = useState<StatusFilter>("");
   const [unitId, setUnitId] = useState("");
   const [sort, setSort] = useState<InventorySort>("-created_at");
-  const [page, setPage] = useState(1);
+  const pg = usePagination();
+  const { resetPage } = pg;
+  // Só reseta a página quando o termo aparado muda de fato.
+  const appliedQ = useRef("");
 
   useEffect(() => {
     const handle = setTimeout(() => {
-      setQ(search.trim());
-      setPage(1);
+      const next = search.trim();
+      if (next === appliedQ.current) return;
+      appliedQ.current = next;
+      setQ(next);
+      resetPage();
     }, SEARCH_DEBOUNCE_MS);
     return () => clearTimeout(handle);
-  }, [search]);
+  }, [search, resetPage]);
 
-  function resetPage<T>(setter: (value: T) => void) {
+  function resetOn<T>(setter: (value: T) => void) {
     return (value: T) => {
       setter(value);
-      setPage(1);
+      resetPage();
     };
   }
 
   function clear() {
     setSearch("");
     setQ("");
+    appliedQ.current = "";
     setStatus("");
     setUnitId("");
-    setPage(1);
+    resetPage();
   }
 
   return {
@@ -51,11 +59,10 @@ export function useInventoryFilters() {
     status,
     unitId,
     sort,
-    page,
-    setPage,
-    chooseStatus: resetPage(setStatus),
-    chooseUnit: resetPage(setUnitId),
-    chooseSort: resetPage(setSort),
+    pg,
+    chooseStatus: resetOn(setStatus),
+    chooseUnit: resetOn(setUnitId),
+    chooseSort: resetOn(setSort),
     clear,
     filtered: !!q || !!status || !!unitId,
   };

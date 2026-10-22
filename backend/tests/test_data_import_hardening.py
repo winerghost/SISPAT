@@ -168,7 +168,7 @@ def test_paginacao_tem_ordenacao_total_e_limites() -> None:
 
     result = service.list_preview_items(preview.id, page=10**9, page_size=10**6)
 
-    assert result["page_size"] == 100
+    assert result["page_size"] == 50
     assert result["page"] == 10_000
     order_args = items_q.filter.return_value.order_by.call_args.args
     assert len(order_args) == 2  # created_at + id (desempate determinístico)

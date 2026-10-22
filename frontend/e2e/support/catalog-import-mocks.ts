@@ -51,6 +51,8 @@ export interface CatalogImportMockOptions {
   expired?: boolean;
   /** Status forçado em `GET /imports/google-sheets/<id>/pending`. */
   pendingStatus?: number;
+  /** Linhas NOVO extras em "people" (testa paginação 50/100/200). */
+  extraPeople?: number;
 }
 
 export interface CatalogImportMockState extends Required<Omit<CatalogImportMockOptions, "previewStatus" | "itemsStatus" | "confirmStatus" | "pendingStatus">> {
@@ -76,6 +78,7 @@ export function defaultCatalogImport(opts: CatalogImportMockOptions = {}): Catal
     cleanReport: opts.cleanReport ?? false,
     confirmDelayMs: opts.confirmDelayMs ?? 0,
     expired: opts.expired ?? false,
+    extraPeople: opts.extraPeople ?? 0,
     previews: {},
   };
 }
@@ -131,7 +134,20 @@ function item(
   };
 }
 
-function buildItems(kind: CatalogKind, clean: boolean): CatalogImportItemMock[] {
+function buildItems(kind: CatalogKind, clean: boolean, extraPeople = 0): CatalogImportItemMock[] {
+  const base = buildBaseItems(kind, clean);
+  if (kind !== "people" || extraPeople <= 0) return base;
+  const filler = Array.from({ length: extraPeople }, (_, i) => {
+    const n = 100 + i;
+    const label = `Pessoa Extra ${String(n).padStart(3, "0")}`;
+    return item(kind, n, "NOVO", label, {
+      details: { unidade_sigla: "UEA", person_name: label, has_email: false, has_phone: false },
+    });
+  });
+  return [...base, ...filler];
+}
+
+function buildBaseItems(kind: CatalogKind, clean: boolean): CatalogImportItemMock[] {
   if (kind === "units") {
     const base = [
       item(kind, 1, "NOVO", "Unidade Estadual Sintética de Teste", {
@@ -360,7 +376,7 @@ export async function handleCatalogImports(ctx: CatalogImportRequestContext): Pr
     }
     if (ctx.body !== undefined) return err(400, "validation_error");
     const kind = segment as CatalogKind;
-    const items = buildItems(kind, state.cleanReport);
+    const items = buildItems(kind, state.cleanReport, state.extraPeople);
     const id = CATALOG_PREVIEW_IDS[kind];
     const expiresAt = new Date(Date.now() + (state.expired ? -60_000 : 3_600_000)).toISOString();
     state.previews[id] = { kind, confirmed: false, expiresAt };
@@ -377,7 +393,7 @@ export async function handleCatalogImports(ctx: CatalogImportRequestContext): Pr
   // Demais rotas: <preview_id> desconhecido => 404 uniforme.
   const preview = state.previews[segment];
   if (!preview) return err(404, "not_found", "Não encontrado");
-  const items = buildItems(preview.kind, state.cleanReport);
+  const items = buildItems(preview.kind, state.cleanReport, state.extraPeople);
 
   if (action === "report" && method === "GET") {
     await respond(200, {
@@ -397,8 +413,8 @@ export async function handleCatalogImports(ctx: CatalogImportRequestContext): Pr
     const status = ctx.searchParams.get("status");
     const search = (ctx.searchParams.get("search") ?? "").toLowerCase();
     const page = Number(ctx.searchParams.get("page") ?? 1);
-    const pageSize = Number(ctx.searchParams.get("page_size") ?? 25);
-    if (!SORTS.has(field) || search.length > 100 || pageSize < 1 || pageSize > 100 || page < 1) {
+    const pageSize = Number(ctx.searchParams.get("page_size") ?? 50);
+    if (!SORTS.has(field) || search.length > 100 || ![50, 100, 200].includes(pageSize) || page < 1) {
       return err(400, "validation_error");
     }
     if (status && !STATUSES.has(status)) return err(400, "validation_error");

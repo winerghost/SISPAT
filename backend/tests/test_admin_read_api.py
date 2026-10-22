@@ -214,7 +214,7 @@ def test_lista_so_traz_registros_do_escopo_de_unidade(scene, logs):
     assert _ids(response) == {
         str(logs.business), str(logs.security), str(logs.own), str(logs.about_user_by_other),
     }
-    assert body["total"] == 4 and body["page"] == 1 and body["page_size"] == 25
+    assert body["total"] == 4 and body["page"] == 1 and body["page_size"] == 50
     assert set(body["window"]) == {"from", "to"}
     # autor de fora do escopo, unidade alheia e registro anônimo ficam de fora
     for hidden in (logs.foreign, logs.foreign_unit, logs.anonymous):
@@ -533,7 +533,7 @@ def test_unit_access_filtros(scene):
 def test_unit_access_unidade_alheia_ou_inexistente_resposta_vazia_identica(scene, unit):
     target = scene.b if unit == "alheia" else uuid.uuid4()
     body = _get(scene, f"/api/v1/admin/unit-access?unit_id={target}").get_json()
-    assert body == {"total": 0, "page": 1, "page_size": 25, "items": []}
+    assert body == {"total": 0, "page": 1, "page_size": 50, "pages": 0, "items": []}
 
 
 @pytest.mark.parametrize(

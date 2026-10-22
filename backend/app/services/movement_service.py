@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import event, false, func, or_, select
@@ -43,6 +43,8 @@ from app.models.audit import AuditLog
 from app.models.people import ResponsiblePerson
 from app.models.units import Location, Room, Unit
 from app.services.asset_service import _Lookups, _iso, _parse_uuid
+from app.services.local_dates import local_day_end_exclusive_utc, local_day_start_utc
+from app.services.pagination import page_count
 
 logger = logging.getLogger(__name__)
 
@@ -184,10 +186,6 @@ class MovementConflictError(MovementError):
 # ---------------------------------------------------------------------------
 # Serviço
 # ---------------------------------------------------------------------------
-
-
-def _day_start(raw: str) -> datetime:
-    return datetime.combine(date.fromisoformat(raw), time.min, tzinfo=timezone.utc)
 
 
 def _jv(value: Any) -> Any:
@@ -361,10 +359,12 @@ class MovementService:
             value = getattr(query, field)
             if value is not None:
                 scoped = scoped.filter(getattr(AssetMovement, field) == value)
+        if query.movement_type:
+            scoped = scoped.filter(AssetMovement.movement_type == query.movement_type)
         if query.created_from:
-            scoped = scoped.filter(AssetMovement.created_at >= _day_start(query.created_from))
+            scoped = scoped.filter(AssetMovement.created_at >= local_day_start_utc(query.created_from))
         if query.created_to:
-            scoped = scoped.filter(AssetMovement.created_at < _day_start(query.created_to) + timedelta(days=1))
+            scoped = scoped.filter(AssetMovement.created_at < local_day_end_exclusive_utc(query.created_to))
         total = scoped.with_entities(func.count(AssetMovement.id)).order_by(None).scalar()
         rows = (
             scoped.order_by(*_SORTS[query.sort])
@@ -372,7 +372,7 @@ class MovementService:
             .limit(query.page_size)
             .all()
         )
-        return {"total": int(total), "page": query.page, "page_size": query.page_size,
+        return {"total": int(total), "page": query.page, "page_size": query.page_size, "pages": page_count(total, query.page_size),
                 "movements": self._serialize_many(list(rows), actor_id)}
 
     def get(self, actor_id: Any, movement_id: uuid.UUID) -> dict[str, Any]:

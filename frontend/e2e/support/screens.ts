@@ -556,7 +556,7 @@ export const SCREENS: ScreenDef[] = [
     prepare: async (page) => {
       await expect(page.getByRole("heading", { level: 1, name: "Vínculos de Unidades" })).toBeVisible();
       await expect(page.getByRole("table", { name: "Vínculos de usuários com unidades" })).toBeVisible();
-      await expect(page.getByText("Página 1 de 2 · 30 usuário(s)")).toBeVisible();
+      await expect(page.getByText("Exibindo 1–30 de 30 usuário(s)")).toBeVisible();
     },
   },
   {
@@ -604,7 +604,7 @@ export const SCREENS: ScreenDef[] = [
     prepare: async (page) => {
       await expect(page.getByRole("heading", { level: 1, name: "Auditoria" })).toBeVisible();
       await expect(page.getByRole("table", { name: "Registros de auditoria" })).toBeVisible();
-      await expect(page.getByText("Página 1 de 2 · 30 registro(s)")).toBeVisible();
+      await expect(page.getByText("Exibindo 1–30 de 30 registro(s)")).toBeVisible();
     },
   },
   {
@@ -686,7 +686,7 @@ export const SCREENS: ScreenDef[] = [
     prepare: async (page) => {
       await expect(page.getByRole("table")).toBeVisible();
       await page.getByRole("group", { name: "Filtrar por situação" }).getByRole("button", { name: "Inativos" }).click();
-      await expect(page.getByText("Página 1 de 1 · 1 usuário(s)")).toBeVisible();
+      await expect(page.getByText("Exibindo 1–1 de 1 usuário(s)")).toBeVisible();
       await expect(page.getByRole("button", { name: "Limpar filtros" })).toBeVisible();
     },
   },
@@ -729,7 +729,7 @@ export const SCREENS: ScreenDef[] = [
     session: { role: "ADM" },
     prepare: async (page) => {
       await openUserSheet(page, ADMIN_NAME, "Histórico");
-      await expect(page.getByText("Página 1 de 2 · 12 evento(s)")).toBeVisible();
+      await expect(page.getByText("Exibindo 1–12 de 12 evento(s)")).toBeVisible();
     },
   },
   {
@@ -763,7 +763,7 @@ export const SCREENS: ScreenDef[] = [
     prepare: async (page) => {
       await expect(page.getByRole("table", { name: "Salas" })).toBeVisible();
       await expect(page.getByText("Almoxarifado Sintético")).toBeVisible();
-      await expect(page.getByText("Página 1 de 1 · 4 sala(s)")).toBeVisible();
+      await expect(page.getByText("Exibindo 1–4 de 4 registro(s)")).toBeVisible();
     },
   },
   {
@@ -858,7 +858,7 @@ export const SCREENS: ScreenDef[] = [
     session: { role: "ADM" },
     prepare: async (page) => {
       await expect(page.getByRole("table", { name: "Unidades" })).toBeVisible();
-      await expect(page.getByText("4 unidade(s)")).toBeVisible();
+      await expect(page.getByText("Exibindo 1–4 de 4 registro(s)")).toBeVisible();
     },
   },
   {
@@ -979,7 +979,7 @@ export const SCREENS: ScreenDef[] = [
     prepare: async (page) => {
       await generateCatalogPreview(page, "people");
       await expect(page.getByText("E-mail: p***@exemplo.invalid").first()).toBeVisible();
-      await expect(page.getByText("Página 1 de 2 · 30 item(ns)")).toBeVisible();
+      await expect(page.getByText("Exibindo 1–30 de 30 item(ns)")).toBeVisible();
     },
   },
   {
@@ -1056,7 +1056,7 @@ export const SCREENS: ScreenDef[] = [
     prepare: async (page) => {
       await expect(page.getByRole("heading", { level: 1, name: "Unidades" })).toBeVisible();
       await expect(page.getByRole("table", { name: "Unidades" })).toBeVisible();
-      await expect(page.getByText("Página 1 de 1 · 4 unidade(s)")).toBeVisible();
+      await expect(page.getByText("Exibindo 1–4 de 4 registro(s)")).toBeVisible();
     },
   },
   {
@@ -1086,7 +1086,7 @@ export const SCREENS: ScreenDef[] = [
     prepare: async (page) => {
       await expect(page.getByRole("heading", { level: 1, name: "Salas e Localizações" })).toBeVisible();
       await expect(page.getByRole("table", { name: "Salas" })).toBeVisible();
-      await expect(page.getByText("Página 1 de 1 · 4 sala(s)")).toBeVisible();
+      await expect(page.getByText("Exibindo 1–4 de 4 registro(s)")).toBeVisible();
     },
   },
   {
@@ -1138,7 +1138,7 @@ export const SCREENS: ScreenDef[] = [
     prepare: async (page) => {
       await expect(page.getByRole("heading", { level: 1, name: "Patrimônios" })).toBeVisible();
       await expect(page.getByRole("table", { name: "Patrimônios" })).toBeVisible();
-      await expect(page.getByText("Página 1 de 1 · 6 bem(ns)")).toBeVisible();
+      await expect(page.getByText("Exibindo 1–6 de 6 bem(ns)")).toBeVisible();
     },
   },
   {
@@ -1148,7 +1148,7 @@ export const SCREENS: ScreenDef[] = [
     session: { role: "USER" },
     prepare: async (page) => {
       await expect(page.getByRole("table", { name: "Patrimônios" })).toBeVisible();
-      await expect(page.getByText("Página 1 de 1 · 6 bem(ns)")).toBeVisible();
+      await expect(page.getByText("Exibindo 1–6 de 6 bem(ns)")).toBeVisible();
       await expect(page.getByRole("button", { name: "Novo bem" })).toBeVisible();
     },
   },
@@ -1170,7 +1170,7 @@ export const SCREENS: ScreenDef[] = [
     prepare: async (page) => {
       await expect(page.getByRole("table", { name: "Patrimônios" })).toBeVisible();
       await page.getByRole("switch", { name: "Incluir excluídos" }).check();
-      await expect(page.getByText("Página 1 de 1 · 7 bem(ns)")).toBeVisible();
+      await expect(page.getByText("Exibindo 1–7 de 7 bem(ns)")).toBeVisible();
       await expect(page.getByRole("cell", { name: "DEL-0001 Excluído" })).toBeVisible();
       // O check() rolou a página: volta ao topo para não medir controles sob o cabeçalho fixo.
       await page.evaluate(() => {
@@ -1200,7 +1200,7 @@ export const SCREENS: ScreenDef[] = [
       const select = page.getByLabel("Vínculo", { exact: true });
       await expect(select).toBeEnabled();
       await select.selectOption("Ocioso");
-      await expect(page.getByText("Página 1 de 1 · 2 bem(ns)")).toBeVisible();
+      await expect(page.getByText("Exibindo 1–2 de 2 bem(ns)")).toBeVisible();
     },
   },
   {
@@ -1336,7 +1336,7 @@ export const SCREENS: ScreenDef[] = [
     prepare: async (page) => {
       await expect(page.getByRole("heading", { level: 1, name: "Movimentações" })).toBeVisible();
       await expect(page.getByRole("table", { name: "Movimentações" })).toBeVisible();
-      await expect(page.getByText("Página 1 de 1 · 6 movimentação(ões)")).toBeVisible();
+      await expect(page.getByText("Exibindo 1–6 de 6 movimentação(ões)")).toBeVisible();
     },
   },
   {
@@ -1459,7 +1459,7 @@ export const SCREENS: ScreenDef[] = [
     prepare: async (page) => {
       await expect(page.getByRole("heading", { level: 1, name: "Inventários" })).toBeVisible();
       await expect(page.getByRole("table", { name: "Inventários" })).toBeVisible();
-      await expect(page.getByText("Página 1 de 1 · 5 inventário(s)")).toBeVisible();
+      await expect(page.getByText("Exibindo 1–5 de 5 inventário(s)")).toBeVisible();
       await expect(page.getByRole("button", { name: "Novo inventário" })).toBeVisible();
     },
   },

@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 
+import { usePagination } from "@/lib/pagination";
 import type { MovementListParams, MovementSort } from "@/lib/movements-api";
 
 // =============================================================================
@@ -20,12 +21,12 @@ export function useMovementFilters() {
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const [sort, setSort] = useState<MovementSort>("-created_at");
-  const [page, setPage] = useState(1);
+  const pg = usePagination();
 
   function resetPage<T>(setter: (value: T) => void) {
     return (value: T) => {
       setter(value);
-      setPage(1);
+      pg.resetPage();
     };
   }
 
@@ -36,7 +37,7 @@ export function useMovementFilters() {
     setDestinationUnitId("");
     setFrom("");
     setTo("");
-    setPage(1);
+    pg.resetPage();
   }
 
   return {
@@ -47,8 +48,10 @@ export function useMovementFilters() {
     from,
     to,
     sort,
-    page,
-    setPage,
+    page: pg.page,
+    pageSize: pg.pageSize,
+    setPage: pg.setPage,
+    setPageSize: pg.setPageSize,
     chooseStatus: resetPage(setStatus),
     chooseAsset: resetPage(setAssetId),
     chooseOrigin: resetPage(setOriginUnitId),

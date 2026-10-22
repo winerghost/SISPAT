@@ -66,6 +66,17 @@ async function openSheet(page: Page, number: string) {
   return sheet;
 }
 
+/** Acrescenta `count` bens ativos da primeira unidade (patrimônios LOTE-000…). */
+function seedAssets(state: MockState, count: number) {
+  for (let i = 0; i < count; i += 1) {
+    state.assets.push({
+      ...state.assets[3]!,
+      id: `a0000000-0000-4000-8000-${String(500 + i).padStart(12, "0")}`,
+      patrimony_number: `LOTE-${String(i).padStart(3, "0")}`,
+    });
+  }
+}
+
 function asset(state: MockState, id: string): AssetMock {
   return state.assets.find((a) => a.id === id)!;
 }
@@ -80,7 +91,7 @@ test.describe("patrimônios — lista", () => {
     for (const header of ["Patrimônio", "Descrição", "Unidade", "Sala", "Responsável", "Vínculo", "Localizado", "Atualizado em"]) {
       await expect(table(page).getByRole("columnheader", { name: new RegExp(header) })).toBeVisible();
     }
-    await expect(page.getByText("Página 1 de 1 · 6 bem(ns)")).toBeVisible();
+    await expect(page.getByText("Exibindo 1–6 de 6 bem(ns)")).toBeVisible();
 
     // Zeros à esquerda preservados e números parecidos continuam distintos.
     const numbers = await table(page).locator("tbody tr td:first-child span[translate=no]").allInnerTexts();
@@ -170,20 +181,194 @@ test.describe("patrimônios — lista", () => {
     }
   });
 
-  test("paginação: página 2 pede page=2 ao backend", async ({ page }) => {
+  test("paginação 50/100/200: página 2, troca de tamanho volta à página 1 e só envia valores aceitos", async ({ page }) => {
+    const state = await open(page, { role: "ADM" }, (s) => seedAssets(s, 130));
+    // 6 bens do mock + 130 = 136 (todos ativos e no escopo do ADM).
+    await expect(page.getByText("Exibindo 1–50 de 136 bem(ns)")).toBeVisible();
+    await expect(rows(page)).toHaveCount(50);
+    const bar = page.getByRole("navigation", { name: "Paginação" });
+    await expect(bar.getByLabel("Registros por página")).toHaveValue("50");
+    await expect(bar.getByRole("button", { name: "Anterior" })).toBeDisabled();
+    await expect(bar.getByRole("button", { name: "Primeira" })).toBeDisabled();
+
+    const next = waitApi(page, "GET", "/v1/assets");
+    await bar.getByRole("button", { name: "Próxima" }).click();
+    const nextParams = new URL((await next).url()).searchParams;
+    expect(nextParams.get("page")).toBe("2");
+    expect(nextParams.get("page_size")).toBe("50");
+    await expect(page.getByText("Exibindo 51–100 de 136 bem(ns)")).toBeVisible();
+
+    const last = waitApi(page, "GET", "/v1/assets");
+    await bar.getByRole("button", { name: "Última" }).click();
+    expect(new URL((await last).url()).searchParams.get("page")).toBe("3");
+    await expect(page.getByText("Exibindo 101–136 de 136 bem(ns)")).toBeVisible();
+    await expect(rows(page)).toHaveCount(36);
+    await expect(bar.getByRole("button", { name: "Próxima" })).toBeDisabled();
+
+    // Trocar o tamanho volta para a página 1 (a requisição leva page=1).
+    const bigger = waitApi(page, "GET", "/v1/assets");
+    await bar.getByLabel("Registros por página").selectOption("100");
+    const params100 = new URL((await bigger).url()).searchParams;
+    expect(params100.get("page_size")).toBe("100");
+    expect(params100.get("page")).toBe("1");
+    await expect(page.getByText("Exibindo 1–100 de 136 bem(ns)")).toBeVisible();
+    await expect(rows(page)).toHaveCount(100);
+
+    const biggest = waitApi(page, "GET", "/v1/assets");
+    await bar.getByLabel("Registros por página").selectOption("200");
+    expect(new URL((await biggest).url()).searchParams.get("page_size")).toBe("200");
+    await expect(page.getByText("Exibindo 1–136 de 136 bem(ns)")).toBeVisible();
+    await expect(rows(page)).toHaveCount(136);
+    await expect(bar.getByRole("button", { name: "Próxima" })).toBeDisabled();
+
+    // Nenhuma chamada (lista, filtros de apoio) usou page_size fora de 50/100/200.
+    const sizes = state.calls
+      .filter((c) => c.method === "GET")
+      .map((c) => new URL(c.url, "http://x").searchParams.get("page_size"))
+      .filter((v): v is string => v !== null);
+    expect(sizes.length).toBeGreaterThan(0);
+    for (const size of sizes) expect(["50", "100", "200"]).toContain(size);
+  });
+
+  test("zebra: linhas pares têm fundo próprio e as ímpares não", async ({ page }) => {
+    await open(page);
+    await expect(rows(page)).toHaveCount(6);
+    await page.mouse.move(0, 0);
+    const background = (index: number) =>
+      rows(page).nth(index).evaluate((el) => getComputedStyle(el).backgroundColor);
+    expect(await background(0)).toBe("rgba(0, 0, 0, 0)");
+    expect(await background(1)).not.toBe("rgba(0, 0, 0, 0)");
+    expect(await background(2)).toBe("rgba(0, 0, 0, 0)");
+    expect(await background(3)).not.toBe("rgba(0, 0, 0, 0)");
+  });
+
+  test("filtros e ordenação voltam à página 1; busca só com espaços não filtra", async ({ page }) => {
+    const state = await open(page, { role: "ADM" }, (s) => seedAssets(s, 130));
+    const bar = page.getByRole("navigation", { name: "Paginação" });
+    await expect(page.getByText("Exibindo 1–50 de 136 bem(ns)")).toBeVisible();
+
+    // Espaços aparados: "   " não vira q e não muda a página.
+    await bar.getByRole("button", { name: "Próxima" }).click();
+    await expect(page.getByText("Exibindo 51–100 de 136 bem(ns)")).toBeVisible();
+    await page.getByLabel("Buscar por número patrimonial ou descrição").fill("   ");
+    await page.waitForTimeout(600);
+    await expect(page.getByText("Exibindo 51–100 de 136 bem(ns)")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Limpar filtros" })).toHaveCount(0);
+
+    // Busca (com espaços nas pontas) → q aparado + page=1.
+    const search = waitApi(page, "GET", "/v1/assets");
+    await page.getByLabel("Buscar por número patrimonial ou descrição").fill("  LOTE-  ");
+    const searchParams = new URL((await search).url()).searchParams;
+    expect(searchParams.get("q")).toBe("LOTE-");
+    expect(searchParams.get("page")).toBe("1");
+    await expect(page.getByText("Exibindo 1–50 de 130 bem(ns)")).toBeVisible();
+
+    // Limite do campo (backend: q ≤ 100).
+    await expect(page.getByLabel("Buscar por número patrimonial ou descrição")).toHaveAttribute("maxlength", "100");
+
+    // Limpar filtros: volta ao total completo e ao tamanho escolhido.
+    await page.getByRole("button", { name: "Limpar filtros" }).click();
+    await expect(page.getByText("Exibindo 1–50 de 136 bem(ns)")).toBeVisible();
+    await expect(page.getByLabel("Buscar por número patrimonial ou descrição")).toHaveValue("");
+
+    // Ordenação e filtro de "Localizado" também reiniciam a paginação.
+    await bar.getByRole("button", { name: "Próxima" }).click();
+    await expect(page.getByText("Exibindo 51–100 de 136 bem(ns)")).toBeVisible();
+    const sorted = waitApi(page, "GET", "/v1/assets");
+    await page.getByRole("columnheader", { name: /Descrição/ }).getByRole("button").click();
+    const sortedParams = new URL((await sorted).url()).searchParams;
+    expect(sortedParams.get("sort")).toBe("description");
+    expect(sortedParams.get("page")).toBe("1");
+    await bar.getByRole("button", { name: "Próxima" }).click();
+    await expect(page.getByText("Exibindo 51–100 de 136 bem(ns)")).toBeVisible();
+    const located = waitApi(page, "GET", "/v1/assets");
+    await page.getByLabel("Localizado", { exact: true }).selectOption("NAO");
+    expect(new URL((await located).url()).searchParams.get("page")).toBe("1");
+
+    // Todos os parâmetros enviados à lista estão na allowlist do backend.
+    const allowed = new Set([
+      "q", "unit_id", "room_id", "responsible_person_id", "located", "bond_status", "include_deleted", "sort", "page", "page_size",
+    ]);
+    for (const call of state.calls.filter((c) => c.method === "GET" && /\/v1\/assets\?/.test(c.url))) {
+      for (const key of new URL(call.url, "http://x").searchParams.keys()) expect(allowed.has(key)).toBe(true);
+    }
+  });
+
+  test("histórico do bem usa PaginationBar (50/100/200) e pede page/page_size válidos", async ({ page }) => {
     const state = await open(page, { role: "ADM" }, (s) => {
-      for (let i = 0; i < 30; i += 1) {
-        s.assets.push({ ...s.assets[3]!, id: `a0000000-0000-4000-8000-${String(500 + i).padStart(12, "0")}`, patrimony_number: `LOTE-${String(i).padStart(3, "0")}` });
+      for (let i = 0; i < 60; i += 1) {
+        s.history.push({
+          id: `f0000000-0000-4000-8000-${String(i).padStart(12, "0")}`,
+          asset_id: ASSET_IDS.long,
+          operation: "ASSET_UPDATED",
+          occurred_at: new Date(Date.UTC(2026, 9, 3, 12, i)).toISOString(),
+          actor_user_id: null,
+          result: "SUCESSO",
+          previous_values: null,
+          new_values: null,
+        });
       }
     });
-    await expect(page.getByText("Página 1 de 2 · 36 bem(ns)")).toBeVisible();
-    await expect(rows(page)).toHaveCount(25);
-    const next = waitApi(page, "GET", "/v1/assets");
-    await page.getByRole("button", { name: "Próxima" }).click();
-    expect(new URL((await next).url()).searchParams.get("page")).toBe("2");
-    await expect(page.getByText("Página 2 de 2 · 36 bem(ns)")).toBeVisible();
-    await expect(rows(page)).toHaveCount(11);
-    expect(state.calls.some((c) => /page=2/.test(c.url))).toBe(true);
+    const sheet = await openSheet(page, "000123");
+    await sheet.getByRole("tab", { name: "Histórico" }).click();
+    await expect(sheet.getByText("Exibindo 1–50 de 63 evento(s)")).toBeVisible();
+    const list = sheet.getByRole("list", { name: "Histórico do bem" });
+    await expect(list.locator(":scope > li")).toHaveCount(50);
+    const next = waitApi(page, "GET", /\/v1\/assets\/[^/]+\/history$/);
+    await sheet.getByRole("button", { name: "Próxima" }).click();
+    const params = new URL((await next).url()).searchParams;
+    expect(params.get("page")).toBe("2");
+    expect(params.get("page_size")).toBe("50");
+    await expect(sheet.getByText("Exibindo 51–63 de 63 evento(s)")).toBeVisible();
+    await expect(list.locator(":scope > li")).toHaveCount(13);
+    for (const call of calls(state, "GET", /\/v1\/assets\/[^/]+\/history$/)) {
+      expect(["50", "100", "200"]).toContain(new URL(call.url, "http://x").searchParams.get("page_size"));
+    }
+  });
+
+  for (const width of [320, 375]) {
+    test(`lista com paginação sem rolagem horizontal da página a ${width}px`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 800 });
+      await open(page, { role: "ADM" }, (s) => seedAssets(s, 60));
+      await expect(page.getByText("Exibindo 1–50 de 66 bem(ns)")).toBeVisible();
+      await expect(page.getByRole("navigation", { name: "Paginação" }).getByLabel("Registros por página")).toBeVisible();
+      const overflow = await page.evaluate(
+        () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      );
+      expect(overflow).toBeLessThanOrEqual(0);
+    });
+  }
+
+  test("busca global (?busca=): campo preenchido, q normalizado enviado ao backend e lista filtrada", async ({ page }) => {
+    const opts: MockOptions = { role: "ADM" };
+    const state = await installMocks(page, opts);
+    await seedSession(page, opts);
+    const first = waitApi(page, "GET", "/v1/assets");
+    await page.goto("/patrimonios?busca=%20%20cadeira%20%20");
+    await waitForHydration(page);
+    const params = new URL((await first).url()).searchParams;
+    expect(params.get("q")).toBe("cadeira");
+    expect(params.get("page")).toBe("1");
+    const field = page.getByLabel("Buscar por número patrimonial ou descrição");
+    await expect(field).toHaveValue("cadeira");
+    await expect(rows(page)).toHaveCount(1);
+    await expect(page.getByRole("button", { name: "Limpar filtros" })).toBeVisible();
+
+    // Mudança do parâmetro com a lista aberta: sincroniza o campo e refiltra.
+    const second = waitApi(page, "GET", "/v1/assets");
+    await page.getByLabel("Busca global").fill("  000123 ");
+    await page.getByLabel("Busca global").press("Enter");
+    expect(new URL((await second).url()).searchParams.get("q")).toBe("000123");
+    await expect(field).toHaveValue("000123");
+
+    // Termo longo é limitado a 100 caracteres (limite do backend).
+    const long = waitApi(page, "GET", "/v1/assets");
+    await page.goto(`/patrimonios?busca=${"a".repeat(150)}`);
+    await waitForHydration(page);
+    expect(new URL((await long).url()).searchParams.get("q")).toBe("a".repeat(100));
+    for (const call of state.calls.filter((c) => /\/v1\/assets\?/.test(c.url))) {
+      expect(new URL(call.url, "http://x").searchParams.get("q")?.length ?? 0).toBeLessThanOrEqual(100);
+    }
   });
 
   test("filtro sem resultado mostra estado vazio com orientação", async ({ page }) => {
@@ -506,7 +691,7 @@ test.describe("patrimônios — criar", () => {
       registration_date: "2026-01-15",
     });
     await expect(dialog).toBeHidden();
-    await expect(page.getByText("Página 1 de 1 · 7 bem(ns)")).toBeVisible();
+    await expect(page.getByText("Exibindo 1–7 de 7 bem(ns)")).toBeVisible();
     await expect(rows(page).filter({ hasText: "000789" })).toBeVisible();
     expect(state.assets.at(-1)!.patrimony_number).toBe("000789");
   });
@@ -817,6 +1002,8 @@ test("nenhum dado do bem vai para localStorage/sessionStorage nem para a URL", a
   await open(page);
   const sheet = await openSheet(page, "000123");
   await sheet.getByRole("tab", { name: "Histórico" }).click();
+  // Teste de segurança: LÊ o storage só para provar que nenhum dado da tela foi gravado.
+  // eslint-disable-next-line no-restricted-properties
   const stored = await page.evaluate(() => JSON.stringify({ ...window.localStorage }) + JSON.stringify({ ...window.sessionStorage }));
   expect(stored).not.toContain("000123");
   expect(stored).not.toContain("Observação sintética");

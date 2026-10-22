@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type FormEvent } from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { Search, ChevronRight, LogOut } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -97,23 +97,61 @@ export function Header() {
       </div>
 
       <div className="flex shrink-0 items-center gap-3">
-        {/* Busca global — input estático por enquanto, sem lógica de pesquisa.
-            Oculta abaixo de md para não espremer a trilha/menu em telas pequenas. */}
-        <div className="relative hidden w-44 md:block lg:w-48 xl:w-72">
-          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-warm-granite" aria-hidden />
-          <Input
-            type="search"
-            placeholder="Buscar patrimônio, unidade, responsável..."
-            aria-label="Busca global"
-            className="pl-9"
-            // Estático por enquanto: sem onChange/onSubmit — a lógica de busca
-            // (debounce, chamada à API, resultados) entra em uma rodada futura.
-          />
-        </div>
+        <GlobalSearch />
         <ProfileLink />
         <SignOutButton />
       </div>
     </header>
+  );
+}
+
+/** Mesmo limite de `q` nas listagens do backend. */
+export const GLOBAL_SEARCH_MAX = 100;
+/** Rota e parâmetro de URL que a lista de patrimônios lê como busca inicial. */
+export const GLOBAL_SEARCH_ROUTE = "/patrimonios";
+export const GLOBAL_SEARCH_PARAM = "busca";
+
+/**
+ * Termo normalizado (trim, espaços colapsados, sem caracteres de controle,
+ * até 100). Vazio = nada a buscar. A validação real é do backend.
+ */
+export function normalizeGlobalSearch(raw: string): string {
+  // eslint-disable-next-line no-control-regex
+  return raw.replace(/[\x00-\x1f\x7f-\x9f]/g, " ").replace(/\s+/g, " ").trim().slice(0, GLOBAL_SEARCH_MAX);
+}
+
+/**
+ * Busca global: ao enviar (Enter), abre a lista de patrimônios com o termo na
+ * URL (`?busca=`). Sem consulta própria: a lista aplica debounce, escopo de
+ * perfil/unidade e limites no backend. Oculta abaixo de md para não espremer
+ * a trilha/menu em telas pequenas.
+ */
+function GlobalSearch() {
+  const router = useRouter();
+  const [term, setTerm] = useState("");
+
+  function onSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const query = normalizeGlobalSearch(term);
+    if (query === "") return;
+    router.push(`${GLOBAL_SEARCH_ROUTE}?${GLOBAL_SEARCH_PARAM}=${encodeURIComponent(query)}`);
+  }
+
+  return (
+    <form role="search" onSubmit={onSubmit} className="relative hidden w-44 md:block lg:w-48 xl:w-72">
+      <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-warm-granite" aria-hidden />
+      <Input
+        type="search"
+        placeholder="Buscar patrimônio…"
+        aria-label="Busca global"
+        maxLength={GLOBAL_SEARCH_MAX}
+        value={term}
+        onChange={(event) => setTerm(event.target.value)}
+        enterKeyHint="search"
+        autoComplete="off"
+        className="pl-9"
+      />
+    </form>
   );
 }
 

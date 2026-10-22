@@ -118,6 +118,13 @@ function ReportsPanel({ reports, maxRows, formats }: { reports: ReportDef[]; max
     setOutcome(null);
   }
 
+  const hasFilters = Object.values(form.filters).some((value) => value.trim() !== "");
+
+  function clearFilters() {
+    patch({ filters: {} });
+    setErrors({});
+  }
+
   function selectReport(id: string) {
     setSelectedId(id);
     setErrors({});
@@ -307,10 +314,17 @@ function ReportsPanel({ reports, maxRows, formats }: { reports: ReportDef[]; max
           </section>
 
           <div className="flex flex-col gap-3">
-            <Button type="submit" variant="light" className="self-start" loading={busy}>
-              <Download aria-hidden="true" />
-              {busy ? `Gerando ${formatLabel}…` : `Exportar ${formatLabel}`}
-            </Button>
+            <div className="flex flex-wrap items-center gap-3">
+              <Button type="submit" variant="light" loading={busy}>
+                <Download aria-hidden="true" />
+                {busy ? `Gerando ${formatLabel}…` : `Exportar ${formatLabel}`}
+              </Button>
+              {hasFilters ? (
+                <Button type="button" variant="link" size="sm" className="min-h-8" disabled={busy} onClick={clearFilters}>
+                  Limpar filtros
+                </Button>
+              ) : null}
+            </div>
             <OutcomeMessage outcome={outcome} />
           </div>
         </form>

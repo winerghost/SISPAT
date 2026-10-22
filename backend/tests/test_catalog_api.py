@@ -621,7 +621,7 @@ def test_catalogo_de_unidades_inclui_inativas_e_endereco_so_adm(cat):
     r = c.get(CATALOG_URL, headers=adm())
     assert r.status_code == 200, r.get_json()
     body = r.get_json()
-    assert body["total"] == 1 and body["page"] == 1 and body["page_size"] == 25
+    assert body["total"] == 1 and body["page"] == 1 and body["page_size"] == 50
     unit = body["units"][0]
     assert set(unit) == {"id", "code", "name", "active", "updated_at", "source_record_id", "address"}
     assert unit["active"] is False and unit["address"] == "Quadra 1" and unit["id"] == str(cat.a)

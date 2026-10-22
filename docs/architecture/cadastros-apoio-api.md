@@ -64,7 +64,7 @@ do seletor de usuários (permissão, filtro de ativas e rejeição de query).
 (allowlist, `extra="forbid"`, desconhecido/repetido => 400): `q` (≤100; busca em
 nome e código, curingas LIKE escapados), `active=true|false|all` (padrão
 `all`), `sort` (`name`, `-name`, `code`, `-code`, `updated_at`, `-updated_at`;
-desempate por `id`), `page`, `page_size` (≤100). Resposta `{total, page,
+desempate por `id`), `page`, `page_size` (50, 100 ou 200). Resposta `{total, page,
 page_size, units: [{id, code, name, active, updated_at, source_record_id,
 address}]}`. Decisão: o escopo de unidade (`apply_unit_scope`) vale também para
 o ADM, como no resto do CRUD (ADM sem a unidade em `user_unit_access` não a
@@ -85,7 +85,7 @@ lista nem a reativa; 404 uniforme nas ações). Limite 1200/h por ADM.
 - Listagens (`rooms`, `responsible-people`): `q` (≤100), `unit_id`,
   `active=true|false`, `sort` (allowlist: `name`, `-name`, `created_at`,
   `-created_at`, `updated_at`, `-updated_at`; pessoas também `email`, `-email`),
-  `page`, `page_size` (≤100). Parâmetro desconhecido/repetido => 400.
+  `page`, `page_size` (50, 100 ou 200). Parâmetro desconhecido/repetido => 400.
   Resposta `{total, page, page_size, rooms|people: [...]}`.
 - Ações `deactivate`/`activate`: corpo opcional `{reason?, expected_updated_at?}`;
   idempotentes (já no estado pedido => 200 sem auditoria).
@@ -117,7 +117,7 @@ permissão → rate_limit`). Código: `api/v1/catalog_imports.py`, schemas
 |---|---|---|
 | POST | `/api/v1/catalog-imports/<kind>/preview` (`kind` ∈ units, rooms, people; sem corpo) | `units.update` / `rooms.manage` / `responsible.manage` |
 | GET | `/api/v1/catalog-imports/<preview_id>/report` | a do tipo da prévia |
-| GET | `/api/v1/catalog-imports/<preview_id>/items` (`status`, `search`, `sort` allowlist `label/classification/source_id` ± , `page`, `page_size`≤100) | idem |
+| GET | `/api/v1/catalog-imports/<preview_id>/items` (`status`, `search`, `sort` allowlist `label/classification/source_id` ± , `page`, `page_size` 50|100|200) | idem |
 | POST | `/api/v1/catalog-imports/<preview_id>/confirm` `{item_ids: [uuid] (≤10.000), alias_item_ids?: [uuid] (≤10.000)}` | idem |
 | GET | `/api/v1/imports/google-sheets/<preview_id>/pending` (bens) | `imports.execute` |
 

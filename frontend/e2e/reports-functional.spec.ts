@@ -186,6 +186,58 @@ test.describe("exportação", () => {
   });
 });
 
+test.describe("filtros dos relatórios", () => {
+  test("movimentações: tipo, estado e datas vão na query; 'Limpar filtros' zera e omite", async ({ page }) => {
+    const state = await open(page, { role: "ADM" });
+    await pickReport(page, "movements");
+    await expect(form(page).getByRole("button", { name: "Limpar filtros" })).toHaveCount(0);
+
+    await form(page).getByLabel("Tipo de movimentação").selectOption({ index: 1 });
+    await form(page).getByLabel("Solicitada a partir de").fill("2026-05-01");
+    await form(page).getByLabel("Solicitada até").fill("2026-05-31");
+    await form(page).getByLabel("Situação", { exact: true }).selectOption("PENDENTE");
+    const downloadPromise = page.waitForEvent("download");
+    await exportButton(page).click();
+    await downloadPromise;
+    const params = new URL(exportCalls(state)[0]!.replace("GET ", ""), "http://x").searchParams;
+    expect(params.get("movement_type")).toBeTruthy();
+    expect(params.get("status")).toBe("PENDENTE");
+    expect(params.get("created_from")).toBe("2026-05-01");
+    expect(params.get("created_to")).toBe("2026-05-31");
+
+    await form(page).getByRole("button", { name: "Limpar filtros" }).click();
+    await expect(form(page).getByLabel("Solicitada a partir de")).toHaveValue("");
+    await expect(form(page).getByLabel("Tipo de movimentação")).toHaveValue("");
+    await expect(form(page).getByRole("button", { name: "Limpar filtros" })).toHaveCount(0);
+    const again = page.waitForEvent("download");
+    await exportButton(page).click();
+    await again;
+    const cleared = new URL(exportCalls(state)[1]!.replace("GET ", ""), "http://x").searchParams;
+    expect([...cleared.keys()].sort()).toEqual(["format", "sort"]);
+  });
+
+  test("'Limpar filtros' também remove mensagens de validação", async ({ page }) => {
+    const state = await open(page);
+    await form(page).getByLabel("Sala (identificador)").fill("nao-e-uuid");
+    await exportButton(page).click();
+    await expect(form(page).getByText("Informe um identificador (UUID) válido.")).toBeVisible();
+    await form(page).getByRole("button", { name: "Limpar filtros" }).click();
+    await expect(form(page).getByText("Informe um identificador (UUID) válido.")).toHaveCount(0);
+    expect(exportCalls(state)).toEqual([]);
+  });
+
+  test("lista de inventários do filtro usa page_size válido (50/100/200)", async ({ page }) => {
+    const state = await open(page, { role: "ADM" });
+    await pickReport(page, "inventory-items");
+    await expect(form(page).getByLabel("Inventário", { exact: true }).locator("option")).not.toHaveCount(1);
+    const lookups = state.calls.filter((c) => c.method === "GET" && c.url.startsWith("/api/v1/inventories"));
+    expect(lookups.length).toBeGreaterThan(0);
+    for (const call of lookups) {
+      expect(["50", "100", "200"]).toContain(new URL(call.url, "http://x").searchParams.get("page_size"));
+    }
+  });
+});
+
 test.describe("validação de UX e erros", () => {
   test("intervalo de datas invertido bloqueia a exportação, sem chamar a API", async ({ page }) => {
     const state = await open(page);

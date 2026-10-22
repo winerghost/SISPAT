@@ -18,8 +18,6 @@ export const ASSET_SEARCH_MAX = 100;
 export const PATRIMONY_MAX = 64;
 export const TEXT_MAX = 2000;
 export const REASON_MAX = 500;
-export const ASSET_PAGE_SIZE = 25;
-export const HISTORY_PAGE_SIZE = 10;
 
 export const LOCATED_LABEL: Record<LocatedStatus, string> = {
   SIM: "Localizado",

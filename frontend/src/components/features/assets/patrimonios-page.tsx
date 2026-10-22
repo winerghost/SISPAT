@@ -4,17 +4,19 @@ import { useState } from "react";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 
 import { Button } from "@/components/ui/button";
+import { PaginationBar } from "@/components/ui/pagination-bar";
 import { LoadingSkeleton } from "@/components/ui/loading-skeleton";
 import { fetchAssetBondStatuses, listAssets, type AssetRecord } from "@/lib/assets-api";
-import { CatalogHeader, CatalogNotice, CatalogPagination } from "@/components/features/catalog/catalog-parts";
+import { CatalogHeader, CatalogNotice } from "@/components/features/catalog/catalog-parts";
 import { SESSION_ERROR_MESSAGE } from "@/components/features/lookup/lookup-labels";
 import { noClientRetry, useAccessibleUnits, useLookupAccess } from "@/components/features/lookup/use-lookup";
 import { AssetDetailSheet } from "./asset-detail-sheet";
 import { assetsQueryKey, AssetFormDialog } from "./asset-form-dialog";
-import { ASSET_LOOKUPS_ERROR_MESSAGE, ASSET_PAGE_SIZE, assetListErrorMessage } from "./asset-labels";
+import { ASSET_LOOKUPS_ERROR_MESSAGE, assetListErrorMessage } from "./asset-labels";
 import { AssetsTable } from "./assets-table";
 import { AssetsToolbar } from "./assets-toolbar";
 import { useAssetFilters } from "./use-asset-filters";
+import { useClampPage } from "./use-clamp-page";
 import { useUnitPeople, useUnitRooms } from "./use-asset-lookups";
 
 // =============================================================================
@@ -59,8 +61,8 @@ export function PatrimoniosPage() {
     bond_status: filters.bondStatus || undefined,
     include_deleted: includeDeleted || undefined,
     sort: filters.sort,
-    page: filters.page,
-    page_size: ASSET_PAGE_SIZE,
+    page: filters.pg.page,
+    page_size: filters.pg.pageSize,
   };
   const assets = useQuery({
     queryKey: [...assetsQueryKey, "list", params],
@@ -69,6 +71,8 @@ export function PatrimoniosPage() {
     placeholderData: keepPreviousData,
     retry: noClientRetry,
   });
+
+  useClampPage(filters.pg, assets.data?.total, !assets.isPlaceholderData);
 
   const lookupsFailed = units.isError || rooms.isError || people.isError;
 
@@ -123,7 +127,7 @@ export function PatrimoniosPage() {
         <>
           <AssetsTable
             assets={assets.data.assets}
-            pageKey={`${assets.data.page}|${filters.q}|${filters.unitId}|${filters.roomId}|${filters.personId}|${filters.located}|${filters.bondStatus}|${includeDeleted}|${filters.sort}`}
+            pageKey={`${assets.data.page}|${assets.data.page_size}|${filters.q}|${filters.unitId}|${filters.roomId}|${filters.personId}|${filters.located}|${filters.bondStatus}|${includeDeleted}|${filters.sort}`}
             busy={assets.isFetching && !assets.isPending}
             sort={filters.sort}
             onSortChange={filters.chooseSort}
@@ -133,13 +137,14 @@ export function PatrimoniosPage() {
               setDetailOpen(true);
             }}
           />
-          <CatalogPagination
-            page={assets.data.page}
+          <PaginationBar
+            page={filters.pg.page}
+            pageSize={filters.pg.pageSize}
             total={assets.data.total}
-            pageSize={ASSET_PAGE_SIZE}
+            onPageChange={filters.pg.setPage}
+            onPageSizeChange={filters.pg.setPageSize}
+            busy={assets.isPlaceholderData}
             noun="bem(ns)"
-            loading={assets.isPlaceholderData}
-            onPage={filters.setPage}
           />
         </>
       )}

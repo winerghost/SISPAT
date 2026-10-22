@@ -66,7 +66,8 @@ from app.models.audit import AuditLog
 from app.models.invites import Invite, InviteUnit
 from app.models.rbac import Role, User, UserRole
 from app.models.units import Unit, UserUnitAccess
-from app.security.sanitize import LIKE_ESCAPE_CHAR, escape_like
+from app.services.pagination import page_count
+from app.security.text_search import contains_ci
 from app.services.avatar_service import AvatarService
 from app.services.invite_service import (
     _REVOKE_ADVISORY_LOCK_KEY,
@@ -479,18 +480,17 @@ class UserAdminService:
 
     def list_users(self, actor_id: Any, query: Any) -> dict[str, Any]:
         page, page_size = int(query.page), int(query.page_size)
-        empty = {"total": 0, "page": page, "page_size": page_size, "users": []}
+        empty = {"total": 0, "page": page, "page_size": page_size, "pages": 0, "users": []}
         actor_units = get_accessible_unit_ids(actor_id, self._db)
         if not actor_units:
             return empty
 
         conditions: list[Any] = [self._scope_clause(actor_units)]
         if query.q:
-            pattern = f"%{escape_like(query.q)}%"
             conditions.append(
                 or_(
-                    User.name.ilike(pattern, escape=LIKE_ESCAPE_CHAR),
-                    User.email.ilike(pattern, escape=LIKE_ESCAPE_CHAR),
+                    contains_ci(User.name, query.q),
+                    contains_ci(User.email, query.q),
                 )
             )
         if query.role:
@@ -530,7 +530,7 @@ class UserAdminService:
         return {
             "total": int(total),
             "page": page,
-            "page_size": page_size,
+            "page_size": page_size, "pages": page_count(total, page_size),
             "users": [user_summary(user, actor_units) for user in users],
         }
 
@@ -890,7 +890,7 @@ class UserAdminService:
         return {
             "total": int(total),
             "page": page,
-            "page_size": page_size,
+            "page_size": page_size, "pages": page_count(total, page_size),
             "events": [self._history_event(row, scope_ids) for row in rows],
         }
 

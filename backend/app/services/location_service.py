@@ -13,7 +13,8 @@ from sqlalchemy.orm import Session
 
 from app.authorization.rbac import apply_unit_scope
 from app.models.units import Location
-from app.security.sanitize import LIKE_ESCAPE_CHAR, escape_like
+from app.services.pagination import page_count
+from app.security.text_search import contains_ci
 from app.services.catalog_service import NotFoundError, _iso
 
 _SORTS = {
@@ -50,7 +51,7 @@ class LocationService:
         scoped = self._scoped(actor_id)
         if query.q:
             scoped = scoped.filter(
-                Location.name.ilike(f"%{escape_like(query.q)}%", escape=LIKE_ESCAPE_CHAR)
+                contains_ci(Location.name, query.q)
             )
         if query.unit_id is not None:
             scoped = scoped.filter(Location.unit_id == query.unit_id)
@@ -65,7 +66,7 @@ class LocationService:
             .limit(query.page_size)
             .all()
         )
-        return {"total": int(total), "page": query.page, "page_size": query.page_size,
+        return {"total": int(total), "page": query.page, "page_size": query.page_size, "pages": page_count(total, query.page_size),
                 "locations": [serialize_location(r) for r in rows]}
 
     def get(self, actor_id: Any, location_id: uuid.UUID) -> dict[str, Any]:

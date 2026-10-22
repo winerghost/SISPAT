@@ -21,8 +21,6 @@ export const inventoryDetailKey = (id: string) => [...inventoriesQueryKey, "deta
 export const inventorySummaryKey = (id: string) => [...inventoriesQueryKey, "summary", id] as const;
 export const inventoryItemsKey = (id: string, params: unknown) => [...inventoriesQueryKey, "items", id, params] as const;
 
-export const INVENTORY_PAGE_SIZE = 25;
-export const ITEMS_PAGE_SIZE = 10;
 export const NAME_MAX = 200;
 export const NOTES_MAX = 500;
 export const REASON_MAX = 500;

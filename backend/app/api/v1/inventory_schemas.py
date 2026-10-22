@@ -15,6 +15,7 @@ from datetime import date
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator, model_validator
+from app.api.v1.pagination import DEFAULT_PAGE_SIZE, PageSize
 
 from app.api.v1.catalog_schemas import clean_text, collapse_spaces
 
@@ -97,7 +98,7 @@ class InventoryListQuery(_Query):
     status: InventoryStatus | None = None
     sort: InventorySortKey = "-created_at"
     page: int = Field(default=1, ge=1, le=100_000)
-    page_size: int = Field(default=25, ge=1, le=100)
+    page_size: PageSize = DEFAULT_PAGE_SIZE
 
     @field_validator("q")
     @classmethod
@@ -109,7 +110,7 @@ class InventoryItemsQuery(_Query):
     result: ItemResult | None = None
     sort: ItemSortKey = "-checked_at"
     page: int = Field(default=1, ge=1, le=100_000)
-    page_size: int = Field(default=25, ge=1, le=100)
+    page_size: PageSize = DEFAULT_PAGE_SIZE
 
 
 class InventoryGetQuery(_Query):

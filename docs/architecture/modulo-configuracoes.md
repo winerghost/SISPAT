@@ -143,9 +143,10 @@ Parâmetros de consulta (allowlist; parâmetro desconhecido → 400 `validation_
 | `active` | `true` ou `false` |
 | `sort` | `name`, `-name`, `email`, `-email`, `created_at`, `-created_at`, `last_login_at` ou `-last_login_at` (padrão `name`) |
 | `page` | ≥ 1 |
-| `page_size` | 1 a 100, padrão 25 |
+| `page_size` | 50, 100 ou 200, padrão 50 |
 
-Resposta: `{"total": 0, "page": 1, "page_size": 25, "users": [UserSummary]}`.
+Resposta: `{"total": 0, "page": 1, "page_size": 50,
+  "pages": 0, "users": [UserSummary]}`.
 
 ### `GET /api/v1/users/<uuid>` (`users.manage`)
 
@@ -191,7 +192,8 @@ Corpo (`extra="forbid"`):
 {
   "total": 0,
   "page": 1,
-  "page_size": 25,
+  "page_size": 50,
+  "pages": 0,
   "events": [
     {
       "id": "uuid",

@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import uuid
 from contextlib import ExitStack
-from datetime import date, timedelta
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
@@ -29,6 +29,7 @@ from app.models.audit import AuditLog
 from app.models.people import ResponsiblePerson
 from app.models.rbac import Permission, Role, RolePermission
 from app.models.units import Location, Room
+from app.services.local_dates import LOCAL_TZ
 from test_user_admin_db import FakeRedis, World, auth_headers
 
 TABLES = (
@@ -617,10 +618,11 @@ def test_listagem_escopo_origem_ou_destino_filtros_ordenacao_e_paginacao(mv):
     assert ids(USER_AB, f"origin_unit_id={mv.b}") == {m3}
     assert ids(USER_AB, f"destination_unit_id={mv.b}") == {m1}
     assert ids(USER_B, f"origin_unit_id={mv.a}") == {m1}  # filtro nunca amplia o escopo
-    today, tomorrow = date.today(), date.today() + timedelta(days=2)
+    local_today = datetime.now(LOCAL_TZ).date()
+    today, tomorrow = local_today, local_today + timedelta(days=2)
     assert ids(USER_AB, f"created_from={today}") == {m1, m2, m3}
     assert ids(USER_AB, f"created_from={tomorrow}") == set()
-    assert ids(USER_AB, f"created_to={date.today() - timedelta(days=2)}") == set()
+    assert ids(USER_AB, f"created_to={local_today - timedelta(days=2)}") == set()
     assert ids(USER_AB, f"created_to={tomorrow}") == {m1, m2, m3}
     page = c.get("/api/v1/movements?page=2&page_size=2&sort=created_at", headers=h(USER_AB)).get_json()
     assert page["total"] == 3 and len(page["movements"]) == 1 and page["page"] == 2
@@ -633,10 +635,63 @@ def test_listagem_escopo_origem_ou_destino_filtros_ordenacao_e_paginacao(mv):
     "asset_id=x", "origin_unit_id=1", "created_from=2024-13-45", "created_from=1700000000",
     "created_to=ontem", "status=PENDENTE&status=APROVADA", "requested_by=" + str(uuid.uuid4()),
     "reason=a", "deleted_at=2020-01-01", "include_deleted=true",
+    "movement_type=X", "movement_type=mudanca_sala", "movement_type=",
+    "movement_type=MUDANCA_SALA&movement_type=TROCA_RESPONSAVEL",
 ])
 def test_listagem_rejeita_fora_da_allowlist(mv, query):
     r = mv.client.get(f"/api/v1/movements?{query}", headers=h(ADM))
     assert r.status_code == 400 and r.get_json()["error"]["code"] == "validation_error"
+
+
+def _set_created(mv, movement_id, when_utc):
+    with mv.w.session() as db:
+        db.get(AssetMovement, uuid.UUID(movement_id)).created_at = when_utc
+
+
+def test_filtro_de_data_usa_dia_civil_araguaina_borda_22h_a_02h(mv):
+    a1, a2, a3 = (mv.w.asset(mv.a, f"DT-{i}") for i in range(3))
+    m_late = request(mv, USER_AB, a1, mv.b).get_json()["id"]
+    m_early = request(mv, USER_AB, a2, mv.b).get_json()["id"]
+    m_edge = request(mv, USER_AB, a3, mv.b).get_json()["id"]
+    # 22h do dia 10 em Araguaina = 01h UTC do dia 11
+    _set_created(mv, m_late, datetime(2025, 3, 11, 1, 0, tzinfo=timezone.utc))
+    # 02h do dia 11 em Araguaina = 05h UTC do dia 11
+    _set_created(mv, m_early, datetime(2025, 3, 11, 5, 0, tzinfo=timezone.utc))
+    # 00h00 local do dia 11 = 03h00 UTC (inclusivo); 23h59 local do dia 10 = 02h59 UTC
+    _set_created(mv, m_edge, datetime(2025, 3, 11, 3, 0, tzinfo=timezone.utc))
+
+    def ids(query):
+        body = mv.client.get(f"/api/v1/movements?{query}", headers=h(USER_AB)).get_json()
+        return {x["id"] for x in body["movements"]}
+
+    assert ids("created_from=2025-03-10&created_to=2025-03-10") == {m_late}
+    assert ids("created_from=2025-03-11&created_to=2025-03-11") == {m_early, m_edge}
+    assert ids("created_from=2025-03-11") == {m_early, m_edge}
+    assert ids("created_to=2025-03-10") == {m_late}
+    assert ids("created_to=2025-03-09") == set()
+    _set_created(mv, m_edge, datetime(2025, 3, 11, 2, 59, 59, tzinfo=timezone.utc))
+    assert ids("created_from=2025-03-11") == {m_early}  # 23:59:59 do dia 10 local
+    _set_created(mv, m_edge, datetime(2025, 3, 12, 3, 0, tzinfo=timezone.utc))  # 00:00 do dia 12
+    assert ids("created_from=2025-03-11&created_to=2025-03-11") == {m_early}  # fim exclusivo
+
+
+def test_filtro_movement_type_com_escopo_preservado(mv):
+    a1 = mv.w.asset(mv.a, "TP-1")
+    b1 = mv.w.asset(mv.b, "TP-2")
+    transfer = request(mv, USER_AB, a1, mv.b).get_json()["id"]
+    room_change = request(mv, USER_AB, b1, mv.b, destination_room_id=str(mv.w.room(mv.b, "R"))).get_json()["id"]
+
+    def ids(sub, query):
+        r = mv.client.get(f"/api/v1/movements?{query}", headers=h(sub))
+        assert r.status_code == 200
+        return {x["id"] for x in r.get_json()["movements"]}
+
+    assert ids(USER_AB, "movement_type=TRANSFERENCIA_UNIDADE") == {transfer}
+    assert ids(USER_AB, "movement_type=MUDANCA_SALA") == {room_change}
+    assert ids(USER_AB, "movement_type=TROCA_RESPONSAVEL") == set()
+    # USER_A só enxerga o que toca a unidade A: o filtro nunca amplia o escopo
+    assert ids(USER_A, "movement_type=MUDANCA_SALA") == set()
+    assert ids(USER_A, "movement_type=TRANSFERENCIA_UNIDADE") == {transfer}
 
 
 def test_rh_nao_recebe_motivo_nem_autoria(mv):

@@ -210,8 +210,9 @@ function isRecord(body: unknown): body is Record<string, unknown> {
 
 function pageParams(searchParams: URLSearchParams) {
   const page = Number(searchParams.get("page") ?? 1);
-  const pageSize = Number(searchParams.get("page_size") ?? 25);
-  const valid = Number.isInteger(page) && page >= 1 && Number.isInteger(pageSize) && pageSize >= 1 && pageSize <= 100;
+  const pageSize = Number(searchParams.get("page_size") ?? 50);
+  // Contrato do backend: page_size ∈ {50, 100, 200}; outro valor => 400.
+  const valid = Number.isInteger(page) && page >= 1 && [50, 100, 200].includes(pageSize);
   return { page, pageSize, valid };
 }
 

@@ -1,13 +1,17 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
 
 import type { AssetSort, LocatedStatus } from "@/lib/assets-api";
 import { SEARCH_DEBOUNCE_MS } from "@/components/features/catalog/catalog-labels";
+import { GLOBAL_SEARCH_PARAM, normalizeGlobalSearch } from "@/components/layout/header";
+import { usePagination } from "@/lib/pagination";
 
 // =============================================================================
 // Estado de busca/filtros/ordenação/paginação da lista de bens. A busca tem
-// debounce (300 ms); qualquer mudança de filtro volta à página 1. Trocar a
+// debounce (300 ms); qualquer mudança de filtro volta à página 1
+// (`pg` = usePagination: page/pageSize 50/100/200). Trocar a
 // unidade limpa sala e responsável (pertencem a uma unidade). Tudo é só
 // parâmetro de consulta: o backend aplica allowlist, perfil e escopo.
 // =============================================================================
@@ -15,8 +19,11 @@ import { SEARCH_DEBOUNCE_MS } from "@/components/features/catalog/catalog-labels
 export type LocatedFilter = "" | LocatedStatus;
 
 export function useAssetFilters() {
-  const [search, setSearch] = useState("");
-  const [q, setQ] = useState("");
+  // Busca global do cabeçalho: `?busca=` (normalizado: trim, espaços colapsados, ≤100).
+  // O valor inicial vem da URL (também no SSR, sem divergir da hidratação).
+  const urlSearch = normalizeGlobalSearch(useSearchParams().get(GLOBAL_SEARCH_PARAM) ?? "");
+  const [search, setSearch] = useState(urlSearch);
+  const [q, setQ] = useState(urlSearch);
   const [unitId, setUnitId] = useState("");
   const [roomId, setRoomId] = useState("");
   const [personId, setPersonId] = useState("");
@@ -25,20 +32,38 @@ export function useAssetFilters() {
   const [bondStatus, setBondStatus] = useState("");
   const [includeDeleted, setIncludeDeleted] = useState(false);
   const [sort, setSort] = useState<AssetSort>("patrimony_number");
-  const [page, setPage] = useState(1);
+  const pg = usePagination();
+  const { resetPage } = pg;
+  // Só volta à página 1 quando o termo (já aparado) realmente muda: digitar um
+  // espaço no fim não deve descartar a página em que o usuário está.
+  const appliedQ = useRef(urlSearch);
+  const lastUrlSearch = useRef(urlSearch);
 
   useEffect(() => {
     const handle = setTimeout(() => {
-      setQ(search.trim());
-      setPage(1);
+      const next = search.trim();
+      if (next === appliedQ.current) return;
+      appliedQ.current = next;
+      setQ(next);
+      resetPage();
     }, SEARCH_DEBOUNCE_MS);
     return () => clearTimeout(handle);
-  }, [search]);
+  }, [search, resetPage]);
 
-  function resetPage<T>(setter: (value: T) => void) {
+  // Nova busca global com a lista já aberta: sincroniza o campo e aplica na hora.
+  useEffect(() => {
+    if (urlSearch === lastUrlSearch.current) return;
+    lastUrlSearch.current = urlSearch;
+    appliedQ.current = urlSearch;
+    setSearch(urlSearch);
+    setQ(urlSearch);
+    resetPage();
+  }, [urlSearch, resetPage]);
+
+  function resetOn<T>(setter: (value: T) => void) {
     return (value: T) => {
       setter(value);
-      setPage(1);
+      resetPage();
     };
   }
 
@@ -46,18 +71,19 @@ export function useAssetFilters() {
     setUnitId(value);
     setRoomId("");
     setPersonId("");
-    setPage(1);
+    resetPage();
   }
 
   function clear() {
     setSearch("");
     setQ("");
+    appliedQ.current = "";
     setUnitId("");
     setRoomId("");
     setPersonId("");
     setLocated("");
     setBondStatus("");
-    setPage(1);
+    resetPage();
   }
 
   return {
@@ -71,15 +97,14 @@ export function useAssetFilters() {
     bondStatus,
     includeDeleted,
     sort,
-    page,
-    setPage,
+    pg,
     chooseUnit,
-    chooseRoom: resetPage(setRoomId),
-    choosePerson: resetPage(setPersonId),
-    chooseLocated: resetPage(setLocated),
-    chooseBondStatus: resetPage(setBondStatus),
-    chooseIncludeDeleted: resetPage(setIncludeDeleted),
-    chooseSort: resetPage(setSort),
+    chooseRoom: resetOn(setRoomId),
+    choosePerson: resetOn(setPersonId),
+    chooseLocated: resetOn(setLocated),
+    chooseBondStatus: resetOn(setBondStatus),
+    chooseIncludeDeleted: resetOn(setIncludeDeleted),
+    chooseSort: resetOn(setSort),
     clear,
     /** "Incluir excluídos" é uma visão, não um filtro de refino: fica fora de `filtered`. */
     filtered: !!q || !!unitId || !!roomId || !!personId || !!located || !!bondStatus,

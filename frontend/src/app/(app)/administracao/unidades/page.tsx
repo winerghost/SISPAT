@@ -4,13 +4,14 @@ import { useState } from "react";
 import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { LoadingSkeleton } from "@/components/ui/loading-skeleton";
-import { CatalogHeader, CatalogNotice, CatalogPagination } from "@/components/features/catalog/catalog-parts";
+import { PaginationBar } from "@/components/ui/pagination-bar";
+import { CatalogHeader, CatalogNotice } from "@/components/features/catalog/catalog-parts";
 import { CatalogToolbar } from "@/components/features/catalog/catalog-toolbar";
 import { UnitsTable } from "@/components/features/catalog/catalog-tables";
-import { catalogListErrorMessage, DENIED_MESSAGE, PAGE_SIZE } from "@/components/features/catalog/catalog-labels";
+import { catalogListErrorMessage, DENIED_MESSAGE } from "@/components/features/catalog/catalog-labels";
 import { UnitFormDialog } from "@/components/features/catalog/unit-form-dialog";
 import { useActiveToggle } from "@/components/features/catalog/use-active-toggle";
-import { useCatalogFilters } from "@/components/features/catalog/use-catalog-filters";
+import { useCatalogFilters, useClampPage } from "@/components/features/catalog/use-catalog-filters";
 import { UNITS_QUERY_KEY } from "@/components/features/users/unit-checkbox-list";
 import { ADMIN_ROLE } from "@/components/layout/nav-items";
 import {
@@ -51,7 +52,7 @@ export default function AdministracaoUnidadesPage() {
     active: filters.activeParam,
     sort: filters.sort,
     page: filters.page,
-    page_size: PAGE_SIZE,
+    page_size: filters.pageSize,
   };
   const unitsQuery = useQuery({
     queryKey: [...unitsListKey, params],
@@ -72,6 +73,8 @@ export default function AdministracaoUnidadesPage() {
 
   const busy = unitsQuery.isFetching && !unitsQuery.isPending;
   const changing = unitsQuery.isPlaceholderData;
+
+  useClampPage(filters.pg, unitsQuery.data?.total, !unitsQuery.isPlaceholderData);
 
   return (
     <div className="flex flex-col gap-8 p-4 sm:p-6 lg:p-8">
@@ -111,7 +114,7 @@ export default function AdministracaoUnidadesPage() {
         <>
           <UnitsTable
             units={unitsQuery.data.units}
-            pageKey={`${unitsQuery.data.page}|${filters.q}|${filters.active}|${filters.sort}`}
+            pageKey={`${unitsQuery.data.page}|${filters.pageSize}|${filters.q}|${filters.active}|${filters.sort}`}
             busy={busy}
             sort={filters.sort}
             onSortChange={filters.chooseSort}
@@ -119,13 +122,13 @@ export default function AdministracaoUnidadesPage() {
             onEdit={(unit) => setForm((prev) => ({ session: prev.session + 1, unit, open: true }))}
             onToggle={toggle.ask}
           />
-          <CatalogPagination
-            page={unitsQuery.data.page}
+          <PaginationBar
+            page={filters.page}
+            pageSize={filters.pageSize}
             total={unitsQuery.data.total}
-            pageSize={PAGE_SIZE}
-            noun="unidade(s)"
-            loading={changing}
-            onPage={filters.setPage}
+            onPageChange={filters.setPage}
+            onPageSizeChange={filters.setPageSize}
+            busy={changing}
           />
         </>
       )}

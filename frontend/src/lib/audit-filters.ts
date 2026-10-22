@@ -8,7 +8,8 @@
 // validação real é SEMPRE do backend (400). Módulo puro: sem rede, sem React.
 // =============================================================================
 
-export const AUDIT_PAGE_SIZE = 25;
+import { DEFAULT_PAGE_SIZE, parsePageSize, type PageSize } from "@/lib/pagination";
+
 export const AUDIT_MAX_WINDOW_DAYS = 90;
 
 export const AUDIT_RESULTS = ["SUCESSO", "FALHA"] as const;
@@ -44,6 +45,8 @@ export const DEFAULT_AUDIT_FILTERS: AuditFilters = { sort: "-occurred_at" };
 export interface AuditUrlState {
   filters: AuditFilters;
   page: number;
+  /** Tamanho da página (backend: 50, 100 ou 200). */
+  pageSize: PageSize;
   /** UUID do registro aberto no painel de detalhe. */
   id?: string;
 }
@@ -60,6 +63,7 @@ const KEYS = [
   "to",
   "sort",
   "page",
+  "page_size",
   "id",
 ] as const;
 
@@ -104,15 +108,17 @@ export function parseAuditUrl(params: URLSearchParams): AuditUrlState {
   const parsedPage = rawPage && /^\d{1,6}$/.test(rawPage) ? Number(rawPage) : 1;
   const page = Math.min(MAX_PAGE, Math.max(1, parsedPage));
 
+  const pageSize = parsePageSize(single(params, "page_size"));
+
   const rawId = single(params, "id");
   const id = rawId && UUID_RE.test(rawId) ? rawId.toLowerCase() : undefined;
 
-  return { filters, page, ...(id ? { id } : {}) };
+  return { filters, page, pageSize, ...(id ? { id } : {}) };
 }
 
 /** Query string canônica (sem valores padrão: `sort=-occurred_at`, `page=1`). */
 export function auditUrlQuery(state: AuditUrlState): string {
-  const { filters, page, id } = state;
+  const { filters, page, pageSize, id } = state;
   const values: Record<(typeof KEYS)[number], string | undefined> = {
     event_type: filters.event_type,
     entity_type: filters.entity_type,
@@ -124,6 +130,7 @@ export function auditUrlQuery(state: AuditUrlState): string {
     to: filters.to,
     sort: filters.sort === "occurred_at" ? "occurred_at" : undefined,
     page: page > 1 ? String(page) : undefined,
+    page_size: pageSize !== DEFAULT_PAGE_SIZE ? String(parsePageSize(pageSize)) : undefined,
     id,
   };
   const out = new URLSearchParams();
@@ -164,13 +171,25 @@ export function dayEndUtc(date: string): string {
 }
 
 /** Mensagem de erro de UX para o período (o backend valida de fato), ou `null`. */
-export function periodError(from: string | undefined, to: string | undefined): string | null {
+export function periodError(
+  from: string | undefined,
+  to: string | undefined,
+  now: Date = new Date(),
+): string | null {
   if (from && !isRealDate(from)) return "Informe uma data inicial válida.";
   if (to && !isRealDate(to)) return "Informe uma data final válida.";
   if (from && to) {
     if (from > to) return "A data inicial deve ser anterior ou igual à data final.";
     const span = new Date(dayEndUtc(to)).getTime() - new Date(dayStartUtc(from)).getTime();
     if (span > AUDIT_MAX_WINDOW_DAYS * DAY_MS) {
+      return `O período máximo é de ${AUDIT_MAX_WINDOW_DAYS} dias.`;
+    }
+  }
+  // Só "de": o backend usa "agora" como fim da janela (futuro ou > 90 dias = 400).
+  if (from && !to) {
+    const start = new Date(dayStartUtc(from)).getTime();
+    if (start > now.getTime()) return "A data inicial não pode estar no futuro.";
+    if (now.getTime() - start > AUDIT_MAX_WINDOW_DAYS * DAY_MS) {
       return `O período máximo é de ${AUDIT_MAX_WINDOW_DAYS} dias.`;
     }
   }

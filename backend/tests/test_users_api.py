@@ -471,7 +471,7 @@ def test_list_users_sucesso_retorna_200(client):
     assert body["users"][0]["email"] == "adm@exemplo.com"
     assert body["users"][0]["role"] == "ADM"
     query = service.list_users.call_args.args[1]
-    assert (query.page, query.page_size, query.sort) == (1, 25, "name")
+    assert (query.page, query.page_size, query.sort) == (1, 50, "name")
 
 
 # ---------------------------------------------------------------------------

@@ -161,7 +161,7 @@ def list_preview_items_endpoint(preview_id: uuid.UUID):
             payload = {
                 "total": result["total"],
                 "page": result["page"],
-                "page_size": result["page_size"],
+                "page_size": result["page_size"], "pages": result["pages"],
                 "items": [_serialize_item(item) for item in result["items"]],
             }
     except PreviewNotFoundError:

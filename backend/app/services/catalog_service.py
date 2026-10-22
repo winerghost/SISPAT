@@ -52,7 +52,8 @@ from app.models.assets import Asset
 from app.models.audit import AuditLog
 from app.models.people import ResponsiblePerson
 from app.models.units import Room, Unit
-from app.security.sanitize import LIKE_ESCAPE_CHAR, escape_like
+from app.services.pagination import page_count
+from app.security.text_search import contains_ci
 
 logger = logging.getLogger(__name__)
 
@@ -311,7 +312,7 @@ class _CatalogBase:
 
     @staticmethod
     def _like(column_expr: Any, term: str) -> Any:
-        return column_expr.ilike(f"%{escape_like(term)}%", escape=LIKE_ESCAPE_CHAR)
+        return contains_ci(column_expr, term)
 
 
 # ---------------------------------------------------------------------------
@@ -359,7 +360,7 @@ class RoomService(_CatalogBase):
         return {
             "total": int(total),
             "page": query.page,
-            "page_size": query.page_size,
+            "page_size": query.page_size, "pages": page_count(total, query.page_size),
             "rooms": [serialize_room(r) for r in rows],
         }
 
@@ -537,7 +538,7 @@ class ResponsiblePersonService(_CatalogBase):
         return {
             "total": int(total),
             "page": query.page,
-            "page_size": query.page_size,
+            "page_size": query.page_size, "pages": page_count(total, query.page_size),
             "people": [self._serialize(p) for p in rows],
         }
 
@@ -682,7 +683,7 @@ class UnitCatalogService(_CatalogBase):
             if self._is_adm:
                 item["address"] = unit.address
             units.append(item)
-        return {"total": int(total), "page": query.page, "page_size": query.page_size, "units": units}
+        return {"total": int(total), "page": query.page, "page_size": query.page_size, "pages": page_count(total, query.page_size), "units": units}
 
     def get(self, actor_id: Any, unit_id: uuid.UUID) -> dict[str, Any]:
         return serialize_unit(self._load(actor_id, unit_id), include_address=self._is_adm)

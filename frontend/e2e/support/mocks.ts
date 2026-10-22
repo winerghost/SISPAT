@@ -3,6 +3,7 @@ import type { Page, Request, Route } from "@playwright/test";
 import { defaultAdminAccess, type AdminAccessMock } from "./admin-access-mocks";
 import { auditDetailReply, auditListReply, defaultAuditLogs, type AuditDetailMock } from "./audit-mocks";
 import { defaultUnitAccess, queryUnitAccess, type UnitAccessItemMock } from "./unit-access-mocks";
+import { mockPage, mockPageSize } from "./page-size";
 import { defaultReportsState, handleReports, type ReportsMockState } from "./reports-mocks";
 import {
   defaultDashboard,
@@ -864,10 +865,15 @@ async function handleUserAdmin(
     const unitId = url.searchParams.get("unit_id");
     const active = url.searchParams.get("active");
     const sort = url.searchParams.get("sort") ?? "name";
-    const page = Number(url.searchParams.get("page") ?? 1);
-    const pageSize = Number(url.searchParams.get("page_size") ?? 25);
+    const page = mockPage(url.searchParams);
+    const pageSize = mockPageSize(url.searchParams);
     const field = sort.replace(/^-/, "");
-    if (!USER_SORTS.has(field) || q.length > 100) return apiError(route, 400, "validation_error");
+    if (!USER_SORTS.has(field) || q.length > 100 || page === null || pageSize === null) {
+      return apiError(route, 400, "validation_error");
+    }
+    if (url.searchParams.getAll("q").length > 1 || (active !== null && active !== "true" && active !== "false")) {
+      return apiError(route, 400, "validation_error");
+    }
     const dir = sort.startsWith("-") ? -1 : 1;
     const list = state.users
       .filter(
@@ -992,8 +998,9 @@ async function handleUserAdmin(
   }
 
   if (method === "GET" && action === "audit") {
-    const page = Number(url.searchParams.get("page") ?? 1);
-    const pageSize = Number(url.searchParams.get("page_size") ?? 25);
+    const page = mockPage(url.searchParams);
+    const pageSize = mockPageSize(url.searchParams);
+    if (page === null || pageSize === null) return apiError(route, 400, "validation_error");
     const events = state.audit[user.id] ?? [];
     await json(route, 200, {
       total: events.length,
@@ -1541,7 +1548,12 @@ export async function installMocks(page: Page, opts: MockOptions = {}): Promise<
       const status = url.searchParams.get("status");
       const search = (url.searchParams.get("search") ?? "").toLowerCase();
       const page = Number(url.searchParams.get("page") ?? 1);
-      const pageSize = Number(url.searchParams.get("page_size") ?? 20);
+      const pageSize = Number(url.searchParams.get("page_size") ?? 50);
+      // Contrato do backend: só status/search/page/page_size; page_size ∈ {50,100,200}.
+      const allowedKeys = new Set(["status", "search", "page", "page_size"]);
+      if ([...url.searchParams.keys()].some((k) => !allowedKeys.has(k)) || ![50, 100, 200].includes(pageSize)) {
+        return json(route, 400, { error: { code: "validation_error", message: "Parâmetros inválidos." } });
+      }
       const filtered = PREVIEW_ITEMS.filter(
         (i) =>
           (!status || i.classification === status) &&

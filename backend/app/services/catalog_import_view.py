@@ -14,7 +14,8 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.imports import ImportPreviewItem
-from app.security.sanitize import LIKE_ESCAPE_CHAR, escape_like
+from app.services.pagination import coerce_page_size, page_count
+from app.security.text_search import contains_ci
 
 _CLASSIFICATIONS = frozenset({"NOVO", "EXISTENTE", "DUPLICADO", "INVALIDO", "CONFLITANTE"})
 
@@ -78,20 +79,19 @@ def list_items(
 ) -> dict[str, Any]:
     """Itens da prévia (já validada/autorizada pelo chamador), com filtros por allowlist."""
     page = max(page, 1)
-    page_size = max(1, min(page_size, 100))
+    page_size = coerce_page_size(page_size)
     normalized = status.strip().upper() if isinstance(status, str) else None
     if normalized and normalized not in _CLASSIFICATIONS:
-        return {"total": 0, "page": page, "page_size": page_size, "items": []}
+        return {"total": 0, "page": page, "page_size": page_size, "pages": 0, "items": []}
 
     conditions = [ImportPreviewItem.preview_id == preview_id]
     if normalized:
         conditions.append(ImportPreviewItem.classification == normalized)
     term = search.strip()[:100] if isinstance(search, str) else ""
     if term:
-        pattern = f"%{escape_like(term)}%"
         conditions.append(
-            ImportPreviewItem.description.ilike(pattern, escape=LIKE_ESCAPE_CHAR)
-            | ImportPreviewItem.source_record_id.ilike(pattern, escape=LIKE_ESCAPE_CHAR)
+            contains_ci(ImportPreviewItem.description, term)
+            | contains_ci(ImportPreviewItem.source_record_id, term)
         )
 
     descending = sort.startswith("-")
@@ -110,4 +110,4 @@ def list_items(
         .scalars()
         .all()
     )
-    return {"total": int(total), "page": page, "page_size": page_size, "items": list(rows)}
+    return {"total": int(total), "page": page, "page_size": page_size, "pages": page_count(total, page_size), "items": list(rows)}

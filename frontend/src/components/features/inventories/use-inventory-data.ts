@@ -12,14 +12,14 @@ import { inventoriesQueryKey } from "./inventory-labels";
 
 // =============================================================================
 // Dados de apoio do detalhe de inventário.
-// - Locais da unidade (`GET /locations?unit_id=`): máx. 100 itens (limite do
-//   backend); o escopo é aplicado pelo servidor.
+// - Locais da unidade (`GET /locations?unit_id=`): máx. 200 itens (maior page_size
+//   aceito pelo backend); o escopo é aplicado pelo servidor.
 // - Mapa "bem → resultado" das conferências já feitas: lê as páginas de
 //   `/items` (100 por página, até MAX_PAGES). Serve só para marcar a lista de bens
 //   da unidade; a AUTORIDADE continua sendo o servidor (409 `already_checked`).
 // =============================================================================
 
-const LOCATION_PAGE_SIZE = 100;
+const LOCATION_PAGE_SIZE = 200;
 const CHECKED_PAGE_SIZE = 100;
 /** Teto de páginas lidas (1000 conferências). Acima disso o mapa é parcial. */
 export const CHECKED_MAX_PAGES = 10;

@@ -267,7 +267,7 @@ def catalog_items_endpoint(preview_id: str):
     """`GET /api/v1/catalog-imports/<preview_id>/items`.
 
     Query: `status`, `search`, `sort` (allowlist em `CatalogItemSort`), `page`,
-    `page_size` (máx. 100). Desconhecido/repetido -> 400. Telefone nunca sai.
+    `page_size` (50, 100 ou 200; default 50). Desconhecido/repetido -> 400. Telefone nunca sai.
     """
     rejected = reject_any_body("catalog_imports.items")
     if rejected is not None:
@@ -291,7 +291,7 @@ def catalog_items_endpoint(preview_id: str):
             "kind": kind,
             "total": result["total"],
             "page": result["page"],
-            "page_size": result["page_size"],
+            "page_size": result["page_size"], "pages": result["pages"],
             "items": [serialize_item(kind, item) for item in result["items"]],
         }
     return jsonify(payload), 200

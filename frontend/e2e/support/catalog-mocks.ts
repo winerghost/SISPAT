@@ -192,6 +192,8 @@ export interface CatalogRequestContext {
   respond: (status: number, body?: unknown) => Promise<void>;
 }
 
+/** page_size aceito pelo backend (qualquer outro valor => 400). */
+const PAGE_SIZES = new Set([50, 100, 200]);
 const LIST_PARAMS = new Set(["q", "unit_id", "active", "sort", "page", "page_size"]);
 const ROOM_SORTS = new Set(["name", "created_at", "updated_at"]);
 const PERSON_SORTS = new Set(["name", "email", "created_at", "updated_at"]);
@@ -251,15 +253,18 @@ function checkList(ctx: CatalogRequestContext, sorts: Set<string>) {
   const q = (ctx.searchParams.get("q") ?? "").toLowerCase();
   const sort = ctx.searchParams.get("sort") ?? "name";
   const field = sort.replace(/^-/, "");
-  if (!sorts.has(field) || q.length > 100) return null;
+  const pageSize = Number(ctx.searchParams.get("page_size") ?? 50);
+  const page = Number(ctx.searchParams.get("page") ?? 1);
+  // Contrato do backend: page_size ∈ {50, 100, 200}; page inteiro >= 1.
+  if (!sorts.has(field) || q.length > 100 || !PAGE_SIZES.has(pageSize) || !Number.isInteger(page) || page < 1) return null;
   return {
     q,
     unitId: ctx.searchParams.get("unit_id"),
     active: ctx.searchParams.get("active"),
     field,
     dir: sort.startsWith("-") ? -1 : 1,
-    page: Number(ctx.searchParams.get("page") ?? 1),
-    pageSize: Number(ctx.searchParams.get("page_size") ?? 25),
+    page,
+    pageSize,
   };
 }
 
@@ -327,7 +332,7 @@ async function handleRoom(
       const list = sortBy(
         state.rooms.filter(
           (r) =>
-            (!query.q || r.name.toLowerCase().includes(query.q)) &&
+            (!query.q || r.name.toLowerCase().includes(query.q) || (r.floor ?? "").toLowerCase().includes(query.q)) &&
             (!query.unitId || r.unit_id === query.unitId) &&
             (query.active === null || String(r.active) === query.active),
         ),
@@ -442,7 +447,12 @@ async function handlePerson(
       const list = sortBy(
         state.people.filter(
           (p) =>
-            (!query.q || p.name.toLowerCase().includes(query.q) || (p.email ?? "").toLowerCase().includes(query.q)) &&
+            (!query.q ||
+              p.name.toLowerCase().includes(query.q) ||
+              // Visão mínima (USER) busca só por nome; ADM/RH também e-mail e identificador.
+              (state.role !== "USER" &&
+                ((p.email ?? "").toLowerCase().includes(query.q) ||
+                  (p.institutional_identifier ?? "").toLowerCase().includes(query.q)))) &&
             (!query.unitId || p.unit_id === query.unitId) &&
             (query.active === null || String(p.active) === query.active),
         ),
@@ -534,15 +544,16 @@ async function handleUnitCatalog(ctx: CatalogRequestContext, err: Err): Promise<
   const active = searchParams.get("active") ?? "all";
   const q = (searchParams.get("q") ?? "").toLowerCase();
   const page = Number(searchParams.get("page") ?? 1);
-  const pageSize = Number(searchParams.get("page_size") ?? 25);
+  const pageSize = Number(searchParams.get("page_size") ?? 50);
   if (
     keys.some((key) => !UNIT_CATALOG_PARAMS.has(key)) ||
     new Set(keys).size !== keys.length ||
     !UNIT_SORTS.has(sort.replace(/^-/, "")) ||
     !["true", "false", "all"].includes(active) ||
     q.length > 100 ||
+    !Number.isInteger(page) ||
     !(page >= 1) ||
-    !(pageSize >= 1 && pageSize <= 100)
+    !PAGE_SIZES.has(pageSize)
   ) {
     return err(400, "validation_error");
   }

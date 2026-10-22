@@ -416,3 +416,7 @@ A IA é **consultiva e somente leitura**: nunca altera dados nem executa ações
    `docs/security/evidence/settings-module-etapa*.md`.
    API de importação dos cadastros (`/api/v1/catalog-imports`, ADM + AAL2) e `GET
 /imports/google-sheets/<id>/pending`: ver `docs/architecture/cadastros-apoio-api.md`.
+
+### Contrato de paginação (todas as listagens da API v1)
+
+`page` ≥ 1 (padrão 1) e `page_size` SOMENTE 50, 100 ou 200 (padrão 50); qualquer outro valor (25, 0, 500...) => 400. Resposta: `{total, page, page_size, pages, <itens>}` (`pages` = ceil(total/page_size), 0 se vazio). Definição única em `backend/app/services/pagination.py`; ordenação sempre com desempate por `id`. A busca (`q`/`search`) é sem caixa e sem acento (`app/security/text_search.py`: `sispat_unaccent(coluna) ILIKE :padrão`, escape de `%`/`_`). Exige a migração `0014_unaccent_search` (espelho `backend/migrations/sql/0017_unaccent_search.sql`), NÃO aplicada em produção: aplicar ANTES do deploy do backend.

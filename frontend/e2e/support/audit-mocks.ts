@@ -5,6 +5,8 @@
 // máxima de 90 dias, filtros, ordenação, paginação e 404 uniforme no detalhe.
 // =============================================================================
 
+import { mockPage, mockPageSize } from "./page-size";
+
 export interface AuditSummaryMock {
   id: string;
   occurred_at: string;
@@ -33,11 +35,11 @@ export const AUDIT_FIRST_ID = ids(1);
 export const AUDIT_SECURITY_ID = ids(2);
 export const AUDIT_XSS_ID = ids(3);
 
-/** 30 registros (2 páginas de 25), do mais recente (id 1) ao mais antigo. */
-export function defaultAuditLogs(): AuditDetailMock[] {
+/** `count` registros (padrão 30), do mais recente (id 1) ao mais antigo. */
+export function defaultAuditLogs(count = 30): AuditDetailMock[] {
   const base = Date.parse("2026-10-20T15:00:00Z");
   const out: AuditDetailMock[] = [];
-  for (let n = 1; n <= 30; n += 1) {
+  for (let n = 1; n <= count; n += 1) {
     const security = n % 5 === 2;
     out.push({
       id: ids(n),
@@ -99,9 +101,9 @@ export function auditListReply(logs: AuditDetailMock[], params: URLSearchParams)
   if (Number.isNaN(to) || Number.isNaN(from) || from > to || to - from > MAX_WINDOW_MS) return bad();
   const sort = params.get("sort") ?? "-occurred_at";
   if (sort !== "occurred_at" && sort !== "-occurred_at") return bad();
-  const page = Number(params.get("page") ?? 1);
-  const pageSize = Number(params.get("page_size") ?? 25);
-  if (!Number.isInteger(page) || page < 1 || !Number.isInteger(pageSize) || pageSize < 1 || pageSize > 100) return bad();
+  const page = mockPage(params);
+  const pageSize = mockPageSize(params);
+  if (page === null || pageSize === null) return bad();
 
   let rows = logs.filter((l) => {
     const t = Date.parse(l.occurred_at);

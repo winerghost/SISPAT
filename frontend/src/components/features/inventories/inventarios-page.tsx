@@ -4,9 +4,11 @@ import { useState } from "react";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 
 import { Button } from "@/components/ui/button";
+import { PaginationBar } from "@/components/ui/pagination-bar";
 import { LoadingSkeleton } from "@/components/ui/loading-skeleton";
 import { listInventories, type InventoryRecord } from "@/lib/inventories-api";
-import { CatalogHeader, CatalogNotice, CatalogPagination } from "@/components/features/catalog/catalog-parts";
+import { CatalogHeader, CatalogNotice } from "@/components/features/catalog/catalog-parts";
+import { useClampPage } from "@/components/features/assets/use-clamp-page";
 import { SESSION_ERROR_MESSAGE } from "@/components/features/lookup/lookup-labels";
 import { noClientRetry, useAccessibleUnits, useLookupAccess } from "@/components/features/lookup/use-lookup";
 import { AccessRestrictedPanel } from "@/components/features/modules/access-restricted";
@@ -16,7 +18,6 @@ import { InventoryCreateDialog } from "./inventory-create-dialog";
 import { InventoryDetailSheet } from "./inventory-detail-sheet";
 import {
   INVENTORY_LOOKUPS_ERROR_MESSAGE,
-  INVENTORY_PAGE_SIZE,
   inventoryListErrorMessage,
   inventoryListKey,
   RH_DENIED_MESSAGE,
@@ -54,8 +55,8 @@ export function InventariosPage() {
     unit_id: filters.unitId || undefined,
     status: filters.status || undefined,
     sort: filters.sort,
-    page: filters.page,
-    page_size: INVENTORY_PAGE_SIZE,
+    page: filters.pg.page,
+    page_size: filters.pg.pageSize,
   };
   const inventories = useQuery({
     queryKey: inventoryListKey(params),
@@ -64,6 +65,8 @@ export function InventariosPage() {
     placeholderData: keepPreviousData,
     retry: noClientRetry,
   });
+
+  useClampPage(filters.pg, inventories.data?.total, !inventories.isPlaceholderData);
 
   return (
     <div className="flex flex-col gap-8 p-4 sm:p-6 lg:p-8">
@@ -114,7 +117,7 @@ export function InventariosPage() {
             <>
               <InventoriesTable
                 inventories={inventories.data.inventories}
-                pageKey={`${inventories.data.page}|${filters.status}|${filters.unitId}|${filters.q}|${filters.sort}`}
+                pageKey={`${inventories.data.page}|${inventories.data.page_size}|${filters.status}|${filters.unitId}|${filters.q}|${filters.sort}`}
                 busy={inventories.isFetching && !inventories.isPending}
                 sort={filters.sort}
                 onSortChange={filters.chooseSort}
@@ -124,13 +127,14 @@ export function InventariosPage() {
                   setDetailOpen(true);
                 }}
               />
-              <CatalogPagination
-                page={inventories.data.page}
+              <PaginationBar
+                page={filters.pg.page}
+                pageSize={filters.pg.pageSize}
                 total={inventories.data.total}
-                pageSize={INVENTORY_PAGE_SIZE}
+                onPageChange={filters.pg.setPage}
+                onPageSizeChange={filters.pg.setPageSize}
+                busy={inventories.isPlaceholderData}
                 noun="inventário(s)"
-                loading={inventories.isPlaceholderData}
-                onPage={filters.setPage}
               />
             </>
           )}

@@ -484,12 +484,36 @@ test.describe("usuários — foto e histórico", () => {
     await page.keyboard.press("Escape");
 
     sheet = await openSheet(page, ADMIN_NAME, "Histórico");
-    await expect(sheet.getByText("Página 1 de 2 · 12 evento(s)")).toBeVisible();
-    const page2 = waitApi(page, "GET", `/v1/users/${ADMIN_ID}/audit`);
+    // 12 eventos cabem em UMA página de 50 (o backend só aceita 50/100/200).
+    await expect(sheet.getByText("Exibindo 1–12 de 12 evento(s)")).toBeVisible();
+    await expect(sheet.getByRole("list", { name: "Histórico de alterações" }).locator(":scope > li")).toHaveCount(12);
+    await expect(sheet.getByRole("button", { name: "Próxima" })).toBeDisabled();
+  });
+
+  test("histórico: 50/100/200 e paginação enviam page_size válido", async ({ page }) => {
+    const state = await installMocks(page, { role: "ADM" });
+    const base = state.audit[ADMIN_ID]![0]!;
+    state.audit[ADMIN_ID] = Array.from({ length: 120 }, (_, i) => ({
+      ...base,
+      id: `70000000-0000-4000-8000-${String(i + 1000).padStart(12, "0")}`,
+    }));
+    await seedSession(page, { role: "ADM" });
+    await page.goto(USERS_PATH);
+    await waitForHydration(page);
+    const sheet = await openSheet(page, ADMIN_NAME, "Histórico");
+    const list = sheet.getByRole("list", { name: "Histórico de alterações" });
+    await expect(sheet.getByText("Exibindo 1–50 de 120 evento(s)")).toBeVisible();
+    await expect(list.locator(":scope > li")).toHaveCount(50);
     await sheet.getByRole("button", { name: "Próxima" }).click();
-    expect(new URL((await page2).url()).searchParams.get("page")).toBe("2");
-    await expect(sheet.getByText("Página 2 de 2 · 12 evento(s)")).toBeVisible();
-    await expect(sheet.getByRole("list", { name: "Histórico de alterações" }).locator(":scope > li")).toHaveCount(2);
+    await expect(sheet.getByText("Exibindo 51–100 de 120 evento(s)")).toBeVisible();
+    await sheet.getByLabel("Registros por página").selectOption("100");
+    await expect(sheet.getByText("Exibindo 1–100 de 120 evento(s)")).toBeVisible();
+    await expect(list.locator(":scope > li")).toHaveCount(100);
+    const sizes = calls(state, "GET", `/v1/users/${ADMIN_ID}/audit`).map((c) =>
+      new URL(c.url, "http://x").searchParams.get("page_size"),
+    );
+    expect(sizes.length).toBeGreaterThan(0);
+    for (const size of sizes) expect(["50", "100", "200"]).toContain(size);
   });
 });
 
@@ -613,5 +637,120 @@ test.describe("UA-FE-02 / UA-FE-03", () => {
     // Nenhum challenge/verify no fator pendente (não conclui cadastro).
     expect(state.calls.some((c) => /\/factors\/[^/]+\/(challenge|verify)$/.test(c.url))).toBe(false);
     expect(calls(state, "POST", "/mfa-reset")).toHaveLength(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Paginação 50/100/200, zebra e validação de busca/filtros da lista
+// ---------------------------------------------------------------------------
+
+const PAGE_SIZES = ["50", "100", "200"];
+
+async function openManyUsers(page: Page, extra: number): Promise<MockState> {
+  const state = await installMocks(page, { role: "ADM" });
+  const base = state.users[1]!;
+  for (let i = 0; i < extra; i += 1) {
+    state.users.push({
+      ...base,
+      id: `21000000-0000-4000-8000-${String(i).padStart(12, "0")}`,
+      name: `Pessoa Lote ${String(i).padStart(3, "0")}`,
+      email: `lote.${String(i).padStart(3, "0")}@exemplo.invalid`,
+      has_avatar: false,
+      role: i % 2 === 0 ? "USER" : "RH",
+    });
+  }
+  await seedSession(page, { role: "ADM" });
+  await page.goto(USERS_PATH);
+  await waitForHydration(page);
+  return state;
+}
+
+function listQueries(state: MockState): URLSearchParams[] {
+  return calls(state, "GET", "/v1/users?").map((c) => new URL(c.url, "http://x").searchParams);
+}
+
+test.describe("usuários — paginação e filtros", () => {
+  test("padrão 50, troca para 100/200, navegação e page_size sempre válido", async ({ page }) => {
+    const state = await openManyUsers(page, 130); // 134 no total
+    const rows = page.getByRole("table", { name: "Usuários" }).locator("tbody tr");
+    await expect(page.getByText("Exibindo 1–50 de 134 usuário(s)")).toBeVisible();
+    await expect(rows).toHaveCount(50);
+    expect(listQueries(state)[0]!.get("page_size")).toBe("50");
+
+    await page.getByRole("button", { name: "Próxima" }).click();
+    await expect(page.getByText("Exibindo 51–100 de 134 usuário(s)")).toBeVisible();
+    await page.getByRole("button", { name: "Última" }).click();
+    await expect(page.getByText("Exibindo 101–134 de 134 usuário(s)")).toBeVisible();
+    await expect(rows).toHaveCount(34);
+    await expect(page.getByRole("button", { name: "Próxima" })).toBeDisabled();
+
+    // Trocar o tamanho volta para a página 1.
+    await page.getByLabel("Registros por página").selectOption("100");
+    await expect(page.getByText("Exibindo 1–100 de 134 usuário(s)")).toBeVisible();
+    await expect(rows).toHaveCount(100);
+    await page.getByLabel("Registros por página").selectOption("200");
+    await expect(page.getByText("Exibindo 1–134 de 134 usuário(s)")).toBeVisible();
+    await expect(rows).toHaveCount(134);
+    await expect(page.getByRole("button", { name: "Anterior" })).toBeDisabled();
+
+    for (const query of listQueries(state)) expect(PAGE_SIZES).toContain(query.get("page_size"));
+    const options = await page.getByLabel("Registros por página").locator("option").allTextContents();
+    expect(options).toEqual(PAGE_SIZES);
+  });
+
+  test("zebra: linhas pares com fundo e ímpares sem fundo", async ({ page }) => {
+    await openManyUsers(page, 6);
+    const rows = page.getByRole("table", { name: "Usuários" }).locator("tbody tr");
+    await expect(rows).toHaveCount(10);
+    await page.mouse.move(0, 0);
+    const bg = (n: number) => rows.nth(n).evaluate((el) => getComputedStyle(el).backgroundColor);
+    const [first, second, third, fourth] = [await bg(0), await bg(1), await bg(2), await bg(3)];
+    expect(first).toBe(third);
+    expect(second).toBe(fourth);
+    expect(second).not.toBe(first);
+  });
+
+  test("filtros e busca voltam à página 1 e são enviados dentro da allowlist", async ({ page }) => {
+    const state = await openManyUsers(page, 130);
+    await page.getByRole("button", { name: "Próxima" }).click();
+    await expect(page.getByText("Exibindo 51–100 de 134 usuário(s)")).toBeVisible();
+
+    await page.getByRole("group", { name: "Filtrar por perfil" }).getByRole("button", { name: "RH", exact: true }).click();
+    await expect(page.getByText("Exibindo 1–50 de 66 usuário(s)")).toBeVisible();
+    let last = listQueries(state).at(-1)!;
+    expect(last.get("page")).toBe("1");
+    expect(last.get("role")).toBe("RH");
+
+    // Página 2 + busca: volta à 1.
+    await page.getByRole("button", { name: "Próxima" }).click();
+    await expect(page.getByText("Exibindo 51–66 de 66 usuário(s)")).toBeVisible();
+    await page.getByLabel("Buscar por nome ou e-mail").fill("lote.00");
+    await expect.poll(() => listQueries(state).at(-1)!.get("q")).toBe("lote.00");
+    last = listQueries(state).at(-1)!;
+    expect(last.get("page")).toBe("1");
+
+    await page.getByRole("button", { name: "Limpar filtros" }).click();
+    await expect(page.getByText("Exibindo 1–50 de 134 usuário(s)")).toBeVisible();
+    for (const query of listQueries(state)) {
+      for (const key of query.keys()) expect(["q", "role", "unit_id", "active", "sort", "page", "page_size"]).toContain(key);
+    }
+  });
+
+  test("busca: trim, só espaços não envia q, limite de 100 caracteres e vazio", async ({ page }) => {
+    const state = await openUsers(page);
+    const search = page.getByLabel("Buscar por nome ou e-mail");
+    await expect(page.getByRole("table", { name: "Usuários" }).locator("tbody tr")).toHaveCount(4);
+
+    await search.fill("   ");
+    await page.waitForTimeout(600);
+    expect(listQueries(state).every((q) => !q.has("q"))).toBe(true);
+
+    await search.fill("  rh.sint  ");
+    await expect.poll(() => listQueries(state).at(-1)!.get("q")).toBe("rh.sint");
+
+    await search.fill("x".repeat(150));
+    await expect(search).toHaveValue("x".repeat(100));
+    await expect.poll(() => listQueries(state).at(-1)!.get("q")).toBe("x".repeat(100));
+    await expect(page.getByText("Nenhum usuário encontrado para os filtros atuais.")).toBeVisible();
   });
 });

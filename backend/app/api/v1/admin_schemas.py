@@ -20,6 +20,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from app.api.v1.pagination import DEFAULT_PAGE_SIZE, PageSize
 from werkzeug.datastructures import MultiDict
 from werkzeug.exceptions import BadRequest
 
@@ -49,7 +50,7 @@ class NoQuery(_ReadModel):
 
 class PageFields(_ReadModel):
     page: int = Field(default=1, ge=1, le=100_000)
-    page_size: int = Field(default=25, ge=1, le=100)
+    page_size: PageSize = DEFAULT_PAGE_SIZE
 
 
 def _parse_utc(value: Any) -> datetime:

@@ -4,19 +4,20 @@ import { useCallback, useMemo, useRef, type ReactNode } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 
-import { CatalogNotice, CatalogPagination } from "@/components/features/catalog/catalog-parts";
+import { CatalogNotice } from "@/components/features/catalog/catalog-parts";
 import { AccessRestrictedPanel, SESSION_UNCONFIRMED_MESSAGE } from "@/components/features/modules/access-restricted";
 import { ADMIN_ROLE } from "@/components/layout/nav-items";
 import { LoadingSkeleton } from "@/components/ui/loading-skeleton";
+import { PaginationBar } from "@/components/ui/pagination-bar";
 import { ApiError, isAuditDenied, listAuditLogs } from "@/lib/audit-api";
 import {
-  AUDIT_PAGE_SIZE,
   auditUrlQuery,
   hasAuditFilters,
   parseAuditUrl,
   type AuditFilters,
   type AuditSort,
 } from "@/lib/audit-filters";
+import { parsePageSize } from "@/lib/pagination";
 import { useMe } from "@/lib/session";
 import { AuditDetailSheet } from "./audit-detail-sheet";
 import { AuditFiltersForm } from "./audit-filters-form";
@@ -43,25 +44,25 @@ export function AuditView() {
   const state = useMemo(() => parseAuditUrl(new URLSearchParams(raw)), [raw]);
   // Chave da LISTA (sem `id`): abrir/fechar o painel não pode remontar tabela nem formulário
   // (perderia o foco devolvido ao botão e o rascunho dos filtros).
-  const canonical = auditUrlQuery({ filters: state.filters, page: state.page });
+  const canonical = auditUrlQuery({ filters: state.filters, page: state.page, pageSize: state.pageSize });
   const isAdmin = !!me.data?.roles.includes(ADMIN_ROLE);
   /** Botão que abriu o painel: recebe o foco de volta ao fechar (WCAG 2.4.3). */
   const openerRef = useRef<HTMLElement | null>(null);
 
   const go = useCallback(
-    (next: { filters: AuditFilters; page: number; id?: string }, mode: "push" | "replace" = "push") => {
-      const query = auditUrlQuery(next);
+    (next: { filters: AuditFilters; page: number; pageSize?: number; id?: string }, mode: "push" | "replace" = "push") => {
+      const query = auditUrlQuery({ ...next, pageSize: parsePageSize(next.pageSize ?? state.pageSize) });
       const href = query ? `${pathname}?${query}` : pathname;
       if (mode === "push") router.push(href, { scroll: false });
       else router.replace(href, { scroll: false });
     },
-    [pathname, router],
+    [pathname, router, state.pageSize],
   );
 
   const closeDetail = useCallback(() => {
     const opener = openerRef.current;
     openerRef.current = null;
-    go({ filters: state.filters, page: state.page }, "replace");
+    go({ filters: state.filters, page: state.page, pageSize: state.pageSize }, "replace");
     if (opener) {
       // O Radix só solta o foco depois da animação de saída do painel: espera o
       // diálogo sair do DOM (até ~1 s) e devolve o foco ao botão que o abriu.
@@ -79,11 +80,11 @@ export function AuditView() {
       };
       setTimeout(restore, 50);
     }
-  }, [go, state.filters, state.page]);
+  }, [go, state.filters, state.page, state.pageSize]);
 
   const listQuery = useQuery({
-    queryKey: ["admin-audit", "list", state.filters, state.page],
-    queryFn: () => listAuditLogs(state.filters, state.page),
+    queryKey: ["admin-audit", "list", state.filters, state.page, state.pageSize],
+    queryFn: () => listAuditLogs(state.filters, state.page, state.pageSize),
     enabled: isAdmin,
     placeholderData: keepPreviousData,
     retry,
@@ -91,7 +92,6 @@ export function AuditView() {
 
   const filtered = hasAuditFilters(state.filters);
   const busy = listQuery.isFetching && !listQuery.isPending;
-  const changing = listQuery.isPlaceholderData;
 
   let body: ReactNode;
   if (me.isPending) {
@@ -129,23 +129,24 @@ export function AuditView() {
           <>
             <AuditTable
               items={listQuery.data.items}
-              pageKey={`${listQuery.data.page}|${canonical}`}
+              pageKey={`${listQuery.data.page}|${listQuery.data.page_size}|${canonical}`}
               busy={busy}
               sort={state.filters.sort}
               filtered={filtered}
               onSortChange={(sort: AuditSort) => go({ filters: { ...state.filters, sort }, page: 1 })}
               onOpen={(item, opener) => {
                 openerRef.current = opener;
-                go({ filters: state.filters, page: state.page, id: item.id });
+                go({ filters: state.filters, page: state.page, pageSize: state.pageSize, id: item.id });
               }}
             />
-            <CatalogPagination
-              page={listQuery.data.page}
+            <PaginationBar
+              page={state.page}
+              pageSize={state.pageSize}
               total={listQuery.data.total}
-              pageSize={listQuery.data.page_size || AUDIT_PAGE_SIZE}
               noun="registro(s)"
-              loading={changing}
-              onPage={(page) => go({ filters: state.filters, page })}
+              busy={listQuery.isFetching}
+              onPageChange={(page) => go({ filters: state.filters, page })}
+              onPageSizeChange={(size) => go({ filters: state.filters, page: 1, pageSize: size })}
             />
           </>
         ) : null}

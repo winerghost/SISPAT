@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Clock } from "lucide-react";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 
@@ -8,14 +8,17 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { LoadingSkeleton } from "@/components/ui/loading-skeleton";
+import { PaginationBar } from "@/components/ui/pagination-bar";
 import { Switch } from "@/components/ui/switch";
 import { listAssets, type AssetRecord } from "@/lib/assets-api";
 import { PatrimonyNumber } from "@/components/features/assets/assets-table";
 import { SEARCH_DEBOUNCE_MS } from "@/components/features/catalog/catalog-labels";
-import { CatalogNotice, CatalogPagination } from "@/components/features/catalog/catalog-parts";
+import { useClampPage } from "@/components/features/assets/use-clamp-page";
+import { usePagination } from "@/lib/pagination";
+import { CatalogNotice } from "@/components/features/catalog/catalog-parts";
 import { noClientRetry } from "@/components/features/lookup/use-lookup";
 import { ResultBadge } from "./inventories-table";
-import { inventoriesQueryKey, inventoryListErrorMessage, ITEMS_PAGE_SIZE, SEARCH_MAX } from "./inventory-labels";
+import { inventoriesQueryKey, inventoryListErrorMessage, SEARCH_MAX } from "./inventory-labels";
 import { useCheckedMap } from "./use-inventory-data";
 
 // =============================================================================
@@ -41,24 +44,36 @@ export function InventoryAssetsPanel({
 }) {
   const [search, setSearch] = useState("");
   const [q, setQ] = useState("");
-  const [page, setPage] = useState(1);
+  const pg = usePagination({ persist: false });
+  const { resetPage } = pg;
   const [hideChecked, setHideChecked] = useState(false);
+  const appliedQ = useRef("");
 
   useEffect(() => {
     const handle = setTimeout(() => {
-      setQ(search.trim());
-      setPage(1);
+      const next = search.trim();
+      if (next === appliedQ.current) return;
+      appliedQ.current = next;
+      setQ(next);
+      resetPage();
     }, SEARCH_DEBOUNCE_MS);
     return () => clearTimeout(handle);
-  }, [search]);
+  }, [search, resetPage]);
 
-  const params = { unit_id: unitId, q: q || undefined, sort: "patrimony_number" as const, page, page_size: ITEMS_PAGE_SIZE };
+  const params = {
+    unit_id: unitId,
+    q: q || undefined,
+    sort: "patrimony_number" as const,
+    page: pg.page,
+    page_size: pg.pageSize,
+  };
   const assets = useQuery({
     queryKey: [...inventoriesQueryKey, "unit-assets", inventoryId, params],
     queryFn: () => listAssets(params),
     placeholderData: keepPreviousData,
     retry: noClientRetry,
   });
+  useClampPage(pg, assets.data?.total, !assets.isPlaceholderData);
   const checked = useCheckedMap(inventoryId, true);
 
   const rows = (assets.data?.assets ?? []).filter((asset) => !(hideChecked && checked.data?.results.has(asset.id)));
@@ -156,13 +171,15 @@ export function InventoryAssetsPanel({
               })}
             </ul>
           )}
-          <CatalogPagination
-            page={assets.data.page}
+          <PaginationBar
+            page={pg.page}
+            pageSize={pg.pageSize}
             total={assets.data.total}
-            pageSize={ITEMS_PAGE_SIZE}
+            onPageChange={pg.setPage}
+            onPageSizeChange={pg.setPageSize}
+            busy={assets.isPlaceholderData}
             noun="bem(ns)"
-            loading={assets.isPlaceholderData}
-            onPage={setPage}
+            label="Paginação dos bens da unidade"
           />
         </>
       ) : null}

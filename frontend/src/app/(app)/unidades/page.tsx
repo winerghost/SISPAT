@@ -3,10 +3,10 @@
 import { useMemo } from "react";
 
 import { LoadingSkeleton } from "@/components/ui/loading-skeleton";
-import { CatalogHeader, CatalogNotice, CatalogPagination } from "@/components/features/catalog/catalog-parts";
+import { PaginationBar } from "@/components/ui/pagination-bar";
+import { CatalogHeader, CatalogNotice } from "@/components/features/catalog/catalog-parts";
 import { CatalogToolbar } from "@/components/features/catalog/catalog-toolbar";
-import { PAGE_SIZE } from "@/components/features/catalog/catalog-labels";
-import { useCatalogFilters } from "@/components/features/catalog/use-catalog-filters";
+import { useCatalogFilters, useClampPage } from "@/components/features/catalog/use-catalog-filters";
 import {
   lookupErrorMessage,
   normalizeSearch,
@@ -20,8 +20,8 @@ import type { UnitSort } from "@/lib/catalog-api";
 // =============================================================================
 // /unidades — consulta das unidades do escopo do usuário (todos os perfis).
 // Fonte: `GET /api/v1/units/accessible` (sem parâmetros). O contrato devolve a
-// lista inteira do escopo, então busca, situação, ordenação e paginação de 25
-// são feitas aqui, sobre dados já autorizados pelo backend. Somente leitura;
+// lista inteira do escopo, então busca, situação, ordenação e paginação
+// (50/100/200, como no backend) são feitas aqui, sobre dados já autorizados pelo backend. Somente leitura;
 // ADM tem atalho para o cadastro (/administracao/unidades).
 // =============================================================================
 
@@ -43,9 +43,11 @@ export default function UnidadesPage() {
       .sort((a, b) => a[field].localeCompare(b[field], "pt-BR") * dir || a.id.localeCompare(b.id));
   }, [units.data, filters.q, filters.sort, filters.activeParam]);
 
-  const totalPages = Math.max(1, Math.ceil(filteredUnits.length / PAGE_SIZE));
+  const { pageSize } = filters;
+  const totalPages = Math.max(1, Math.ceil(filteredUnits.length / pageSize));
   const page = Math.min(filters.page, totalPages);
-  const pageItems = filteredUnits.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+  const pageItems = filteredUnits.slice((page - 1) * pageSize, page * pageSize);
+  useClampPage(filters.pg, units.data ? filteredUnits.length : undefined, true);
 
   return (
     <div className="flex flex-col gap-8 p-4 sm:p-6 lg:p-8">
@@ -83,18 +85,17 @@ export default function UnidadesPage() {
         <>
           <UnitsReadTable
             units={pageItems}
-            pageKey={`${page}|${filters.q}|${filters.active}|${filters.sort}`}
+            pageKey={`${page}|${pageSize}|${filters.q}|${filters.active}|${filters.sort}`}
             sort={filters.sort}
             onSortChange={filters.chooseSort}
             filtered={filters.filtered}
           />
-          <CatalogPagination
+          <PaginationBar
             page={page}
+            pageSize={pageSize}
             total={filteredUnits.length}
-            pageSize={PAGE_SIZE}
-            noun="unidade(s)"
-            loading={false}
-            onPage={filters.setPage}
+            onPageChange={filters.setPage}
+            onPageSizeChange={filters.setPageSize}
           />
         </>
       )}

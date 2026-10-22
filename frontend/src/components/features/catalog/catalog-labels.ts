@@ -17,7 +17,6 @@ export { formatDateTime } from "@/components/features/users/user-labels";
 export type ActiveFilter = "all" | "true" | "false";
 
 export const SEARCH_MAX = 100;
-export const PAGE_SIZE = 25;
 export const SEARCH_DEBOUNCE_MS = 300;
 
 export type CatalogNoun = "sala" | "pessoa responsável" | "unidade";

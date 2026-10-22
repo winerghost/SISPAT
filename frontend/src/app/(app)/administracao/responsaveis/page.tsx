@@ -5,17 +5,17 @@ import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-quer
 
 import { Button } from "@/components/ui/button";
 import { LoadingSkeleton } from "@/components/ui/loading-skeleton";
-import { CatalogHeader, CatalogNotice, CatalogPagination } from "@/components/features/catalog/catalog-parts";
+import { PaginationBar } from "@/components/ui/pagination-bar";
+import { CatalogHeader, CatalogNotice } from "@/components/features/catalog/catalog-parts";
 import { CatalogToolbar } from "@/components/features/catalog/catalog-toolbar";
 import { PeopleTable } from "@/components/features/catalog/catalog-tables";
 import {
   catalogListErrorMessage,
   DENIED_MESSAGE,
-  PAGE_SIZE,
 } from "@/components/features/catalog/catalog-labels";
 import { PersonFormDialog, peopleQueryKey } from "@/components/features/catalog/person-form-dialog";
 import { useActiveToggle } from "@/components/features/catalog/use-active-toggle";
-import { useCatalogFilters } from "@/components/features/catalog/use-catalog-filters";
+import { useCatalogFilters, useClampPage } from "@/components/features/catalog/use-catalog-filters";
 import { useUnits } from "@/components/features/users/unit-checkbox-list";
 import { ADMIN_ROLE } from "@/components/layout/nav-items";
 import { ApiError, listPeople, setPersonActive, type PersonRecord, type PersonSort } from "@/lib/catalog-api";
@@ -47,7 +47,7 @@ export default function AdministracaoResponsaveisPage() {
     active: filters.activeParam,
     sort: filters.sort,
     page: filters.page,
-    page_size: PAGE_SIZE,
+    page_size: filters.pageSize,
   };
   const peopleQuery = useQuery({
     queryKey: [...peopleQueryKey, "list", params],
@@ -70,6 +70,8 @@ export default function AdministracaoResponsaveisPage() {
   const busy = peopleQuery.isFetching && !peopleQuery.isPending;
   const changing = peopleQuery.isPlaceholderData;
 
+  useClampPage(filters.pg, peopleQuery.data?.total, !peopleQuery.isPlaceholderData);
+
   return (
     <div className="flex flex-col gap-8 p-4 sm:p-6 lg:p-8">
       <CatalogHeader
@@ -84,8 +86,8 @@ export default function AdministracaoResponsaveisPage() {
 
       <CatalogToolbar
         idPrefix="pessoas"
-        searchLabel="Buscar pessoa por nome ou e-mail"
-        searchPlaceholder="Buscar por nome ou e-mail…"
+        searchLabel="Buscar pessoa por nome, e-mail ou identificador"
+        searchPlaceholder="Nome, e-mail ou identificador…"
         search={filters.search}
         onSearch={filters.setSearch}
         units={{ items: units.data?.units, value: filters.unitId, onChange: filters.chooseUnit }}
@@ -115,7 +117,7 @@ export default function AdministracaoResponsaveisPage() {
           <PeopleTable
             people={peopleQuery.data.people}
             units={units.data?.units}
-            pageKey={`${peopleQuery.data.page}|${filters.q}|${filters.unitId}|${filters.active}|${filters.sort}`}
+            pageKey={`${peopleQuery.data.page}|${filters.pageSize}|${filters.q}|${filters.unitId}|${filters.active}|${filters.sort}`}
             busy={busy}
             sort={filters.sort}
             onSortChange={filters.chooseSort}
@@ -123,13 +125,13 @@ export default function AdministracaoResponsaveisPage() {
             onEdit={openForm}
             onToggle={toggle.ask}
           />
-          <CatalogPagination
-            page={peopleQuery.data.page}
+          <PaginationBar
+            page={filters.page}
+            pageSize={filters.pageSize}
             total={peopleQuery.data.total}
-            pageSize={PAGE_SIZE}
-            noun="pessoa(s)"
-            loading={changing}
-            onPage={filters.setPage}
+            onPageChange={filters.setPage}
+            onPageSizeChange={filters.setPageSize}
+            busy={changing}
           />
         </>
       )}

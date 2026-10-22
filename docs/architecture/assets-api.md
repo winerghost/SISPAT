@@ -71,8 +71,8 @@ especial `__none__` = bens sem vínculo; >64/vazio => 400),
 `include_deleted=true|false` (só ADM), `sort` (`patrimony_number` padrão,
 `description`, `created_at`, `updated_at`, `bond_status` (sem caixa; sem vínculo
 primeiro), cada um com prefixo `-` p/ decrescente;
-desempate por `id`), `page` (≥1), `page_size` (1–100, padrão 25).
-Resposta: `{total, page, page_size, assets: [Asset]}`.
+desempate por `id`), `page` (≥1), `page_size` (50, 100 ou 200; padrão 50).
+Resposta: `{total, page, page_size, pages, assets: [Asset]}`.
 
 ## Opções do filtro de vínculo `GET /assets/bond-statuses`
 Sem parâmetros (qualquer um => 400). Mesma pilha e mesmo escopo da listagem

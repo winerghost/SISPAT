@@ -1,6 +1,5 @@
 "use client";
 
-import { useState } from "react";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { History } from "lucide-react";
 
@@ -10,13 +9,15 @@ import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { FormMessage } from "@/components/ui/form-message";
 import { LoadingSkeleton } from "@/components/ui/loading-skeleton";
+import { PaginationBar } from "@/components/ui/pagination-bar";
+import { usePagination } from "@/lib/pagination";
 import { cn } from "@/lib/utils";
 import { getAssetHistory } from "@/lib/assets-api";
+import { useClampPage } from "./use-clamp-page";
 import {
   assetHistoryErrorMessage,
   describeHistory,
   formatDateTime,
-  HISTORY_PAGE_SIZE,
   OPERATION_LABEL,
 } from "./asset-labels";
 
@@ -32,13 +33,17 @@ import {
 export const assetHistoryKey = (assetId: string) => ["assets", "history", assetId] as const;
 
 export function AssetHistoryList({ assetId, includeDeleted }: { assetId: string; includeDeleted: boolean }) {
-  const [page, setPage] = useState(1);
+  // Painel interno: tamanho próprio (50/100/200, padrão 50), sem persistir a preferência da lista.
+  const pg = usePagination({ persist: false });
+  const { page, pageSize } = pg;
   const history = useQuery({
-    queryKey: [...assetHistoryKey(assetId), page, includeDeleted],
-    queryFn: () => getAssetHistory(assetId, { page, page_size: HISTORY_PAGE_SIZE, includeDeleted }),
+    queryKey: [...assetHistoryKey(assetId), page, pageSize, includeDeleted],
+    queryFn: () => getAssetHistory(assetId, { page, page_size: pageSize, includeDeleted }),
     placeholderData: keepPreviousData,
     retry: false,
   });
+
+  useClampPage(pg, history.data?.total, !history.isPlaceholderData);
 
   if (history.isPending) return <LoadingSkeleton variant="lines" count={4} label="Carregando histórico…" />;
 
@@ -54,9 +59,7 @@ export function AssetHistoryList({ assetId, includeDeleted }: { assetId: string;
   }
 
   const { entries, total } = history.data;
-  const totalPages = Math.max(1, Math.ceil(total / HISTORY_PAGE_SIZE));
-
-  if (entries.length === 0) {
+  if (entries.length === 0 && total === 0) {
     return <EmptyState icon={History} title="Nenhum evento registrado para este bem." />;
   }
 
@@ -64,7 +67,7 @@ export function AssetHistoryList({ assetId, includeDeleted }: { assetId: string;
     <div className="flex flex-col gap-4">
       <StaggerContainer
         as="ol"
-        key={page}
+        key={`${page}|${pageSize}`}
         aria-label="Histórico do bem"
         aria-busy={history.isPlaceholderData || undefined}
         className={cn("flex flex-col gap-3 transition-opacity duration-base ease-factory", history.isPlaceholderData && "opacity-60")}
@@ -103,24 +106,16 @@ export function AssetHistoryList({ assetId, includeDeleted }: { assetId: string;
         })}
       </StaggerContainer>
 
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <span className="text-body-sm text-warm-granite" aria-live="polite">
-          Página {history.data.page} de {totalPages} · {total} evento(s)
-        </span>
-        <div className="flex gap-2">
-          <Button variant="outline" size="sm" disabled={page <= 1 || history.isPlaceholderData} onClick={() => setPage((p) => p - 1)}>
-            Anterior
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={page >= totalPages || history.isPlaceholderData}
-            onClick={() => setPage((p) => p + 1)}
-          >
-            Próxima
-          </Button>
-        </div>
-      </div>
+      <PaginationBar
+        page={page}
+        pageSize={pageSize}
+        total={total}
+        onPageChange={pg.setPage}
+        onPageSizeChange={pg.setPageSize}
+        busy={history.isPlaceholderData}
+        noun="evento(s)"
+        label="Paginação do histórico"
+      />
     </div>
   );
 }

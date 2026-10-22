@@ -28,6 +28,7 @@ from pydantic import (
     model_validator,
 )
 
+from app.api.v1.pagination import DEFAULT_PAGE_SIZE, PageSize
 from app.authorization.security_events import (
     EVENT_MASS_ASSIGNMENT_REJECTED,
     EVENT_PRIVILEGE_ESCALATION_ATTEMPT,
@@ -320,7 +321,7 @@ class UserListQuery(_StrictModel):
     active: Literal["true", "false"] | None = None
     sort: UserSortKey = "name"
     page: int = Field(default=1, ge=1, le=100_000)
-    page_size: int = Field(default=25, ge=1, le=100)
+    page_size: PageSize = DEFAULT_PAGE_SIZE
 
 
 class ImportItemsQuery(_StrictModel):
@@ -334,7 +335,7 @@ class ImportItemsQuery(_StrictModel):
     status: str | None = Field(default=None, max_length=32)
     search: str | None = Field(default=None, max_length=200)
     page: int = Field(default=1, ge=1, le=100_000)
-    page_size: int = Field(default=25, ge=1, le=100)
+    page_size: PageSize = DEFAULT_PAGE_SIZE
 
     @field_validator("status", "search", mode="after")
     @classmethod
@@ -346,7 +347,7 @@ class PageQuery(_StrictModel):
     """Query string paginada simples (ex.: histórico de auditoria)."""
 
     page: int = Field(default=1, ge=1, le=100_000)
-    page_size: int = Field(default=25, ge=1, le=100)
+    page_size: PageSize = DEFAULT_PAGE_SIZE
 
 
 def parse_query(model: type[ModelT], args: Any, *, context: str) -> ModelT:

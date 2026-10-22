@@ -5,17 +5,17 @@ import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-quer
 
 import { Button } from "@/components/ui/button";
 import { LoadingSkeleton } from "@/components/ui/loading-skeleton";
-import { CatalogHeader, CatalogNotice, CatalogPagination } from "@/components/features/catalog/catalog-parts";
+import { PaginationBar } from "@/components/ui/pagination-bar";
+import { CatalogHeader, CatalogNotice } from "@/components/features/catalog/catalog-parts";
 import { CatalogToolbar } from "@/components/features/catalog/catalog-toolbar";
 import { RoomsTable } from "@/components/features/catalog/catalog-tables";
 import {
   catalogListErrorMessage,
   DENIED_MESSAGE,
-  PAGE_SIZE,
 } from "@/components/features/catalog/catalog-labels";
 import { RoomFormDialog, roomsQueryKey } from "@/components/features/catalog/room-form-dialog";
 import { useActiveToggle } from "@/components/features/catalog/use-active-toggle";
-import { useCatalogFilters } from "@/components/features/catalog/use-catalog-filters";
+import { useCatalogFilters, useClampPage } from "@/components/features/catalog/use-catalog-filters";
 import { useUnits } from "@/components/features/users/unit-checkbox-list";
 import { ADMIN_ROLE } from "@/components/layout/nav-items";
 import { ApiError, listRooms, setRoomActive, type RoomRecord, type RoomSort } from "@/lib/catalog-api";
@@ -50,7 +50,7 @@ export default function AdministracaoSalasPage() {
     active: filters.activeParam,
     sort: filters.sort,
     page: filters.page,
-    page_size: PAGE_SIZE,
+    page_size: filters.pageSize,
   };
   const roomsQuery = useQuery({
     queryKey: [...roomsQueryKey, "list", params],
@@ -73,6 +73,8 @@ export default function AdministracaoSalasPage() {
   const busy = roomsQuery.isFetching && !roomsQuery.isPending;
   const changing = roomsQuery.isPlaceholderData;
 
+  useClampPage(filters.pg, roomsQuery.data?.total, !roomsQuery.isPlaceholderData);
+
   return (
     <div className="flex flex-col gap-8 p-4 sm:p-6 lg:p-8">
       <CatalogHeader
@@ -87,8 +89,8 @@ export default function AdministracaoSalasPage() {
 
       <CatalogToolbar
         idPrefix="salas"
-        searchLabel="Buscar sala por nome"
-        searchPlaceholder="Buscar sala por nome…"
+        searchLabel="Buscar sala por nome ou andar"
+        searchPlaceholder="Buscar por nome ou andar…"
         search={filters.search}
         onSearch={filters.setSearch}
         units={{ items: units.data?.units, value: filters.unitId, onChange: filters.chooseUnit }}
@@ -118,7 +120,7 @@ export default function AdministracaoSalasPage() {
           <RoomsTable
             rooms={roomsQuery.data.rooms}
             units={units.data?.units}
-            pageKey={`${roomsQuery.data.page}|${filters.q}|${filters.unitId}|${filters.active}|${filters.sort}`}
+            pageKey={`${roomsQuery.data.page}|${filters.pageSize}|${filters.q}|${filters.unitId}|${filters.active}|${filters.sort}`}
             busy={busy}
             sort={filters.sort}
             onSortChange={filters.chooseSort}
@@ -126,13 +128,13 @@ export default function AdministracaoSalasPage() {
             onEdit={openForm}
             onToggle={toggle.ask}
           />
-          <CatalogPagination
-            page={roomsQuery.data.page}
+          <PaginationBar
+            page={filters.page}
+            pageSize={filters.pageSize}
             total={roomsQuery.data.total}
-            pageSize={PAGE_SIZE}
-            noun="sala(s)"
-            loading={changing}
-            onPage={filters.setPage}
+            onPageChange={filters.setPage}
+            onPageSizeChange={filters.setPageSize}
+            busy={changing}
           />
         </>
       )}

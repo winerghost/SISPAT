@@ -28,6 +28,7 @@ from datetime import datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from app.api.v1.pagination import DEFAULT_PAGE_SIZE, PageSize
 
 NAME_MAX = 200
 EMAIL_MAX = 254
@@ -209,7 +210,7 @@ class _ListQuery(_CatalogModel):
     unit_id: uuid.UUID | None = None
     active: Literal["true", "false"] | None = None
     page: int = Field(default=1, ge=1, le=100_000)
-    page_size: int = Field(default=25, ge=1, le=100)
+    page_size: PageSize = DEFAULT_PAGE_SIZE
 
     @field_validator("q")
     @classmethod
@@ -235,7 +236,7 @@ class UnitListQuery(_CatalogModel):
     active: Literal["true", "false", "all"] = "all"
     sort: UnitSortKey = "name"
     page: int = Field(default=1, ge=1, le=100_000)
-    page_size: int = Field(default=25, ge=1, le=100)
+    page_size: PageSize = DEFAULT_PAGE_SIZE
 
     @field_validator("q")
     @classmethod

@@ -230,7 +230,7 @@ test.describe("/unidades (GET /units/accessible)", () => {
     await expect(table.getByText("PSU-TO")).toBeVisible();
     await expect(table.getByText(INACTIVE_UNIT.code)).toBeVisible();
     await expect(table.getByText("Inativa", { exact: true })).toBeVisible();
-    await expect(page.getByText("Página 1 de 1 · 4 unidade(s)")).toBeVisible();
+    await expect(page.getByText("Exibindo 1–4 de 4 registro(s)")).toBeVisible();
     await expect(page.getByRole("link", { name: /Gerenciar cadastro/ })).toHaveCount(0);
     await expectReadOnly(page, state);
     expect(apiPaths(state)).toContain("GET /v1/units/accessible");
@@ -242,12 +242,12 @@ test.describe("/unidades (GET /units/accessible)", () => {
     const table = page.getByRole("table", { name: "Unidades" });
     await expect(table).toBeVisible();
     await page.getByRole("searchbox", { name: "Buscar unidade por sigla ou nome" }).fill("escritorio");
-    await expect(page.getByText("Página 1 de 1 · 1 unidade(s)")).toBeVisible();
+    await expect(page.getByText("Exibindo 1–1 de 1 registro(s)")).toBeVisible();
     await expect(table.getByText("ESC-02")).toBeVisible();
     await page.getByRole("button", { name: "Limpar filtros" }).click();
-    await expect(page.getByText("4 unidade(s)")).toBeVisible();
+    await expect(page.getByText("Exibindo 1–4 de 4 registro(s)")).toBeVisible();
     await page.getByRole("group", { name: "Filtrar por situação" }).getByRole("button", { name: "Inativas" }).click();
-    await expect(page.getByText("1 unidade(s)")).toBeVisible();
+    await expect(page.getByText("Exibindo 1–1 de 1 registro(s)")).toBeVisible();
     await expect(table.getByText(INACTIVE_UNIT.code)).toBeVisible();
     await page.getByRole("button", { name: "Limpar filtros" }).click();
     await table.getByRole("button", { name: /^Sigla/ }).click();
@@ -292,14 +292,14 @@ test.describe("/salas-localizacoes (GET /rooms)", () => {
     for (const header of ["Nome", "Unidade", "Andar", "Situação", "Atualizada em"]) {
       await expect(table.getByRole("columnheader", { name: new RegExp(header) })).toBeVisible();
     }
-    await expect(page.getByText("Página 1 de 1 · 4 sala(s)")).toBeVisible();
+    await expect(page.getByText("Exibindo 1–4 de 4 registro(s)")).toBeVisible();
     await expect(page.getByRole("link", { name: /Gerenciar cadastro/ })).toHaveCount(0);
     await expectReadOnly(page, state);
 
     const request = page.waitForRequest((r) => r.url().includes("/v1/rooms?") && r.url().includes("unit_id="));
     await page.getByLabel("Unidade", { exact: true }).selectOption({ label: "PSU-TO — Procuradoria Seccional Sintética de Palmas" });
     expect(new URL((await request).url()).searchParams.get("unit_id")).toBe("60000000-0000-4000-8000-000000000001");
-    await expect(page.getByText("Página 1 de 1 · 2 sala(s)")).toBeVisible();
+    await expect(page.getByText("Exibindo 1–2 de 2 registro(s)")).toBeVisible();
     expect(await expectNoXss(page)).toEqual({ executed: undefined, injectedImgs: 0 });
   });
 
@@ -310,9 +310,9 @@ test.describe("/salas-localizacoes (GET /rooms)", () => {
     await page.getByRole("searchbox", { name: "Buscar sala por nome" }).fill("audit");
     const url = new URL((await request).url());
     expect(url.searchParams.get("q")).toBe("audit");
-    expect(url.searchParams.get("page_size")).toBe("25");
+    expect(url.searchParams.get("page_size")).toBe("50");
     await expect(page.getByText("Auditório Sintético")).toBeVisible();
-    await expect(page.getByText("1 sala(s)")).toBeVisible();
+    await expect(page.getByText("Exibindo 1–1 de 1 registro(s)")).toBeVisible();
   });
 
   test("ADM: atalho para o cadastro de salas", async ({ page }) => {

@@ -92,43 +92,6 @@ export function CatalogNotice({
   );
 }
 
-export function CatalogPagination({
-  page,
-  total,
-  pageSize,
-  noun,
-  loading,
-  onPage,
-}: {
-  page: number;
-  total: number;
-  pageSize: number;
-  /** Ex.: "sala(s)". */
-  noun: string;
-  loading: boolean;
-  onPage: (page: number) => void;
-}) {
-  const totalPages = Math.max(1, Math.ceil(total / pageSize));
-  return (
-    <div className="flex flex-wrap items-center justify-between gap-4">
-      <div className="flex flex-wrap items-center gap-3">
-        <span className="text-body-sm text-warm-granite" aria-live="polite">
-          Página {page} de {totalPages} · {total} {noun}
-        </span>
-        {loading ? <StatusIndicator state="loading" label="Carregando…" /> : null}
-      </div>
-      <div className="flex gap-2">
-        <Button variant="outline" size="sm" disabled={page <= 1 || loading} onClick={() => onPage(Math.max(1, page - 1))}>
-          Anterior
-        </Button>
-        <Button variant="outline" size="sm" disabled={page >= totalPages || loading} onClick={() => onPage(page + 1)}>
-          Próxima
-        </Button>
-      </div>
-    </div>
-  );
-}
-
 /** Unidade da linha: "SIGLA — Nome" quando conhecida; senão texto neutro. */
 export function unitText(unitId: string, units: UnitRef[] | undefined): string {
   const unit = units?.find((candidate) => candidate.id === unitId);

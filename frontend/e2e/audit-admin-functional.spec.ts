@@ -1,7 +1,7 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
 
-import { AUDIT_FIRST_ID, AUDIT_SECURITY_ID, AUDIT_XSS, AUDIT_XSS_ID } from "./support/audit-mocks";
+import { AUDIT_FIRST_ID, AUDIT_SECURITY_ID, AUDIT_XSS, AUDIT_XSS_ID, defaultAuditLogs } from "./support/audit-mocks";
 import {
   installMocks,
   seedSession,
@@ -81,6 +81,25 @@ test.describe("filtros da URL (puro)", () => {
     expect(auditUrlQuery(parseAuditUrl(new URLSearchParams("sort=-occurred_at&page=1")))).toBe("");
   });
 
+  test("page_size: só 50/100/200 (outro valor vira 50) e vai à query só quando não é o padrão", () => {
+    expect(parseAuditUrl(new URLSearchParams("page_size=100")).pageSize).toBe(100);
+    for (const bad of ["25", "0", "abc", "1000", "50&page_size=100"]) {
+      expect(parseAuditUrl(new URLSearchParams({ page_size: bad })).pageSize).toBe(50);
+    }
+    expect(parseAuditUrl(new URLSearchParams("page_size=50&page_size=100")).pageSize).toBe(50);
+    const state = parseAuditUrl(new URLSearchParams("page_size=200&page=2"));
+    expect(auditUrlQuery(state)).toBe("page=2&page_size=200");
+    expect(auditUrlQuery(parseAuditUrl(new URLSearchParams("page_size=50")))).toBe("");
+  });
+
+  test("período só com 'de': futuro ou mais de 90 dias antes de agora é recusado", () => {
+    const now = new Date("2026-10-21T12:00:00Z");
+    expect(periodError("2026-10-22", undefined, now)).toMatch(/futuro/);
+    expect(periodError("2026-06-01", undefined, now)).toMatch(/90 dias/);
+    expect(periodError("2026-09-01", undefined, now)).toBeNull();
+    expect(periodError(undefined, "2026-01-01", now)).toBeNull();
+  });
+
   test("datas em America/Araguaina (UTC-3) viram instantes UTC; período máximo de 90 dias", () => {
     expect(dayStartUtc("2026-10-01")).toBe("2026-10-01T03:00:00.000Z");
     expect(dayEndUtc("2026-10-01")).toBe("2026-10-02T02:59:59.999Z");
@@ -99,21 +118,73 @@ test.describe("ADM — lista", () => {
     for (const header of ["Data e hora", "Evento", "Entidade", "Resultado", "Severidade", "Autor"]) {
       await expect(table.getByRole("columnheader", { name: new RegExp(header) })).toBeVisible();
     }
-    await expect(page.getByText("Página 1 de 2 · 30 registro(s)")).toBeVisible();
-    await expect(table.locator("tbody tr")).toHaveCount(25);
+    await expect(page.getByText("Exibindo 1–30 de 30 registro(s)")).toBeVisible();
+    await expect(table.locator("tbody tr")).toHaveCount(30);
     // 2026-10-20T14:00Z (registro 1) = 11:00 em America/Araguaina (UTC-3).
     await expect(table.locator("tbody tr").first().locator("time")).toHaveText(/20\/10\/2026.*11:00/);
     expect(await table.locator("tbody tr").first().textContent()).toContain("Perfil alterado");
 
     const query = lastListQuery(state);
     expect([...query.keys()].sort()).toEqual(["page", "page_size", "sort"]);
-    expect(query.get("page_size")).toBe("25");
+    expect(query.get("page_size")).toBe("50");
     expect(auditCalls(state).every((c) => c.startsWith("GET "))).toBe(true);
+    // 30 registros cabem numa página de 50: sem próxima página.
+    await expect(page.getByRole("button", { name: "Próxima" })).toBeDisabled();
+  });
+
+  test("50/100/200 e paginação: page/page_size na URL e sempre valores válidos", async ({ page }) => {
+    const opts = { role: "ADM" as const, auditLogs: defaultAuditLogs(120) };
+    const state = await open(page, opts);
+    const table = page.getByRole("table", { name: TABLE });
+    await expect(page.getByText("Exibindo 1–50 de 120 registro(s)")).toBeVisible();
+    await expect(table.locator("tbody tr")).toHaveCount(50);
 
     await page.getByRole("button", { name: "Próxima" }).click();
-    await expect(page.getByText("Página 2 de 2 · 30 registro(s)")).toBeVisible();
     await expect(page).toHaveURL(/page=2/);
-    await expect(table.locator("tbody tr")).toHaveCount(5);
+    await expect(page.getByText("Exibindo 51–100 de 120 registro(s)")).toBeVisible();
+    await page.getByRole("button", { name: "Última" }).click();
+    await expect(page.getByText("Exibindo 101–120 de 120 registro(s)")).toBeVisible();
+    await expect(table.locator("tbody tr")).toHaveCount(20);
+
+    await page.getByLabel("Registros por página").selectOption("100");
+    await expect(page).toHaveURL(/page_size=100/);
+    await expect(page).not.toHaveURL(/[?&]page=/);
+    await expect(page.getByText("Exibindo 1–100 de 120 registro(s)")).toBeVisible();
+    await page.getByLabel("Registros por página").selectOption("200");
+    await expect(page.getByText("Exibindo 1–120 de 120 registro(s)")).toBeVisible();
+    await expect(table.locator("tbody tr")).toHaveCount(120);
+
+    const sizes = auditCalls(state)
+      .filter((c) => /audit-logs\?/.test(c))
+      .map((c) => new URL(c.split(" ")[1]!, "http://x").searchParams.get("page_size"));
+    for (const size of sizes) expect(["50", "100", "200"]).toContain(size);
+  });
+
+  test("zebra nas linhas da tabela", async ({ page }) => {
+    await open(page);
+    const rows = page.getByRole("table", { name: TABLE }).locator("tbody tr");
+    await expect(rows).toHaveCount(30);
+    await page.mouse.move(0, 0);
+    const bg = (n: number) => rows.nth(n).evaluate((el) => getComputedStyle(el).backgroundColor);
+    const [a, b, c] = [await bg(0), await bg(1), await bg(2)];
+    expect(a).toBe(c);
+    expect(b).not.toBe(a);
+  });
+
+  test("mudar filtro volta para a página 1 e preserva o tamanho de página", async ({ page }) => {
+    await open(page, { role: "ADM", auditLogs: defaultAuditLogs(120) }, `${PATH}?page=2&page_size=50`);
+    await expect(page.getByText("Exibindo 51–100 de 120 registro(s)")).toBeVisible();
+    await page.getByLabel("Resultado").selectOption("SUCESSO");
+    await page.getByRole("button", { name: "Aplicar filtros" }).click();
+    await expect(page).not.toHaveURL(/[?&]page=/);
+    await expect(page).toHaveURL(/result=SUCESSO/);
+    await expect(page.getByText(/Exibindo 1–50 de \d+ registro\(s\)/)).toBeVisible();
+  });
+
+  test("page_size inválido na URL (25) vira 50 e nunca chega ao backend", async ({ page }) => {
+    const state = await open(page, { role: "ADM" }, `${PATH}?page_size=25`);
+    await expect(page.getByRole("table", { name: TABLE })).toBeVisible();
+    expect(lastListQuery(state).get("page_size")).toBe("50");
   });
 
   test("filtros viram parâmetros da allowlist, vão para a URL e podem ser limpos", async ({ page }) => {
@@ -139,7 +210,7 @@ test.describe("ADM — lista", () => {
 
     await page.getByRole("button", { name: "Limpar filtros" }).click();
     await expect(page).not.toHaveURL(/result=/);
-    await expect(page.getByText("Página 1 de 2 · 30 registro(s)")).toBeVisible();
+    await expect(page.getByText("Exibindo 1–30 de 30 registro(s)")).toBeVisible();
   });
 
   test("filtros inválidos na URL são descartados e nunca chegam ao backend", async ({ page }) => {
