@@ -27,7 +27,10 @@ from app.services.preferences_service import (
 
 URL = "/api/v1/me/preferences"
 SUBS = {"USER": "auth-dl-user", "RH": "auth-dl-rh", "ADM": "auth-dl-adm"}
-ORDER = ["kpis", "units", "status", "monthly", "location", "bond", "pending", "rooms", "inventory"]
+ORDER = [
+    "kpis", "units", "status", "monthly", "location", "bond", "pending", "rooms", "inventory",
+    "tech_summary", "tech_category", "tech_units", "tech_status", "tech_no_owner", "tech_age",
+]
 LAYOUT_DEFAULT = {"order": ORDER, "hidden": []}
 CHART_DEFAULTS = {
     "units": "grouped",
@@ -132,6 +135,7 @@ def test_ordem_parcial_completa_com_os_demais_na_ordem_padrao(people):
     assert response.status_code == 200
     assert response.get_json()["dashboard_layout"]["order"] == [
         "inventory", "bond", "kpis", "units", "status", "monthly", "location", "pending", "rooms",
+        "tech_summary", "tech_category", "tech_units", "tech_status", "tech_no_owner", "tech_age",
     ]
 
 

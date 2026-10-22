@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AnimatePresence } from "motion/react";
-import { Database } from "lucide-react";
+import { Database, TriangleAlert } from "lucide-react";
 import { toast } from "sonner";
 
 import { SlideIn } from "@/components/animations";
@@ -40,6 +40,7 @@ import {
   type AliasOptIn,
   type CatalogSelection,
 } from "./catalog-import-selection";
+import { deriveOutcome, summaryToast, type CatalogOutcome } from "./catalog-import-outcome";
 import { PreviewReviewAlert } from "./preview-review-alert";
 import { PreviewSummaryCards } from "./preview-summary-cards";
 
@@ -141,10 +142,12 @@ export function CatalogImportPanel({ kind }: { kind: CatalogImportKind }) {
       queryClient.removeQueries({ queryKey: ["catalog-import-items"] });
       void queryClient.invalidateQueries({ queryKey: ["catalog"] });
       void queryClient.invalidateQueries({ queryKey: UNITS_QUERY_KEY });
-      toast.success(
-        `Importação concluída: ${data.created} criado(s), ${data.updated} atualizado(s), ${data.ignorados} ignorado(s)` +
-          (data.falhas.length > 0 ? `, ${data.falhas.length} falha(s).` : "."),
-      );
+      const outcome = deriveOutcome(data);
+      const message = summaryToast(data);
+      // Verde só quando algo foi salvo SEM rejeições; falha total é erro.
+      if (outcome === "success") toast.success(message);
+      else if (outcome === "failure") toast.error(message);
+      else toast.warning(message);
     },
     onError: (error) => {
       // 404/409: a prévia não vale mais no servidor — exige uma nova.
@@ -216,7 +219,7 @@ export function CatalogImportPanel({ kind }: { kind: CatalogImportKind }) {
     confirmError: confirmMutation.isError,
     hasPreview: !!preview,
     isExpired,
-    hasResult: !!result,
+    outcome: result ? deriveOutcome(result) : null,
   });
 
   const eligibleTotal = preview ? preview.summary.novo + preview.summary.existente : 0;
@@ -265,6 +268,22 @@ export function CatalogImportPanel({ kind }: { kind: CatalogImportKind }) {
           <SlideIn key={`preview-${preview.preview_id}`} distance="sm" className="flex min-w-0 flex-col gap-8">
             <PreviewSummaryCards summary={preview.summary} />
             <PreviewReviewAlert summary={preview.summary} />
+            {kind !== "units" ? (
+              <p
+                role="status"
+                data-testid="catalog-import-alias-dependency"
+                className="flex items-start gap-2 text-body-sm text-pale-stone"
+              >
+                <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0 text-signal-orange" aria-hidden="true" />
+                <span>
+                  {label.plural.charAt(0).toUpperCase() + label.plural.slice(1)} dependem da sigla da coluna UNIDADE
+                  estar cadastrada como alias de uma unidade.
+                  {(preview.report.pendencias?.unidade_sem_alias ?? 0) > 0
+                    ? ` ${preview.report.pendencias.unidade_sem_alias} linha(s) estão sem alias e NÃO serão gravadas: importe antes as unidades (criando as siglas) e gere uma nova prévia.`
+                    : " Nenhuma linha desta prévia está sem alias."}
+                </span>
+              </p>
+            ) : null}
             <CatalogImportReportView report={preview.report} />
             <CatalogImportItemsTable
               key={preview.preview_id}
@@ -335,7 +354,7 @@ interface RequestStatusInput {
   confirmError: boolean;
   hasPreview: boolean;
   isExpired: boolean;
-  hasResult: boolean;
+  outcome: CatalogOutcome | null;
 }
 
 function requestStatus(input: RequestStatusInput): { state: StatusIndicatorState; label: string } {
@@ -343,7 +362,10 @@ function requestStatus(input: RequestStatusInput): { state: StatusIndicatorState
   if (input.confirmPending) return { state: "loading", label: "Gravando importação…" };
   if (input.lastAction === "confirm") {
     if (input.confirmError) return { state: "error", label: "Falha na confirmação" };
-    if (input.hasResult) return { state: "success", label: "Importação concluída" };
+    if (input.outcome === "failure") return { state: "error", label: "Nenhum item salvo" };
+    if (input.outcome === "partial") return { state: "warning", label: "Importação parcial" };
+    if (input.outcome === "nothing") return { state: "warning", label: "Nada foi salvo" };
+    if (input.outcome === "success") return { state: "success", label: "Importação concluída" };
   }
   if (input.lastAction === "preview" && input.previewError) return { state: "error", label: "Falha na leitura" };
   if (input.hasPreview) {

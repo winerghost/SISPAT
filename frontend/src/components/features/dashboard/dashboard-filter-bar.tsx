@@ -10,8 +10,12 @@ import { Input } from "@/components/ui/input";
 import { unitLabel } from "@/components/features/users/unit-checkbox-list";
 import {
   BOND_NONE,
+  CATEGORIA_VALUES,
   INVENTORY_VALUES,
   LOCATED_VALUES,
+  STATUS_VALUES,
+  TECH_FILTER_KEYS,
+  TIPO_TI_VALUES,
   countDashboardFilters,
   isValidPeriod,
   useDashboardTypes,
@@ -24,12 +28,15 @@ import { cn } from "@/lib/utils";
 
 import {
   BOND_NONE_LABEL,
+  CATEGORIA_LABEL,
   FILTER_NAMES,
   HAS_RESPONSIBLE_LABEL,
   HAS_ROOM_LABEL,
   INVENTORY_FILTER_LABEL,
   LOCATED_FILTER_LABEL,
   PENDING_MOVEMENT_LABEL,
+  STATUS_OPERACIONAL_LABEL,
+  TIPO_TI_LABEL,
   filtersSentence,
   typeLabel,
   useFilterLabels,
@@ -65,6 +72,7 @@ const ADVANCED_KEYS: readonly DashboardFilterKey[] = [
   "registrado_ate",
   "inventario",
   "movimentacao_pendente",
+  ...TECH_FILTER_KEYS,
 ];
 
 export const PERIOD_ERROR =
@@ -377,6 +385,33 @@ export function DashboardFilterBar({ state }: { state: DashboardUrlFilters }) {
                   options={boolOptions(PENDING_MOVEMENT_LABEL)}
                 />
               </Grid>
+              <fieldset className="flex min-w-0 flex-col gap-3" data-dashboard-tech-filters>
+                <legend className="mb-3 text-eyebrow text-pale-stone">Classificação (painéis de Tecnologia)</legend>
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+                  <SelectField
+                    id={id("categoria")}
+                    label={FILTER_NAMES.categoria}
+                    value={value("categoria")}
+                    onChange={(v) => set("categoria", v)}
+                    options={CATEGORIA_VALUES.map((v) => ({ value: v, label: CATEGORIA_LABEL[v] }))}
+                    hint="Vale só para os painéis de Tecnologia."
+                  />
+                  <SelectField
+                    id={id("tipo-ti")}
+                    label={FILTER_NAMES.tipo_ti}
+                    value={value("tipo_ti")}
+                    onChange={(v) => set("tipo_ti", v)}
+                    options={TIPO_TI_VALUES.map((v) => ({ value: v, label: TIPO_TI_LABEL[v] }))}
+                  />
+                  <SelectField
+                    id={id("status-operacional")}
+                    label={FILTER_NAMES.status}
+                    value={value("status")}
+                    onChange={(v) => set("status", v)}
+                    options={STATUS_VALUES.map((v) => ({ value: v, label: STATUS_OPERACIONAL_LABEL[v] }))}
+                  />
+                </div>
+              </fieldset>
               <fieldset className="flex min-w-0 flex-col gap-3">
                 <legend className="mb-3 text-eyebrow text-pale-stone">Período de registro</legend>
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
@@ -415,12 +450,14 @@ export function DashboardFilterBar({ state }: { state: DashboardUrlFilters }) {
  */
 export function DashboardFilterSummary({ filters }: { filters: DashboardFilters }) {
   const labels = useFilterLabels(filters);
+  const techOnly = labels.some((label) => (TECH_FILTER_KEYS as readonly string[]).includes(label.key));
   return (
     <p role="status" data-dashboard-filter-summary className="min-w-0 break-words text-body-sm text-warm-granite">
       {labels.length > 0 ? (
         <>
           <span className="text-bone">Os números refletem os filtros: </span>
           {filtersSentence(labels)}.
+          {techOnly ? " Categoria, tipo de TI e situação operacional filtram só os painéis de Tecnologia." : ""}
         </>
       ) : (
         "Sem filtros: os números refletem todos os bens visíveis para o seu perfil."

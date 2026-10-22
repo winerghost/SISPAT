@@ -19,7 +19,10 @@ CHARTS = {
     "rooms": "horizontal",
 }
 LAYOUT = {
-    "order": ["kpis", "units", "status", "monthly", "location", "bond", "pending", "rooms", "inventory"],
+    "order": [
+        "kpis", "units", "status", "monthly", "location", "bond", "pending", "rooms", "inventory",
+        "tech_summary", "tech_category", "tech_units", "tech_status", "tech_no_owner", "tech_age",
+    ],
     "hidden": [],
 }
 

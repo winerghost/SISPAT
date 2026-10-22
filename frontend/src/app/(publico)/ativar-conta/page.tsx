@@ -13,6 +13,15 @@ import { FormMessage } from "@/components/ui/form-message";
 import { Skeleton } from "@/components/ui/skeleton";
 import { getSupabaseClient } from "@/lib/supabase-client";
 import { activateInvite, ApiError } from "@/lib/users-api";
+import type { SupabaseClient } from "@supabase/supabase-js";
+
+import {
+  AUTH_FAILURE_MESSAGES,
+  classifyAuthError,
+  logAuthFailure,
+  MIN_PASSWORD_LENGTH,
+  PASSWORD_TOO_SHORT_MESSAGE,
+} from "./activation-errors";
 
 // =============================================================================
 // /ativar-conta — destino do link de convite enviado pelo Supabase Auth
@@ -34,14 +43,23 @@ import { activateInvite, ApiError } from "@/lib/users-api";
 //
 //   2) Fluxo legado (convites já enviados). O cliente de `supabase-client.ts`
 //      usa `detectSessionInUrl: true`: ao ser instanciado, o SDK detecta
-//      `#access_token=...&type=invite` (implícito) ou `?code=...` (PKCE),
-//      troca por sessão e limpa a URL. Basta `getSession()` + assinar
-//      `onAuthStateChange`. Sem sessão -> "invalid".
+//      `#access_token=...&type=invite` (implícito), troca por sessão e limpa a
+//      URL. A página só ADOTA a sessão cujo access_token é IDÊNTICO ao do hash
+//      lido na carga: uma sessão preexistente (de outra pessoa/aba) nunca é
+//      aceita para definir senha. Sem `access_token` no hash, ou sem sessão
+//      correspondente -> "invalid". O token fica só em ref (memória), nunca logado.
 //
-//   Também: `#error=access_denied&error_code=otp_expired` (hash) -> "invalid".
-//   A rota "/" NÃO redireciona esse hash para cá: "/" é protegida (AuthGuard
-//   leva ao /login) e interpretar hash na raiz aumenta superfície (redirect
-//   com dado da URL) por pouco ganho; os e-mails novos apontam direto para cá.
+//   Também: `#error=access_denied&error_code=otp_expired` (hash) -> "invalid"
+//   com a mensagem "link já usado ou expirado". A rota "/" repassa
+//   `?token_hash=&type=invite|recovery` para cá (ver `auth-guard.tsx`).
+//
+//   MFA: se a sessão criada está em aal1 mas o usuário tem TOTP (nextLevel =
+//   aal2), a fase "mfa" pede o código (`mfa.challengeAndVerify`, como o login)
+//   ANTES do formulário de senha; `insufficient_aal` no `updateUser` leva à
+//   mesma fase e repete o envio. Nada do código/segredo é armazenado.
+//
+//   Erros do Supabase viram mensagens fixas em `activation-errors.ts`
+//   (nunca a mensagem crua); no console só `code`/`status`.
 //
 // Fluxo após a sessão existir:
 //   1. Usuário define a senha (`supabase.auth.updateUser({ password })`).
@@ -60,7 +78,8 @@ import { activateInvite, ApiError } from "@/lib/users-api";
 //   passa pelo login e pelo MFA), mostra sucesso e leva ao /login.
 // =============================================================================
 
-type Phase = "checking" | "confirm" | "ready" | "invalid" | "activated";
+type Phase = "checking" | "confirm" | "mfa" | "ready" | "invalid" | "activated";
+type InvalidReason = "invalid" | "expired";
 type Mode = "invite" | "recovery";
 
 /** Após redefinir a senha, segue sozinho para o login (o botão permite ir antes). */
@@ -91,8 +110,8 @@ function isPlausibleTokenHash(value: string | null, type: string | null): value 
 
 type UrlIntent =
   | { kind: "token"; tokenHash: string; mode: Mode }
-  | { kind: "invalid"; mode: Mode }
-  | { kind: "legacy"; mode: Mode };
+  | { kind: "invalid"; mode: Mode; reason: InvalidReason }
+  | { kind: "legacy"; mode: Mode; accessToken: string | null };
 
 /** Lê a URL uma única vez e já a limpa (token_hash e erros nunca ficam no histórico). */
 function readAndCleanUrl(): UrlIntent {
@@ -102,9 +121,14 @@ function readAndCleanUrl(): UrlIntent {
 
   const hasToken = query.has("token_hash") || query.has("type");
   const hasHashError = hashParams.has("error") || hashParams.has("error_code");
-  // Legado: o SDK lê/limpa o hash; aqui só se lê o `type` (recovery x invite).
+  // Legado: o SDK lê/limpa o hash; aqui só se lê o `type` e o access_token (para
+  // adotar SOMENTE a sessão criada por este link, nunca uma preexistente).
   if (!hasToken && !hasHashError) {
-    return { kind: "legacy", mode: hashParams.get("type") === "recovery" ? "recovery" : "invite" };
+    return {
+      kind: "legacy",
+      mode: hashParams.get("type") === "recovery" ? "recovery" : "invite",
+      accessToken: hashParams.get("access_token") || null,
+    };
   }
 
   const tokenHash = query.get("token_hash");
@@ -113,11 +137,43 @@ function readAndCleanUrl(): UrlIntent {
 
   const mode: Mode = type === "recovery" ? "recovery" : "invite";
   if (hasToken && isPlausibleTokenHash(tokenHash, type)) return { kind: "token", tokenHash, mode };
-  return { kind: "invalid", mode };
+  const expired = hashParams.get("error_code") === "otp_expired";
+  return { kind: "invalid", mode, reason: expired ? "expired" : "invalid" };
+}
+
+type NextStep = { phase: "ready" } | { phase: "mfa"; factorId: string };
+
+/** Primeiro fator TOTP verificado do usuário da sessão atual (ou null). */
+async function findTotpFactorId(supabase: SupabaseClient): Promise<string | null> {
+  try {
+    const { data, error } = await supabase.auth.mfa.listFactors();
+    return error ? null : (data?.totp?.[0]?.id ?? null);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Padrão do login: sessão aal1 com TOTP cadastrado (nextLevel aal2) exige o
+ * código antes de qualquer troca de senha. Falha na consulta -> segue para o
+ * formulário (o `updateUser` responde `insufficient_aal` se for o caso).
+ */
+async function nextStepAfterSession(supabase: SupabaseClient): Promise<NextStep> {
+  try {
+    const { data } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
+    if (data && data.currentLevel === "aal1" && data.nextLevel === "aal2") {
+      const factorId = await findTotpFactorId(supabase);
+      if (factorId) return { phase: "mfa", factorId };
+    }
+  } catch {
+    /* segue para o formulário */
+  }
+  return { phase: "ready" };
 }
 
 export default function AtivarContaPage() {
   const [phase, setPhase] = useState<Phase>("checking");
+  const [invalidReason, setInvalidReason] = useState<InvalidReason>("invalid");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -125,13 +181,30 @@ export default function AtivarContaPage() {
   const [confirming, setConfirming] = useState(false);
   const [activatedRole, setActivatedRole] = useState<string | null>(null);
   const [mode, setMode] = useState<Mode>("invite");
+  // Passo TOTP (só memória; o código nunca é guardado além do input).
+  const [factorId, setFactorId] = useState<string | null>(null);
+  const [mfaCode, setMfaCode] = useState("");
+  const [mfaError, setMfaError] = useState<string | null>(null);
+  const [mfaVerifying, setMfaVerifying] = useState(false);
+  const [retryAfterMfa, setRetryAfterMfa] = useState(false);
   const modeRef = useRef<Mode>("invite");
   const router = useRouter();
 
   const tokenHashRef = useRef<string | null>(null);
+  const legacyTokenRef = useRef<string | null>(null);
+  const adoptedRef = useRef(false);
   const intentRef = useRef<UrlIntent["kind"] | null>(null);
   const verifyingRef = useRef(false);
   const focusRef = useRef<HTMLHeadingElement>(null);
+
+  function applyNextStep(step: NextStep) {
+    if (step.phase === "mfa") {
+      setFactorId(step.factorId);
+      setMfaCode("");
+      setMfaError(null);
+    }
+    setPhase(step.phase);
+  }
 
   useEffect(() => {
     // Ler/limpar a URL só uma vez (StrictMode executa o efeito duas vezes).
@@ -141,17 +214,35 @@ export default function AtivarContaPage() {
       modeRef.current = intent.mode;
       setMode(intent.mode);
       if (intent.kind === "token") tokenHashRef.current = intent.tokenHash;
+      if (intent.kind === "legacy") legacyTokenRef.current = intent.accessToken;
       if (intent.kind === "token") setPhase("confirm");
-      else if (intent.kind === "invalid") setPhase("invalid");
+      else if (intent.kind === "invalid") {
+        setInvalidReason(intent.reason);
+        setPhase("invalid");
+      } else if (!intent.accessToken) {
+        // Sem credencial na URL: NUNCA aceitar sessão preexistente (de outra pessoa).
+        setPhase("invalid");
+      }
     }
-    if (intentRef.current !== "legacy") return;
+    if (intentRef.current !== "legacy" || !legacyTokenRef.current) return;
 
-    // Fluxo legado: o SDK processa #access_token / ?code na instanciação.
+    // Fluxo legado: o SDK processa #access_token na instanciação. Só se adota a
+    // sessão cujo access_token é o MESMO do link (uma vez).
     let active = true;
     const supabase = getSupabaseClient();
+    const adopt = (accessToken: string | undefined) => {
+      if (!active || adoptedRef.current || !accessToken) return;
+      if (accessToken !== legacyTokenRef.current) return;
+      adoptedRef.current = true;
+      void nextStepAfterSession(supabase).then((step) => {
+        if (active) applyNextStep(step);
+      });
+    };
     supabase.auth.getSession().then(({ data }) => {
-      if (!active) return;
-      setPhase(data.session ? "ready" : "invalid");
+      if (!active || adoptedRef.current) return;
+      adopt(data.session?.access_token);
+      // Sem sessão correspondente ao link (inválido/expirado): nada é aceito.
+      if (!adoptedRef.current) setPhase((current) => (current === "checking" ? "invalid" : current));
     });
     const { data: subscription } = supabase.auth.onAuthStateChange((event, session) => {
       if (!active) return;
@@ -159,13 +250,14 @@ export default function AtivarContaPage() {
         modeRef.current = "recovery";
         setMode("recovery");
       }
-      if (session) setPhase((current) => (current === "activated" ? current : "ready"));
+      adopt(session?.access_token);
     });
 
     return () => {
       active = false;
       subscription.subscription.unsubscribe();
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- executa uma vez; só usa refs e setters estáveis
   }, []);
 
   // Foco no título da fase ao trocar de fase (não na carga inicial).
@@ -180,11 +272,19 @@ export default function AtivarContaPage() {
     setConfirming(true);
     tokenHashRef.current = null; // uso único: nunca reenvia o mesmo hash
     try {
-      const { data, error: verifyError } = await getSupabaseClient().auth.verifyOtp({
+      const supabase = getSupabaseClient();
+      const { data, error: verifyError } = await supabase.auth.verifyOtp({
         token_hash: tokenHash,
         type: modeRef.current,
       });
-      setPhase(verifyError || !data.session ? "invalid" : "ready");
+      if (verifyError || !data.session) {
+        const failure = classifyAuthError(verifyError);
+        logAuthFailure(failure, "validar link");
+        setInvalidReason(failure.kind === "expired" ? "expired" : "invalid");
+        setPhase("invalid");
+        return;
+      }
+      applyNextStep(await nextStepAfterSession(supabase));
     } catch {
       setPhase("invalid");
     } finally {
@@ -193,26 +293,34 @@ export default function AtivarContaPage() {
     }
   }
 
-  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setError(null);
-
-    if (password.length < 8) {
-      setError("A senha precisa ter pelo menos 8 caracteres.");
-      return;
-    }
-    if (password !== confirmPassword) {
-      setError("As senhas não coincidem.");
-      return;
-    }
-
+  /** Troca a senha no Supabase (e, no convite, ativa no backend). */
+  async function applyPassword() {
     setSubmitting(true);
     try {
       const supabase = getSupabaseClient();
       const { error: updateError } = await supabase.auth.updateUser({ password });
       if (updateError) {
-        setError("Não foi possível definir a senha agora. Tente novamente.");
-        setSubmitting(false);
+        const failure = classifyAuthError(updateError);
+        logAuthFailure(failure, "definir senha");
+        if (failure.kind === "mfa_required") {
+          const id = await findTotpFactorId(supabase);
+          if (id) {
+            setFactorId(id);
+            setMfaCode("");
+            setMfaError(null);
+            setRetryAfterMfa(true);
+            setPhase("mfa");
+            return;
+          }
+          setError(AUTH_FAILURE_MESSAGES.generic);
+          return;
+        }
+        if (failure.kind === "expired") {
+          setInvalidReason("expired");
+          setPhase("invalid");
+          return;
+        }
+        setError(failure.message);
         return;
       }
 
@@ -234,9 +342,56 @@ export default function AtivarContaPage() {
     }
   }
 
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setError(null);
+
+    if (password.length < MIN_PASSWORD_LENGTH) {
+      setError(PASSWORD_TOO_SHORT_MESSAGE);
+      return;
+    }
+    if (password !== confirmPassword) {
+      setError("As senhas não coincidem.");
+      return;
+    }
+    await applyPassword();
+  }
+
+  async function handleMfaSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!factorId || mfaVerifying) return;
+    setMfaError(null);
+    setMfaVerifying(true);
+    try {
+      const { error: verifyError } = await getSupabaseClient().auth.mfa.challengeAndVerify({
+        factorId,
+        code: mfaCode,
+      });
+      if (verifyError) {
+        logAuthFailure(classifyAuthError(verifyError), "verificar código TOTP");
+        setMfaError("Código inválido ou expirado. Tente novamente.");
+        setMfaCode("");
+        return;
+      }
+      setMfaCode("");
+      setFactorId(null);
+      setPhase("ready");
+      if (retryAfterMfa) {
+        // A troca de senha havia sido barrada por AAL: repete agora em aal2.
+        setRetryAfterMfa(false);
+        setError(null);
+        await applyPassword();
+      }
+    } catch {
+      setMfaError("Não foi possível verificar o código agora. Tente novamente.");
+    } finally {
+      setMfaVerifying(false);
+    }
+  }
+
   const recovery = mode === "recovery";
   const steps = recovery ? RECOVERY_STEPS : ACTIVATION_STEPS;
-  const stepIndex = phase === "checking" || phase === "confirm" ? 0 : phase === "ready" ? 1 : steps.length;
+  const stepIndex = phase === "checking" || phase === "confirm" || phase === "mfa" ? 0 : phase === "ready" ? 1 : steps.length;
 
   // Recuperação concluída: segue para o login (o botão permite ir antes).
   useEffect(() => {
@@ -295,9 +450,13 @@ export default function AtivarContaPage() {
               {recovery ? "Link de recuperação inválido" : "Link de convite inválido"}
             </h2>
             <FormMessage>
-              {recovery
-                ? "Este link de recuperação é inválido ou já expirou. Solicite uma nova redefinição de senha a um administrador."
-                : "Este link de convite é inválido ou já expirou. Solicite um novo convite a um administrador."}
+              {invalidReason === "expired"
+                ? recovery
+                  ? "Este link de recuperação já foi usado ou expirou. Peça uma nova redefinição de senha a um administrador."
+                  : "Este link de convite já foi usado ou expirou. Peça um novo convite a um administrador."
+                : recovery
+                  ? "Este link de recuperação é inválido ou já expirou. Solicite uma nova redefinição de senha a um administrador."
+                  : "Este link de convite é inválido ou já expirou. Solicite um novo convite a um administrador."}
             </FormMessage>
             <Link
               href="/login"
@@ -305,6 +464,39 @@ export default function AtivarContaPage() {
             >
               Ir para o login
             </Link>
+          </FadeIn>
+        )}
+
+        {phase === "mfa" && (
+          <FadeIn>
+            <form className="flex flex-col gap-4" onSubmit={handleMfaSubmit}>
+              <h2 ref={focusRef} tabIndex={-1} className="text-body text-bone focus:outline-none">
+                Confirme a verificação em duas etapas
+              </h2>
+              <p className="text-body-sm text-warm-granite">
+                Sua conta usa verificação em duas etapas. Informe o código do seu aplicativo autenticador para
+                {recovery ? " definir a nova senha." : " definir a senha."}
+              </p>
+              <AuthField label="Código de verificação">
+                <Input
+                  type="text"
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  placeholder="000000"
+                  maxLength={10}
+                  required
+                  value={mfaCode}
+                  onChange={(e) => setMfaCode(e.target.value)}
+                  disabled={mfaVerifying}
+                  aria-invalid={mfaError ? true : undefined}
+                  aria-describedby={mfaError ? "ativar-mfa-erro" : undefined}
+                />
+              </AuthField>
+              <AnimatedFormMessage id="ativar-mfa-erro" message={mfaError} />
+              <Button type="submit" loading={mfaVerifying} disabled={mfaCode.length === 0} className="w-full">
+                {mfaVerifying ? "Verificando…" : "Verificar"}
+              </Button>
+            </form>
           </FadeIn>
         )}
 
@@ -316,8 +508,8 @@ export default function AtivarContaPage() {
               </h2>
               <p className="text-body-sm text-warm-granite">
                 {recovery
-                  ? "Defina a nova senha (mínimo de 8 caracteres). A senha anterior deixa de valer."
-                  : "Defina uma senha (mínimo de 8 caracteres) para concluir a ativação da sua conta."}
+                  ? `Defina a nova senha (mínimo de ${MIN_PASSWORD_LENGTH} caracteres). A senha anterior deixa de valer.`
+                  : `Defina uma senha (mínimo de ${MIN_PASSWORD_LENGTH} caracteres) para concluir a ativação da sua conta.`}
               </p>
 
               <AuthField label="Nova senha">
@@ -325,7 +517,7 @@ export default function AtivarContaPage() {
                   type="password"
                   autoComplete="new-password"
                   required
-                  minLength={8}
+                  minLength={MIN_PASSWORD_LENGTH}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   disabled={submitting}
@@ -339,7 +531,7 @@ export default function AtivarContaPage() {
                   type="password"
                   autoComplete="new-password"
                   required
-                  minLength={8}
+                  minLength={MIN_PASSWORD_LENGTH}
                   value={confirmPassword}
                   onChange={(e) => setConfirmPassword(e.target.value)}
                   disabled={submitting}

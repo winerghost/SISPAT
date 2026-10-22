@@ -233,11 +233,11 @@ test.describe("verificações manuais automatizadas", () => {
 
   test("ativar conta: validação anunciada e associada", async ({ page }) => {
     await installMocks(page, { role: "USER" });
-    await seedSession(page, { role: "USER" });
-    await page.goto("/ativar-conta");
+    await page.goto("/ativar-conta?token_hash=hash-valido-e2e&type=invite");
     await waitForHydration(page);
-    await page.getByLabel("Nova senha").fill("12345678");
-    await page.getByLabel("Confirmar senha").fill("87654321");
+    await page.getByRole("button", { name: "Continuar" }).click();
+    await page.getByLabel("Nova senha").fill("senha-sintetica-1");
+    await page.getByLabel("Confirmar senha").fill("senha-sintetica-2");
     await page.getByRole("button", { name: "Ativar conta" }).click();
     await expect(page.getByRole("alert").filter({ hasText: "As senhas não coincidem." })).toBeVisible();
     await expect(page.getByLabel("Confirmar senha")).toHaveAccessibleDescription("As senhas não coincidem.");

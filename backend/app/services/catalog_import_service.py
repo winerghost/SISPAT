@@ -81,6 +81,7 @@ KINDS = ("units", "rooms", "people")
 SOURCE_PREFIX = "catalog:"
 _SELECTABLE = ("NOVO", "EXISTENTE")
 _ALIAS_MAX = 32
+MAX_LISTED_FAILURES = 100  # falhas detalhadas na resposta; o total vai em `falhas_total`
 _ADVISORY_NAMESPACE = 0x5350_4341  # "SPCA"
 
 # Cabeçalhos exigidos por cadastro (forma canônica; alternativas por "|").
@@ -697,6 +698,8 @@ class CatalogImportService:
         eligible = [i for i in all_items if i.id in wanted and i.classification in _SELECTABLE]
         eligible.sort(key=lambda i: ((i.normalized_values or {}).get("_row") or 0, str(i.id)))
         ignorados = len(wanted - {i.id for i in eligible})
+        nao_gravados = self._unwritten_summary(all_items, wanted)
+        inalterados = 0
 
         sync_job = SyncJob(
             id=uuid4(),
@@ -727,6 +730,8 @@ class CatalogImportService:
                     savepoint.commit()
                     created += d_created
                     updated += d_updated
+                    if not (d_created or d_updated):
+                        inalterados += 1
                 else:
                     savepoint.rollback()
             nv = item.normalized_values or {}
@@ -784,7 +789,9 @@ class CatalogImportService:
                     "created": created,
                     "updated": updated,
                     "ignorados": ignorados,
+                    "inalterados": inalterados,
                     "falhas": len(falhas),
+                    "job_status": sync_job.status,
                 },
                 result="FALHA" if sync_job.status == "FALHOU" else "SUCESSO",
             )
@@ -792,10 +799,42 @@ class CatalogImportService:
         self._db.commit()
         return {
             "sync_job_id": sync_job.id,
+            "status": sync_job.status,
             "created": created,
             "updated": updated,
             "ignorados": ignorados,
-            "falhas": falhas,
+            "inalterados": inalterados,
+            "nao_gravados": nao_gravados,
+            "falhas_total": len(falhas),
+            "falhas": falhas[:MAX_LISTED_FAILURES],
+        }
+
+    @staticmethod
+    def _unwritten_summary(items: list[ImportPreviewItem], wanted: set[uuid.UUID]) -> dict[str, Any]:
+        """Itens da prévia que esta confirmação NÃO grava, por classificação e motivo.
+
+        Só contadores e códigos (sem PII). `por_motivo` usa os códigos de
+        pendência (`unidade_sem_alias` etc.) e `duplicado_na_origem` para DUPLICADO.
+        """
+        by_class = {"DUPLICADO": 0, "INVALIDO": 0, "CONFLITANTE": 0}
+        by_reason: dict[str, int] = {}
+        not_selected = 0
+        for item in items:
+            if item.classification in _SELECTABLE:
+                if item.id not in wanted:
+                    not_selected += 1
+                continue
+            by_class[item.classification] = by_class.get(item.classification, 0) + 1
+            codes = [c for c in ((item.normalized_values or {}).get("_pend") or []) if c in PENDING_CODES]
+            if not codes:
+                codes = ["duplicado_na_origem"] if item.classification == "DUPLICADO" else ["outro"]
+            for code in codes:
+                by_reason[code] = by_reason.get(code, 0) + 1
+        return {
+            "total": sum(by_class.values()),
+            "por_classificacao": by_class,
+            "por_motivo": by_reason,
+            "nao_selecionados": not_selected,
         }
 
     # --- aplicação por cadastro (revalida contra o estado ATUAL) ----------

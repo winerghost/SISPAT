@@ -1,8 +1,9 @@
+import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
 
 import { CATALOG_PREVIEW_IDS } from "./support/catalog-import-mocks";
 import { expectNoXss, installMocks, seedSession, waitForHydration, type MockOptions, type MockState } from "./support/mocks";
-import { CADASTROS_PATH, generateCatalogPreview } from "./support/screens";
+import { CADASTROS_PATH, generateCatalogPreview, waitForAnimations } from "./support/screens";
 
 // =============================================================================
 // Importação dos cadastros de apoio (unidades, salas, pessoas) e pendências de
@@ -16,6 +17,13 @@ import { CADASTROS_PATH, generateCatalogPreview } from "./support/screens";
 test.use({ viewport: { width: 1366, height: 768 } });
 
 const BENS_PATH = "/administracao/importacao/google-sheets";
+const AXE_TAGS = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"];
+
+async function axeViolations(page: Page): Promise<string[]> {
+  await waitForAnimations(page);
+  const results = await new AxeBuilder({ page }).withTags(AXE_TAGS).exclude("nextjs-portal").analyze();
+  return results.violations.map((v) => v.id);
+}
 
 async function open(page: Page, path: string, opts: MockOptions = { role: "ADM" }): Promise<MockState> {
   const state = await installMocks(page, opts);
@@ -231,7 +239,9 @@ test.describe("cadastros — seleção e confirmação em massa", () => {
     await expect(result.locator("[data-stat=Criados]")).toHaveText("25");
     await expect(result.locator("[data-stat=Atualizados]")).toHaveText("1");
     await expect(result.locator("[data-stat=Ignorados]")).toHaveText("0");
-    await expect(page.getByText("Importação concluída: 25 criado(s), 1 atualizado(s), 0 ignorado(s).")).toBeVisible();
+    await expect(result.locator("[data-stat=Salvos]")).toHaveText("26");
+    await expect(result.locator("[data-stat=Rejeitados]")).toHaveText("0");
+    await expect(page.getByText("Importação concluída: 25 criado(s), 1 atualizado(s), 0 inalterado(s), 0 ignorado(s).")).toBeVisible();
 
     const confirm = calls(state, "POST", `/v1/catalog-imports/${CATALOG_PREVIEW_IDS.people}/confirm`);
     expect(confirm).toHaveLength(1);
@@ -349,12 +359,66 @@ test.describe("cadastros — seleção e confirmação em massa", () => {
     const dialog = await openConfirm(page, "Confirmar importação de unidades");
     await dialog.getByRole("button", { name: "Confirmar importação" }).click();
     const result = page.getByTestId("catalog-import-result");
-    await expect(result).toContainText("concluída com falhas");
+    await expect(result).toHaveAttribute("data-outcome", "partial");
+    await expect(result).toContainText("Importação parcial");
     await expect(result.locator("[data-stat=Criados]")).toHaveText("1");
-    await expect(result.locator("[data-stat=Falhas]")).toHaveText("1");
+    await expect(result.locator("[data-stat=Rejeitados]")).toHaveText("1");
+    await expect(page.getByTestId("catalog-import-status")).toContainText("Importação parcial");
     await expect(page.getByTestId("catalog-import-failures")).toContainText(
       "Linha 2 — Unidade Estadual Sintética de Teste: Falha sintética ao gravar este item.",
     );
+    // Linhas inválidas/duplicadas da prévia são explicadas por classificação e motivo.
+    await expect(page.getByTestId("catalog-import-unwritten")).toContainText("Inválidos: 1");
+    await expect(page.getByTestId("catalog-import-unwritten")).toContainText("Duplicados: 1");
+    await expect(page.getByTestId("catalog-import-unwritten-reasons")).toContainText("Sigla vazia ou longa demais: 1");
+    expect(await axeViolations(page)).toEqual([]);
+  });
+
+  test("falha total (HTTP 200, created=0, só rejeitados): sem verde, sem 'gravados', toast de erro", async ({ page }) => {
+    await open(page, CADASTROS_PATH, { role: "ADM", catalogImport: { allFail: true } });
+    await generateCatalogPreview(page, "units");
+    const dialog = await openConfirm(page, "Confirmar importação de unidades");
+    await dialog.getByRole("button", { name: "Confirmar importação" }).click();
+    const result = page.getByTestId("catalog-import-result");
+    await expect(result).toHaveAttribute("data-outcome", "failure");
+    await expect(result).toContainText("Nenhum item foi salvo");
+    await expect(result).not.toContainText(/gravados|concluída com sucesso/i);
+    await expect(result.locator("[data-stat=Salvos]")).toHaveText("0");
+    await expect(result.locator("[data-stat=Rejeitados]")).toHaveText("3");
+    await expect(result.locator("[data-stat=Criados]")).toHaveText("0");
+    await expect(page.getByTestId("catalog-import-failures").getByRole("listitem")).toHaveCount(3);
+    // Indicador de erro, nunca "Importação concluída"; borda de sucesso ausente.
+    await expect(page.getByTestId("catalog-import-status")).toContainText("Nenhum item salvo");
+    await expect(page.getByTestId("catalog-import-status")).not.toContainText("concluída");
+    await expect(result).not.toHaveClass(/border-metric-green/);
+    const toast = page.locator("[data-sonner-toast][data-type=error]");
+    await expect(toast).toContainText("Nenhum item foi salvo: 3 rejeitado(s)");
+    await expect(page.locator("[data-sonner-toast][data-type=success]")).toHaveCount(0);
+    expect(await axeViolations(page)).toEqual([]);
+  });
+
+  test("salas: pendência unidade_sem_alias avisada na prévia e no resultado (sem verde de sucesso falso)", async ({ page }) => {
+    await open(page, CADASTROS_PATH);
+    await generateCatalogPreview(page, "rooms");
+    await expect(page.getByTestId("catalog-import-alias-dependency")).toContainText(
+      "1 linha(s) estão sem alias e NÃO serão gravadas",
+    );
+    const dialog = await openConfirm(page, "Confirmar importação de salas");
+    await dialog.getByRole("button", { name: "Confirmar importação" }).click();
+    const result = page.getByTestId("catalog-import-result");
+    await expect(result).toHaveAttribute("data-outcome", "success");
+    await expect(page.getByTestId("catalog-import-alias-warning")).toContainText(
+      "1 linha(s) não foram gravadas porque a sigla da coluna UNIDADE não tem alias",
+    );
+    await expect(result.locator("[data-unwritten-reason=unidade_sem_alias]")).toContainText("1");
+    await expect(page.getByTestId("catalog-import-unwritten")).toContainText("Conflitantes: 1");
+    expect(await axeViolations(page)).toEqual([]);
+  });
+
+  test("unidades: sem aviso de dependência de alias", async ({ page }) => {
+    await open(page, CADASTROS_PATH);
+    await generateCatalogPreview(page, "units");
+    await expect(page.getByTestId("catalog-import-alias-dependency")).toHaveCount(0);
   });
 
   test("diálogo não fecha durante a gravação (Esc ignorado) e o botão mostra carregamento", async ({ page }) => {

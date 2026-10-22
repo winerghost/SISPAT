@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 
-import { EMPTY_BLOCKS, KPI_CARDS, defaultDashboard, emptyDashboard } from "./support/dashboard-mocks";
+import { EMPTY_BLOCKS, KPI_CARDS, defaultDashboard, emptyDashboard, emptyTech } from "./support/dashboard-mocks";
 import {
   installMocks,
   seedSession,
@@ -151,7 +151,7 @@ test.describe("dashboard", () => {
   });
 
   test("sem bens: estados vazios honestos, sem gráficos nem números de exemplo", async ({ page }) => {
-    await open(page, "/dashboard", { role: "RH", dashboard: emptyDashboard() });
+    await open(page, "/dashboard", { role: "RH", dashboard: emptyDashboard(), dashboardTech: emptyTech() });
     await expect(page.locator("[data-dashboard-empty]")).toHaveCount(EMPTY_BLOCKS, { timeout: 15_000 });
     await expect(block(page, "por-unidade")).toContainText("Nenhum bem cadastrado");
     await expect(block(page, "por-situacao")).toContainText("Nenhum bem para classificar");
@@ -223,10 +223,10 @@ test.describe("navegação", () => {
     await expect(nav.getByRole("link", { name: "Dashboard" })).toHaveAttribute("aria-current", "page");
   });
 
-  test("painel vazio da Home linka para /dashboard", async ({ page }) => {
+  test("atalho da Home linka para /dashboard", async ({ page }) => {
     await open(page, "/", { role: "USER" });
-    await page.getByRole("link", { name: /Ver o dashboard completo/ }).click();
-    await expect(page).toHaveURL(/\/dashboard$/);
+    await page.getByRole("link", { name: "Abrir o Dashboard" }).click();
+    await expect(page).toHaveURL(/\/dashboard$/, { timeout: 45_000 }); // 1ª compilação do `next dev`
   });
 
   for (const role of ["ADM", "USER", "RH"] as const) {

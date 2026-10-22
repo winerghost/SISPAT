@@ -80,6 +80,31 @@ class Asset(TimestampMixin, Base):
             postgresql_where=text("deleted_at IS NULL"),
             sqlite_where=text("deleted_at IS NULL"),
         ),
+        # Classificação de bens de TI (migração 0015_asset_tech_classification).
+        # NULL = "não informado" (nunca há valor padrão fictício).
+        CheckConstraint(
+            "asset_category IS NULL OR asset_category IN "
+            "('TECNOLOGIA','MOBILIARIO','VEICULO','EQUIPAMENTO','OUTROS')",
+            name="ck_assets_asset_category",
+        ),
+        CheckConstraint(
+            "tech_type IS NULL OR (asset_category = 'TECNOLOGIA' AND tech_type IN "
+            "('COMPUTADOR','NOTEBOOK','MONITOR','IMPRESSORA','OUTRO_TI'))",
+            name="ck_assets_tech_type",
+        ),
+        CheckConstraint(
+            "operational_status IS NULL OR operational_status IN "
+            "('EM_USO','ESTOQUE','MANUTENCAO','BAIXADO')",
+            name="ck_assets_operational_status",
+        ),
+        Index(
+            "ix_assets_category_active",
+            "asset_category",
+            "tech_type",
+            "unit_id",
+            postgresql_where=text("deleted_at IS NULL AND asset_category IS NOT NULL"),
+            sqlite_where=text("deleted_at IS NULL AND asset_category IS NOT NULL"),
+        ),
         # SEC-AST-01: o índice único parcial `uq_assets_patrimony_number_active`
         # (lower(btrim(patrimony_number)) WHERE deleted_at IS NULL) existe só na
         # migração 0009_uniq_idx_assets_movements. NÃO é declarado aqui
@@ -98,6 +123,11 @@ class Asset(TimestampMixin, Base):
     # Vínculo/situação do bem (ex.: Servidor, Terceirizado, Ocioso): valor da
     # 1ª coluna RESPONSAVEL da planilha; gerenciado pela importação.
     bond_status: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Classificação (vocabulário fechado em `app.services.asset_classification`).
+    # NULL = "não informado": a importação só preenche quando nula.
+    asset_category: Mapped[str | None] = mapped_column(Text, nullable=True)
+    tech_type: Mapped[str | None] = mapped_column(Text, nullable=True)
+    operational_status: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     unit_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("units.id", ondelete="RESTRICT"), nullable=False

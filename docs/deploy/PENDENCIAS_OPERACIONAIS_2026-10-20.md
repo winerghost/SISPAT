@@ -176,11 +176,54 @@ ativo; o link do e-mail deve ser
 clique em "Continuar", defina a nova senha: deve aparecer "Senha redefinida"
 (sem erro) e o login com a senha nova deve funcionar.
 
-Limite conhecido: um ADM com TOTP ativo entra na recuperação com sessão AAL1;
-se o Supabase exigir AAL2 para trocar a senha, a página mostra "Não foi
-possível redefinir a senha agora". Teste com um ADM de teste antes de
-depender disso (para ADM, o caminho previsto é o reset de MFA + senha por
-outro ADM).
+Um usuário com TOTP ativo entra na recuperação com sessão AAL1. **Corrigido
+em 2026-10-22:** a página detecta (`mfa.getAuthenticatorAssuranceLevel`) e
+pede o código do autenticador ANTES do formulário de senha; se mesmo assim o
+Supabase responder `insufficient_aal` na troca, ela pede o código e repete a
+troca. Nada do código é armazenado.
+
+### Correção 2026-10-22: convite caía no Site URL e erros crus (requer rebuild do backend E do frontend)
+
+Causa raiz: `invite_user_by_email` mandava `redirect_to` no CORPO do
+`POST /auth/v1/invite`; o GoTrue só lê `redirect_to` da QUERY STRING. O
+e-mail saía com `{{ .RedirectTo }}` = Site URL (raiz), sem `/ativar-conta`, e a
+raiz protegida mandava ao login. Agora o backend usa a query (como já fazia a
+recuperação) e a raiz repassa `/?token_hash=&type=invite|recovery` para
+`/ativar-conta` como rede de segurança (links de convites já enviados passam
+a funcionar). A página também mostra mensagens fixas em PT-BR para
+`weak_password`, `same_password`, `insufficient_aal`, link usado/expirado, e
+exige 12 caracteres no mínimo (igual à política do passo 1.4; mantenha o
+mínimo do Supabase em 12). Detalhes: `docs/ux/ATIVACAO_CONVITE.md`.
+
+Passos manuais no Supabase (painel; o repositório não os altera):
+
+1. Authentication › URL Configuration: Site URL `https://ueato.revizzicar.com.br`
+   e Redirect URLs somente `https://ueato.revizzicar.com.br/ativar-conta`
+   (sem curinga, sem localhost). Sem o item na allow-list o Supabase ignora o
+   `redirect_to` e volta ao Site URL (a raiz agora repassa, mas o ideal é o
+   link apontar direto para `/ativar-conta`).
+2. Templates "Invite user" e "Reset Password": links exatamente como em 1.2 e
+   1.2b (`{{ .RedirectTo }}?token_hash={{ .TokenHash }}&type=invite|recovery`).
+   Convites ANTIGOS já enviados (com a raiz) funcionam pela rede de segurança,
+   se ainda não expiraram; os expirados exigem novo convite.
+3. Authentication › Attack Protection / Password: tamanho mínimo 12 (e
+   senhas vazadas, se o plano permitir).
+4. `.env` da VPS: `INVITE_ALLOWED_REDIRECT_URLS=https://ueato.revizzicar.com.br/ativar-conta`
+   (1º item) e `PASSWORD_RESET_REDIRECT_URL=https://ueato.revizzicar.com.br/ativar-conta`.
+   Nenhuma variável nova.
+
+Rebuild (nomes dos serviços conferidos em `docker-compose.yml`: `backend`,
+`frontend`):
+
+```
+cd /opt/SISPAT && docker compose build backend frontend && docker compose up -d backend frontend
+```
+
+Como verificar: convide um e-mail de teste; o link do e-mail deve ser
+`https://ueato.revizzicar.com.br/ativar-conta?token_hash=...&type=invite`
+(antes: raiz sem caminho). Teste também uma senha curta/fraca (mensagem em
+PT-BR) e, com um usuário de teste com TOTP, a redefinição de senha (deve pedir
+o código antes da senha).
 
 ---
 

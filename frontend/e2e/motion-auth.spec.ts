@@ -190,14 +190,14 @@ test.describe("prefers-reduced-motion", () => {
 test("ativar conta: indicador de etapas e erro animado com role=alert", async ({ page }) => {
   const errors = trackConsoleErrors(page);
   await installMocks(page, { role: "USER" });
-  await seedSession(page, { role: "USER" });
-  await page.goto("/ativar-conta");
+  await page.goto("/ativar-conta?token_hash=hash-valido-e2e&type=invite");
   await waitForHydration(page);
   const steps = page.getByRole("list", { name: "Etapas da ativação" });
   await expect(steps).toBeVisible();
+  await page.getByRole("button", { name: "Continuar" }).click();
   await expect(steps.locator("[aria-current='step']")).toContainText("Definir senha");
-  await page.getByLabel("Nova senha").fill("12345678");
-  await page.getByLabel("Confirmar senha").fill("87654321");
+  await page.getByLabel("Nova senha").fill("senha-sintetica-1");
+  await page.getByLabel("Confirmar senha").fill("senha-sintetica-2");
   await page.getByRole("button", { name: "Ativar conta" }).click();
   await expect(page.locator("#ativar-erro[role=alert]")).toHaveText("As senhas não coincidem.");
   await expect(page.getByLabel("Confirmar senha")).toHaveAccessibleDescription("As senhas não coincidem.");

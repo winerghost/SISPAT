@@ -241,7 +241,8 @@ class DashboardChartsPatch(_StrictModel):
 
 # Allowlist FECHADA de painéis do dashboard (ordem = ordem padrão de exibição).
 DashboardPanelId = Literal[
-    "kpis", "units", "status", "monthly", "location", "bond", "pending", "rooms", "inventory"
+    "kpis", "units", "status", "monthly", "location", "bond", "pending", "rooms", "inventory",
+    "tech_summary", "tech_category", "tech_units", "tech_status", "tech_no_owner", "tech_age",
 ]
 DASHBOARD_PANEL_IDS: tuple[str, ...] = get_args(DashboardPanelId)
 _MAX_PANELS = len(DASHBOARD_PANEL_IDS)
@@ -251,7 +252,7 @@ class DashboardLayoutPatch(_StrictModel):
     """`dashboard_layout` parcial: ordem e painéis ocultos.
 
     Ausente = manter; `null` = restaurar o padrão da chave. Cada lista só
-    aceita IDs da allowlist, sem repetição, até 9 itens. `order` parcial é
+    aceita IDs da allowlist, sem repetição, até 15 itens. `order` parcial é
     aceito (os demais painéis seguem na ordem padrão). `hidden` não pode
     ocultar todos os painéis.
     """

@@ -77,7 +77,7 @@ const counterText = (page: Page, metric: string) =>
 
 async function generatePreview(page: Page): Promise<void> {
   await page.getByRole("button", { name: "Pré-visualizar Importação" }).click();
-  await expect(page.getByText(`Página 1 de 1 — ${PREVIEW_ITEMS.length} item(ns)`)).toBeVisible();
+  await expect(page.getByText(`Exibindo 1–${PREVIEW_ITEMS.length} de ${PREVIEW_ITEMS.length} item(ns)`)).toBeVisible();
 }
 
 test.use({ viewport: { width: 1366, height: 768 } });
@@ -141,12 +141,12 @@ test.describe("importação — estados e contadores", () => {
     await page.getByRole("button", { name: "Inválido" }).click();
     await expect(table).toHaveAttribute("aria-busy", "true");
     await expect(rows).toHaveCount(PREVIEW_ITEMS.length);
-    await expect(page.getByRole("status").filter({ hasText: "Atualizando…" })).toBeVisible();
+    // O texto "Atualizando…" saiu com a PaginationBar; o estado ocupado segue em aria-busy (acima).
 
     release();
     await expect(rows).toHaveCount(1);
     await expect(table).not.toHaveAttribute("aria-busy", "true");
-    await expect(page.getByText("Página 1 de 1 — 1 item(ns)")).toBeVisible();
+    await expect(page.getByText("Exibindo 1–1 de 1 item(ns)")).toBeVisible();
     await waitForAnimations(page);
     // Termina estável: opacidade 1 nas linhas.
     expect(await rows.first().evaluate((el) => getComputedStyle(el).opacity)).toBe("1");
@@ -384,7 +384,7 @@ test("sem erros de console/hidratação no fluxo de importação e usuários", a
   await openAs(page, IMPORT_PATH);
   await generatePreview(page);
   await page.getByRole("button", { name: "Inválido" }).click();
-  await expect(page.getByText("Página 1 de 1 — 1 item(ns)")).toBeVisible();
+  await expect(page.getByText("Exibindo 1–1 de 1 item(ns)")).toBeVisible();
   await page.goto(USERS_PATH);
   await waitForHydration(page);
   await expect(page.getByRole("table")).toBeVisible();

@@ -114,6 +114,92 @@ class AquisicoesQuery(DashboardFilters):
     meses: int = Field(default=MESES_DEFAULT, ge=MESES_MIN, le=MESES_MAX)
 
 
+# Vocabulário fechado de classificação (espelha `app.services.asset_classification`).
+CategoriaFiltro = Literal[
+    "TECNOLOGIA", "MOBILIARIO", "VEICULO", "EQUIPAMENTO", "OUTROS", "NAO_CLASSIFICADO"
+]
+TipoTiFiltro = Literal["COMPUTADOR", "NOTEBOOK", "MONITOR", "IMPRESSORA", "OUTRO_TI", "NAO_INFORMADO"]
+StatusOperacionalFiltro = Literal["EM_USO", "ESTOQUE", "MANUTENCAO", "BAIXADO", "NAO_INFORMADO"]
+
+
+class TechFilters(DashboardFilters):
+    """Filtros dos painéis de Tecnologia: os comuns do dashboard + classificação.
+
+    `categoria`, `tipo_ti` e `status` são Literal fechados (valor fora da lista
+    -> 400 sem eco). O período (`registrado_desde/ate`, <= 5 anos) herda a
+    validação de `DashboardFilters`.
+    """
+
+    categoria: CategoriaFiltro | None = None
+    tipo_ti: TipoTiFiltro | None = None
+    status: StatusOperacionalFiltro | None = None
+
+    def active_names(self) -> list[str]:
+        """NOMES dos filtros ativos, na ordem do schema (nunca os valores)."""
+        return [name for name in type(self).model_fields if getattr(self, name) is not None]
+
+
+ExportFormat = Literal["csv", "xlsx"]
+
+
+class TechExportQuery(TechFilters):
+    format: ExportFormat = "csv"
+
+    def active_names(self) -> list[str]:
+        return [n for n in super().active_names() if n != "format"]
+
+
+class TechCountItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(pattern=r"^[A-Z_]{1,32}$")
+    label: str = Field(max_length=64)
+    value: StrictInt = Field(ge=1)
+
+
+class TechResumoOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    total_bens: StrictInt = Field(ge=0)
+    tecnologia: StrictInt = Field(ge=0)
+    nao_classificados: StrictInt = Field(ge=0)
+    tecnologia_sem_responsavel: StrictInt = Field(ge=0)
+    tecnologia_sem_tipo: StrictInt = Field(ge=0)
+    tecnologia_sem_status: StrictInt = Field(ge=0)
+    filtros_aplicados: list[str] = Field(default_factory=list, max_length=20)
+
+
+class TechCategoriaOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    categorias: list[TechCountItem] = Field(max_length=8)
+    tipos_ti: list[TechCountItem] = Field(max_length=8)
+
+
+class TechSemResponsavelUnidade(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    unidade: str = Field(max_length=64)
+    value: StrictInt = Field(ge=1)
+
+
+class TechSemResponsavelOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    tecnologia: StrictInt = Field(ge=0)
+    sem_responsavel: StrictInt = Field(ge=0)
+    percentual: float | None = None
+    por_unidade: list[TechSemResponsavelUnidade] = Field(max_length=20)
+
+
+class TechTempoItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(pattern=r"^[a-z0-9_]{1,24}$")
+    label: str = Field(max_length=48)
+    value: StrictInt = Field(ge=1)
+
+
 class _Out(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

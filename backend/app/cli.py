@@ -3,6 +3,8 @@
 Uso na VPS (container do backend):
     docker compose exec backend flask purge-import-previews --dry-run
     docker compose exec backend flask purge-import-previews --older-than-days 7
+    docker compose exec backend flask classify-assets            # dry-run (padrão)
+    docker compose exec backend flask classify-assets --apply    # grava (autorização!)
 
 Nenhum comando imprime dados de bens/pessoas, segredos ou a URL do banco.
 """
@@ -14,6 +16,7 @@ import click
 from flask import Flask
 
 from app.database.session import get_db_session
+from app.services.asset_classification_backfill import classify_existing_assets
 from app.services.import_preview_purge import (
     DEFAULT_OLDER_THAN_DAYS,
     MAX_OLDER_THAN_DAYS,
@@ -48,5 +51,39 @@ def purge_import_previews_command(older_than_days: int, dry_run: bool) -> None:
     )
 
 
+@click.command("classify-assets")
+@click.option(
+    "--apply",
+    "apply_changes",
+    is_flag=True,
+    default=False,
+    help="Grava a classificação. Sem esta opção é dry-run (só conta; nada é gravado).",
+)
+def classify_assets_command(apply_changes: bool) -> None:
+    """Classifica bens ativos SEM categoria pela regra da descrição (dry-run por padrão).
+
+    Nunca sobrescreve classificação existente; descrição sem regra continua
+    "não classificada". Requer a migração 0015 aplicada (só com autorização).
+    """
+    try:
+        with get_db_session() as db:
+            report = classify_existing_assets(db, apply=apply_changes)
+    except Exception as exc:  # transação já desfeita por get_db_session
+        logger.error("classify-assets falhou: %s", type(exc).__name__)
+        raise click.ClickException(f"Falha ao classificar bens ({type(exc).__name__}).") from None
+    verb = "seriam classificados" if report.dry_run else "classificados"
+    click.echo(
+        f"Bens sem categoria: {report.candidates}; {verb}: {report.classified}; "
+        f"sem regra (continuam não classificados): {report.unmatched}."
+    )
+    for name, count in sorted(report.by_category.items()):
+        click.echo(f"  {name}: {count}")
+    for name, count in sorted(report.by_tech_type.items()):
+        click.echo(f"  TI/{name}: {count}")
+    if report.dry_run:
+        click.echo("Dry-run: nada foi gravado. Use --apply para gravar.")
+
+
 def register_cli(app: Flask) -> None:
     app.cli.add_command(purge_import_previews_command)
+    app.cli.add_command(classify_assets_command)

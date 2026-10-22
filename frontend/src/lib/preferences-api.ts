@@ -71,14 +71,23 @@ export const DASHBOARD_PANEL_IDS = [
   "pending",
   "rooms",
   "inventory",
+  "tech_summary",
+  "tech_category",
+  "tech_units",
+  "tech_status",
+  "tech_no_owner",
+  "tech_age",
 ] as const;
 
 export type DashboardPanelId = (typeof DASHBOARD_PANEL_IDS)[number];
 
+const LEGACY_PANEL_COUNT = 9;
+const LEGACY_PANEL_IDS: readonly DashboardPanelId[] = DASHBOARD_PANEL_IDS.slice(0, LEGACY_PANEL_COUNT);
+
 export interface DashboardLayout {
-  /** Os 9 IDs, na ordem efetiva. */
+  /** Todos os IDs (15), na ordem efetiva. */
   order: DashboardPanelId[];
-  /** IDs ocultos (nunca os 9). */
+  /** IDs ocultos (nunca todos). */
   hidden: DashboardPanelId[];
 }
 
@@ -155,10 +164,15 @@ function parseDashboardLayout(value: unknown): DashboardLayout | null {
   }
   if (typeof value !== "object" || Array.isArray(value)) return null;
   const candidate = value as Record<string, unknown>;
-  const order = parsePanelList(candidate.order);
+  const partial = parsePanelList(candidate.order);
   const hidden = parsePanelList(candidate.hidden ?? []);
-  if (!order || order.length !== DASHBOARD_PANEL_IDS.length || !hidden) return null;
-  if (hidden.length >= DASHBOARD_PANEL_IDS.length) return null; // nunca os 9 ocultos
+  if (!partial || !hidden) return null;
+  // Backend anterior devolve só os 9 painéis originais: os novos entram ao fim, na ordem
+  // padrão. Qualquer outra ordem incompleta é resposta inválida.
+  const legacy = partial.length === LEGACY_PANEL_COUNT && partial.every((id) => LEGACY_PANEL_IDS.includes(id));
+  if (partial.length !== DASHBOARD_PANEL_IDS.length && !legacy) return null;
+  const order = [...partial, ...DASHBOARD_PANEL_IDS.filter((id) => !partial.includes(id))];
+  if (hidden.length >= DASHBOARD_PANEL_IDS.length) return null; // nunca todos ocultos
   return { order, hidden };
 }
 

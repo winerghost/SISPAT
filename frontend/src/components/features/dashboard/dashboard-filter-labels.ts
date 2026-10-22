@@ -11,9 +11,12 @@ import {
   TIPO_NAO_CLASSIFICADO,
   dashboardFilterEntries,
   type DashboardFilterKey,
+  type CategoriaFilterValue,
   type DashboardFilters,
   type InventoryFilterValue,
   type LocatedFilterValue,
+  type StatusFilterValue,
+  type TipoTiFilterValue,
 } from "@/lib/dashboard-api";
 
 import { humanizeCode } from "./dashboard-transform";
@@ -40,6 +43,36 @@ export const FILTER_NAMES: Record<DashboardFilterKey, string> = {
   registrado_ate: "Registrado até",
   inventario: "Inventário",
   movimentacao_pendente: "Movimentação pendente",
+  categoria: "Categoria",
+  tipo_ti: "Tipo de TI",
+  status: "Situação operacional",
+};
+
+/** Rótulos pt-BR do vocabulário fechado de classificação (espelha o backend). */
+export const CATEGORIA_LABEL: Record<CategoriaFilterValue, string> = {
+  TECNOLOGIA: "Tecnologia",
+  MOBILIARIO: "Mobiliário",
+  VEICULO: "Veículo",
+  EQUIPAMENTO: "Equipamento",
+  OUTROS: "Outros",
+  NAO_CLASSIFICADO: "Não classificado",
+};
+
+export const TIPO_TI_LABEL: Record<TipoTiFilterValue, string> = {
+  COMPUTADOR: "Computador",
+  NOTEBOOK: "Notebook",
+  MONITOR: "Monitor",
+  IMPRESSORA: "Impressora",
+  OUTRO_TI: "Outro item de TI",
+  NAO_INFORMADO: "Tipo não informado",
+};
+
+export const STATUS_OPERACIONAL_LABEL: Record<StatusFilterValue, string> = {
+  EM_USO: "Em uso",
+  ESTOQUE: "Em estoque",
+  MANUTENCAO: "Em manutenção",
+  BAIXADO: "Baixado",
+  NAO_INFORMADO: "Não informado",
 };
 
 export const LOCATED_FILTER_LABEL: Record<LocatedFilterValue, string> = {
@@ -133,6 +166,15 @@ export function describeFilters(filters: DashboardFilters, lookups: FilterLookup
       case "registrado_desde":
       case "registrado_ate":
         text = formatCalendarDate(value) ?? value;
+        break;
+      case "categoria":
+        text = CATEGORIA_LABEL[value as CategoriaFilterValue];
+        break;
+      case "tipo_ti":
+        text = TIPO_TI_LABEL[value as TipoTiFilterValue];
+        break;
+      case "status":
+        text = STATUS_OPERACIONAL_LABEL[value as StatusFilterValue];
         break;
     }
     return { key, name: FILTER_NAMES[key], value: text };

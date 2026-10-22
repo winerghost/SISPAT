@@ -8,8 +8,11 @@ import { defaultReportsState, handleReports, type ReportsMockState } from "./rep
 import {
   defaultDashboard,
   handleDashboard,
+  defaultTech,
   type DashboardEndpoint,
   type DashboardMockData,
+  type TechEndpoint,
+  type TechMockData,
 } from "./dashboard-mocks";
 import { defaultAssets, handleAssets, type AssetMockState } from "./asset-mocks";
 import { defaultMovements, handleMovements, type MovementMockState } from "./movement-mocks";
@@ -105,7 +108,9 @@ export interface MockOptions {
   /** Respostas de `GET /api/v1/dashboard/*` (resumo, por-unidade, ..., inventario, tipos; padrão: dados sintéticos). */
   dashboard?: Partial<DashboardMockData>;
   /** Status HTTP forçado por endpoint do dashboard (ex.: `{ "por-unidade": 500 }`); testes podem mutar `state.dashboardStatus`. */
-  dashboardStatus?: Partial<Record<DashboardEndpoint, number>>;
+  dashboardStatus?: Partial<Record<DashboardEndpoint | TechEndpoint, number>>;
+  /** Respostas de `GET /api/v1/dashboard/tecnologia/*` (padrão: dados sintéticos de Tecnologia). */
+  dashboardTech?: TechMockData;
   /** Resposta de `GET /api/v1/ai/insights` (padrão: status ok com os 3 tipos). */
   aiInsights?: AiInsightsMock;
   /** Status HTTP forçado em `GET /api/v1/ai/insights` (ex.: 500, 403). */
@@ -128,6 +133,10 @@ export interface MockOptions {
   usersRateLimitRetryAfter?: number;
   /** Status de `POST /security/mfa/factor-added-notice` (padrão 204; ex.: 500 testa o best-effort). */
   factorNoticeStatus?: number;
+  /** Erros de `PUT /auth/v1/user` (troca de senha) consumidos em ordem, um por chamada; depois responde 200. */
+  userUpdateErrors?: UserUpdateErrorMock[];
+  /** A sessão criada por `/auth/v1/verify` já traz o fator TOTP verificado (nextLevel aal2 => passo TOTP). */
+  verifySessionHasFactor?: boolean;
   /** Cadastros de apoio: omite a chave `phone` (como o backend faz para quem não é ADM). */
   catalogHidePhone?: boolean;
   /** Cadastros de apoio: omite a chave `address` das unidades. */
@@ -140,6 +149,8 @@ export interface MockOptions {
   lookupListStatus?: number;
   /** `GET /v1/assets` responde com este status de erro (ex.: 403, 404, 500); testes também podem mudar `state.forceListStatus`. */
   assetsListStatus?: number;
+  /** Acrescenta N bens sintéticos (unidade 1) à lista — testes de rolagem com 100/200 por página. */
+  assetsBulk?: number;
   /** `GET /v1/assets/bond-statuses` responde com este status de erro (filtro "Vínculo" indisponível). */
   assetBondStatusesStatus?: number;
   /** `GET /v1/movements` responde com este status de erro (ex.: 403, 404, 500); testes também podem mudar `state.forceMovementListStatus`. */
@@ -285,6 +296,12 @@ export const DASHBOARD_PANEL_IDS = [
   "pending",
   "rooms",
   "inventory",
+  "tech_summary",
+  "tech_category",
+  "tech_units",
+  "tech_status",
+  "tech_no_owner",
+  "tech_age",
 ] as const;
 export type DashboardPanelIdMock = (typeof DASHBOARD_PANEL_IDS)[number];
 
@@ -320,7 +337,7 @@ function isPanelList(value: unknown): value is string[] {
 
 /**
  * Aplica `dashboard_layout` do PATCH como o backend: `null` restaura; `order`
- * precisa ser permutação dos 9 ids; `hidden` sem repetição e nunca os 9.
+ * precisa ser permutação dos 15 ids; `hidden` sem repetição e nunca os 15.
  * `null` retornado = corpo inválido (400).
  */
 function applyDashboardLayoutPatch(current: DashboardLayoutMock, raw: unknown): DashboardLayoutMock | null {
@@ -366,6 +383,29 @@ function applyDashboardChartsPatch(current: DashboardChartsMock, raw: unknown): 
   return next;
 }
 
+/** Acrescenta `count` bens sintéticos clonando o primeiro bem (números únicos "BULK-0001"…). */
+function bulkAssets(base: AssetMockState, count: number): AssetMockState {
+  if (count <= 0) return base;
+  const template = base.assets[1]!;
+  const extra = Array.from({ length: count }, (_, i) => {
+    const n = String(i + 1).padStart(4, "0");
+    return {
+      ...template,
+      id: `b0000000-0000-4000-8000-${String(i + 1).padStart(12, "0")}`,
+      patrimony_number: `BULK-${n}`,
+      description: `Bem sintético em massa ${n}`,
+    };
+  });
+  return { ...base, assets: [...base.assets, ...extra] };
+}
+
+/** Erro sintético do GoTrue em `PUT /auth/v1/user` (campo `error_code` como no SDK). */
+export interface UserUpdateErrorMock {
+  status: number;
+  error_code?: string;
+  msg?: string;
+}
+
 export interface MockState extends CatalogMockState, AssetMockState, MovementMockState, InventoryMockState {
   catalogImport: CatalogImportMockState;
   accessibleUnitsStatus: number | null;
@@ -397,7 +437,8 @@ export interface MockState extends CatalogMockState, AssetMockState, MovementMoc
   alerts: AlertsMock;
   alertsStatus: number | null;
   dashboard: DashboardMockData;
-  dashboardStatus: Partial<Record<DashboardEndpoint, number>>;
+  dashboardStatus: Partial<Record<DashboardEndpoint | TechEndpoint, number>>;
+  dashboardTech: TechMockData;
   aiInsights: AiInsightsMock;
   aiInsightsStatus: number | null;
   aiAsk: AiAskMock;
@@ -415,6 +456,8 @@ export interface MockState extends CatalogMockState, AssetMockState, MovementMoc
   meStatus: number | null;
   usersRateLimitRetryAfter: number | null;
   factorNoticeStatus: number;
+  userUpdateErrors: UserUpdateErrorMock[];
+  verifySessionHasFactor: boolean;
   /** `true` após um desafio TOTP verificado nesta aba (step-up do MFA reset). */
   reauthVerified: boolean;
   calls: { method: string; url: string; body: unknown }[];
@@ -1099,6 +1142,7 @@ export async function installMocks(page: Page, opts: MockOptions = {}): Promise<
     alerts: opts.alerts ?? defaultAlerts(),
     alertsStatus: opts.alertsStatus ?? null,
     dashboard: { ...defaultDashboard(), ...opts.dashboard },
+    dashboardTech: opts.dashboardTech ?? defaultTech(),
     dashboardStatus: { ...opts.dashboardStatus },
     aiInsights: opts.aiInsights ?? defaultAiInsights(),
     aiInsightsStatus: opts.aiInsightsStatus ?? null,
@@ -1106,8 +1150,10 @@ export async function installMocks(page: Page, opts: MockOptions = {}): Promise<
     aiAskStatus: opts.aiAskStatus ?? null,
     aiAskDelayMs: opts.aiAskDelayMs ?? 0,
     factorNoticeStatus: opts.factorNoticeStatus ?? 204,
+    userUpdateErrors: [...(opts.userUpdateErrors ?? [])],
+    verifySessionHasFactor: opts.verifySessionHasFactor ?? false,
     ...defaultCatalog(UNITS, { hidePhone: opts.catalogHidePhone, hideAddress: opts.catalogHideAddress }),
-    ...defaultAssets(UNITS),
+    ...bulkAssets(defaultAssets(UNITS), opts.assetsBulk ?? 0),
     forceListStatus: opts.assetsListStatus ?? null,
     forceBondStatusesStatus: opts.assetBondStatusesStatus ?? null,
     ...defaultMovements(UNITS),
@@ -1163,7 +1209,7 @@ export async function installMocks(page: Page, opts: MockOptions = {}): Promise<
     // verifyOtp({ token_hash, type: "invite" }): só o hash válido sintético cria sessão.
     if (path === "/verify" && method === "POST") {
       const hash = (body as { token_hash?: string } | undefined)?.token_hash;
-      if (hash === VALID_INVITE_TOKEN_HASH) return json(route, 200, fakeSession("aal1", false));
+      if (hash === VALID_INVITE_TOKEN_HASH) return json(route, 200, fakeSession("aal1", state.verifySessionHasFactor));
       return json(route, 403, {
         code: "otp_expired",
         error_code: "otp_expired",
@@ -1171,7 +1217,15 @@ export async function installMocks(page: Page, opts: MockOptions = {}): Promise<
       });
     }
     if (path === "/user" && method === "GET") return json(route, 200, fakeUser(state));
-    if (path === "/user" && method === "PUT") return json(route, 200, fakeUser(state));
+    if (path === "/user" && method === "PUT") {
+      const failure = state.userUpdateErrors.shift();
+      if (failure) {
+        const { status, ...rest } = failure;
+        const reasons = rest.error_code === "weak_password" ? { weak_password: { reasons: ["length"] } } : {};
+        return json(route, status, { code: status, ...rest, ...reasons });
+      }
+      return json(route, 200, fakeUser(state));
+    }
     if (path === "/logout") return json(route, 204);
     if (path === "/factors" && method === "POST") {
       state.unverifiedFactorId = "factor-novo-e2e";
@@ -1274,6 +1328,12 @@ export async function installMocks(page: Page, opts: MockOptions = {}): Promise<
         path,
         query: url.searchParams,
         respond: (status, payload) => json(route, status, payload),
+        respondFile: (status, contentType, fileBody) =>
+          route.fulfill({
+            status,
+            headers: { ...corsHeaders(request), "content-type": contentType },
+            body: fileBody,
+          }),
       })
     ) {
       return;

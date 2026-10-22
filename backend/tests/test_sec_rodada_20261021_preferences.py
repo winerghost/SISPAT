@@ -42,7 +42,12 @@ def _rows(api):
         {"order": [{"id": "kpis"}]},
         {"order": [1]},
         {"order": ["kpis"] * 10},
-        {"hidden": ["kpis", "units", "status", "monthly", "location", "bond", "pending", "rooms", "inventory"]},
+        {
+            "hidden": [
+                "kpis", "units", "status", "monthly", "location", "bond", "pending", "rooms", "inventory",
+                "tech_summary", "tech_category", "tech_units", "tech_status", "tech_no_owner", "tech_age",
+            ]
+        },
         ["kpis"],
         "kpis",
         1,

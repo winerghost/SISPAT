@@ -95,7 +95,7 @@ export function Sidebar() {
     <aside
       data-collapsed={collapsed ? "true" : "false"}
       className={cn(
-        "hidden h-screen shrink-0 flex-col overflow-hidden border-r border-ash-stroke bg-carbon-lift lg:flex print:!hidden",
+        "hidden h-app shrink-0 flex-col overflow-hidden border-r border-ash-stroke bg-carbon-lift lg:flex print:!hidden",
         collapsed ? "w-16" : "w-64",
         transitionReady && "transition-[width] duration-base ease-factory",
       )}

@@ -40,6 +40,7 @@ from app.api.v1.catalog_import_schemas import (
     CATALOG_KINDS,
     KIND_PERMISSION,
     CatalogConfirmRequest,
+    CatalogConfirmResponse,
     CatalogItemsQuery,
 )
 from app.api.v1.catalog_http import read_body
@@ -324,23 +325,29 @@ def catalog_confirm_endpoint(preview_id: str):
                 selected_item_ids=list(body.item_ids),
                 alias_item_ids=list(body.alias_item_ids),
             )
-            payload = {
-                "preview_id": str(preview.id),
-                "kind": kind,
-                "sync_job_id": str(result["sync_job_id"]),
-                "created": result["created"],
-                "updated": result["updated"],
-                "ignorados": result["ignorados"],
-                "falhas": [
-                    {
-                        "item_id": f.get("item_id"),
-                        "row": f.get("row"),
-                        "label": f.get("label"),
-                        "reason": f.get("reason"),
-                    }
-                    for f in result["falhas"]
-                ],
-            }
+            payload = CatalogConfirmResponse.model_validate(
+                {
+                    "preview_id": str(preview.id),
+                    "kind": kind,
+                    "sync_job_id": str(result["sync_job_id"]),
+                    "status": result["status"],
+                    "created": result["created"],
+                    "updated": result["updated"],
+                    "ignorados": result["ignorados"],
+                    "inalterados": result["inalterados"],
+                    "nao_gravados": result["nao_gravados"],
+                    "falhas_total": result["falhas_total"],
+                    "falhas": [
+                        {
+                            "item_id": f.get("item_id"),
+                            "row": f.get("row"),
+                            "label": str(f["label"])[:300] if f.get("label") else None,
+                            "reason": str(f["reason"])[:300] if f.get("reason") else None,
+                        }
+                        for f in result["falhas"]
+                    ],
+                }
+            ).model_dump()
     except PreviewNotFoundError:
         return _deny_not_found("catalog_preview_not_found")
     except PreviewNotConfirmableError:

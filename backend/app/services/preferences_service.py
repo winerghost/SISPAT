@@ -15,7 +15,7 @@ Regras:
       sempre as 6 chaves resolvidas.
     - `dashboard_layout`: persiste `order` (ordem efetiva completa) e
       `hidden` só quando diferentes do padrão; a resposta traz sempre
-      `{"order": [9 IDs na ordem efetiva], "hidden": [...]}`.
+      `{"order": [15 IDs na ordem efetiva], "hidden": [...]}`.
     - Dado legado/inválido no banco (chave desconhecida, tipo errado, ID fora
       da allowlist) é ignorado e cai no padrão; nunca gera erro.
 """
@@ -92,6 +92,12 @@ DEFAULT_DASHBOARD_ORDER: tuple[str, ...] = (
     "pending",
     "rooms",
     "inventory",
+    "tech_summary",
+    "tech_category",
+    "tech_units",
+    "tech_status",
+    "tech_no_owner",
+    "tech_age",
 )
 
 

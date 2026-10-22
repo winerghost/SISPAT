@@ -42,9 +42,20 @@ backend; ocultar o item do menu para USER/RH não é segurança.
    envio inclui `alias_item_ids` (subconjunto de `item_ids`) só com os itens
    optados e **omite o campo se vazio** (nenhum alias é criado). Salas e pessoas
    não mudam.
-6. **Resultado** — criados / atualizados / ignorados / falhas e a lista de
-   falhas por item (linha, nome, motivo — texto escapado). Só após a resposta do
-   backend; a prévia é consumida (para nova importação, gerar outra).
+6. **Resultado** — Salvos (criados + atualizados), Criados, Atualizados,
+   Inalterados, Rejeitados e Ignorados, a lista de rejeitados por item (linha,
+   nome, motivo — texto escapado; o backend lista no máximo 100 e informa
+   `falhas_total`) e o quadro "Linhas da planilha que não são gravadas"
+   (Inválidos/Duplicados/Conflitantes por motivo, mais itens elegíveis não
+   selecionados). Só após a resposta do backend; a prévia é consumida.
+   Estado derivado (`data-outcome`): **sucesso** (verde: salvou e nada
+   rejeitado), **parcial** (laranja: salvou e rejeitou), **falha total**
+   (`created+updated=0` e rejeitados>0: ícone/toast de erro, "Nenhum item foi
+   salvo", nunca verde nem a palavra "gravados") e **nada salvo** (sem
+   alterações). O indicador "Requisição" e o toast seguem o mesmo estado.
+   Salas e pessoas exibem aviso de dependência: a sigla da coluna UNIDADE
+   precisa ser alias de uma unidade; linhas `unidade_sem_alias` não são
+   gravadas (importe antes as unidades e crie as siglas).
 
 Trocar de aba descarta a prévia em tela (continua válida no servidor até
 expirar, mas é preciso gerar outra).

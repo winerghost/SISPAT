@@ -117,13 +117,33 @@ export interface CatalogImportFailure {
   reason: string | null;
 }
 
+/** Itens da prévia que a confirmação NÃO grava (só contadores; sem PII). */
+export interface CatalogImportUnwritten {
+  total: number;
+  /** DUPLICADO / INVALIDO / CONFLITANTE → quantidade. */
+  por_classificacao: Record<string, number>;
+  /** Código do motivo (pendência, `duplicado_na_origem`, `outro`) → quantidade. */
+  por_motivo: Record<string, number>;
+  /** NOVO/EXISTENTE que o ADM desmarcou. */
+  nao_selecionados: number;
+}
+
+export type CatalogImportJobStatus = "CONCLUIDO" | "PARCIAL" | "FALHOU";
+
 export interface CatalogImportConfirmResponse {
   preview_id: string;
   kind: CatalogImportKind;
   sync_job_id: string;
+  /** Status do SyncJob gravado pelo backend. */
+  status: CatalogImportJobStatus;
   created: number;
   updated: number;
   ignorados: number;
+  /** EXISTENTE aplicado sem nenhuma mudança. */
+  inalterados: number;
+  nao_gravados: CatalogImportUnwritten;
+  /** Total de falhas (a lista `falhas` traz no máximo 100). */
+  falhas_total: number;
   falhas: CatalogImportFailure[];
 }
 

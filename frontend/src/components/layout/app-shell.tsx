@@ -30,12 +30,20 @@ export function AppShell({ children }: { children: ReactNode }) {
   const showChrome = !loading && !!session;
 
   return (
-    <div className="flex h-screen overflow-hidden print:block print:h-auto print:overflow-visible">
+    // `relative` no shell, no wrapper e no <main>: containing block de TODO elemento
+    // `position:absolute` (sr-only da paginação/gráficos...). Sem ele, esses elementos
+    // escapavam do <main> (que rola internamente) e criavam uma 2ª rolagem na janela.
+    // `h-app` (globals.css): 100vh de fallback + 100dvh.
+    <div className="relative flex h-app overflow-hidden print:block print:h-auto print:overflow-visible">
       <UiPreferencesSync enabled={showChrome} />
       {showChrome && <Sidebar />}
-      <div className="flex min-w-0 flex-1 flex-col overflow-hidden print:block print:overflow-visible">
+      <div className="relative flex min-w-0 flex-1 flex-col overflow-hidden print:block print:overflow-visible">
         {showChrome && <Header />}
-        <main id="conteudo" tabIndex={-1} className="flex-1 overflow-y-auto focus:outline-none print:overflow-visible">
+        <main
+          id="conteudo"
+          tabIndex={-1}
+          className="relative flex-1 overflow-y-auto focus:outline-none print:overflow-visible"
+        >
           <AuthGuard>{children}</AuthGuard>
         </main>
       </div>

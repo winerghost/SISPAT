@@ -5,7 +5,9 @@ import {
   EMPTY_BLOCKS,
   ERROR_BLOCKS,
   KPI_CARDS,
+  TECH_ENDPOINTS,
   emptyDashboard,
+  emptyTech,
 } from "./dashboard-mocks";
 import { installMocks, seedSession, waitForHydration, type MockOptions } from "./mocks";
 
@@ -137,6 +139,25 @@ export async function expectDashboardLoaded(page: Page, opts: { hidden?: readonl
       timeout: 15_000,
     });
   }
+  // Painéis de Tecnologia (ids tech_*): presentes por padrão, ao fim da ordem.
+  if (shown("tecnologia-indicadores")) {
+    await expect(page.locator("[data-dashboard-block=tecnologia-indicadores] [data-stat-card]")).toHaveCount(6, {
+      timeout: 15_000,
+    });
+  }
+  for (const block of [
+    "tecnologia-categoria",
+    "tecnologia-por-unidade",
+    "tecnologia-situacao",
+    "tecnologia-tempo-registro",
+  ].filter(shown)) {
+    await expect(page.locator(`[data-dashboard-block=${block}] figure`).first()).toBeVisible({ timeout: 20_000 });
+  }
+  if (shown("tecnologia-sem-responsavel")) {
+    await expect(page.locator("[data-dashboard-block=tecnologia-sem-responsavel] [data-stat-card]")).toHaveCount(3, {
+      timeout: 15_000,
+    });
+  }
   for (const block of hidden) {
     await expect(page.locator(`[data-dashboard-block=${block}]`)).toHaveCount(0);
   }
@@ -147,7 +168,10 @@ export async function expectDashboardLoaded(page: Page, opts: { hidden?: readonl
 
 /** Layout personalizado de exemplo: ordem trocada e 2 painéis ocultos. */
 export const DASHBOARD_CUSTOM_LAYOUT = {
-  order: ["bond", "status", "kpis", "rooms", "units", "location", "monthly", "pending", "inventory"],
+  order: [
+    "bond", "status", "kpis", "rooms", "units", "location", "monthly", "pending", "inventory",
+    "tech_summary", "tech_category", "tech_units", "tech_status", "tech_no_owner", "tech_age",
+  ],
   hidden: ["monthly", "inventory"],
 };
 export const DASHBOARD_CUSTOM_HIDDEN_BLOCKS = ["aquisicoes-mensais", "inventario"] as const;
@@ -301,9 +325,11 @@ export const SCREENS: ScreenDef[] = [
   {
     id: "ativar-conta",
     title: "Ativar conta (convite/recuperação)",
-    path: "/ativar-conta",
-    session: { role: "USER" },
+    path: "/ativar-conta?token_hash=hash-valido-e2e&type=invite",
+    session: null,
     prepare: async (page) => {
+      // Sessão preexistente não é mais aceita sem credencial no link: chega ao formulário via verifyOtp.
+      await page.getByRole("button", { name: "Continuar" }).click();
       await expect(page.getByRole("button", { name: "Ativar conta" })).toBeVisible();
     },
   },
@@ -1616,7 +1642,7 @@ export const SCREENS: ScreenDef[] = [
     id: "dashboard-painel-vazio",
     title: "Dashboard de indicadores — sem bens (estados vazios honestos)",
     path: "/dashboard",
-    session: { role: "RH", dashboard: emptyDashboard() },
+    session: { role: "RH", dashboard: emptyDashboard(), dashboardTech: emptyTech() },
     prepare: async (page) => {
       await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
       await expect(page.locator("[data-dashboard-empty]")).toHaveCount(EMPTY_BLOCKS, { timeout: 15_000 });
@@ -1629,7 +1655,7 @@ export const SCREENS: ScreenDef[] = [
     path: "/dashboard",
     session: {
       role: "USER",
-      dashboardStatus: Object.fromEntries(DASHBOARD_ENDPOINTS.map((endpoint) => [endpoint, 500])),
+      dashboardStatus: Object.fromEntries([...DASHBOARD_ENDPOINTS, ...TECH_ENDPOINTS].map((endpoint) => [endpoint, 500])),
     },
     prepare: async (page) => {
       await expect(page.locator("[data-dashboard-error]")).toHaveCount(ERROR_BLOCKS, { timeout: 20_000 });

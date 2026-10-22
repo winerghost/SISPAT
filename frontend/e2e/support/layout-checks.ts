@@ -22,6 +22,65 @@ export interface LayoutReport {
   dialogIssues: string[];
 }
 
+export interface ScrollReport {
+  viewport: { width: number; height: number };
+  docScrollHeight: number;
+  docClientHeight: number;
+  scrollYAfter: number;
+  mainScrollHeight: number;
+  mainClientHeight: number;
+  /** scrollHeight do <main> menos o fim do último conteúdo visível (px): sobra = rolagem fantasma. */
+  mainGhostPx: number;
+  docScrollWidth: number;
+}
+
+/**
+ * Medidas verticais do documento e do <main>. O app tem UMA rolagem vertical
+ * (a do <main>): a janela nunca deve rolar, nem com `scrollTo(0, 9999)`.
+ */
+export async function collectScrollReport(page: Page): Promise<ScrollReport> {
+  return page.evaluate(() => {
+    window.scrollTo(0, 9999);
+    document.scrollingElement?.scrollTo(0, 9999);
+    const doc = document.documentElement;
+    const main = document.querySelector("main") as HTMLElement | null;
+
+    let ghost = 0;
+    let mainScrollHeight = 0;
+    let mainClientHeight = 0;
+    if (main) {
+      mainScrollHeight = main.scrollHeight;
+      mainClientHeight = main.clientHeight;
+      const mainTop = main.getBoundingClientRect().top;
+      const padBottom = parseFloat(getComputedStyle(main).paddingBottom) || 0;
+      let contentBottom = 0;
+      for (const el of Array.from(main.querySelectorAll("*"))) {
+        if (el.closest(".sr-only, [aria-hidden='true'], nextjs-portal, [data-sonner-toaster]")) continue;
+        const style = getComputedStyle(el);
+        if (style.display === "none" || style.visibility === "hidden" || style.position === "fixed") continue;
+        const r = el.getBoundingClientRect();
+        if (r.width === 0 && r.height === 0) continue;
+        contentBottom = Math.max(contentBottom, r.bottom - mainTop + main.scrollTop);
+      }
+      // Só há "fantasma" se o <main> realmente rola; sem overflow a sobra é só espaço vazio.
+      ghost =
+        mainScrollHeight > mainClientHeight + 1
+          ? Math.max(0, mainScrollHeight - (contentBottom + padBottom))
+          : 0;
+    }
+    return {
+      viewport: { width: window.innerWidth, height: window.innerHeight },
+      docScrollHeight: doc.scrollHeight,
+      docClientHeight: window.innerHeight,
+      scrollYAfter: window.scrollY,
+      mainScrollHeight,
+      mainClientHeight,
+      mainGhostPx: Math.round(ghost * 10) / 10,
+      docScrollWidth: doc.scrollWidth,
+    };
+  });
+}
+
 export async function collectLayoutReport(page: Page): Promise<LayoutReport> {
   return page.evaluate(() => {
     const vw = window.innerWidth;

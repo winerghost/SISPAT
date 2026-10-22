@@ -10,7 +10,10 @@ permissão granular; limitado, no banco, às unidades do próprio usuário
 
 Leituras agregadas (`/resumo`, `/por-unidade`, `/por-situacao`,
 `/aquisicoes-mensais`, `/localizacao-por-unidade`, `/por-vinculo`,
-`/pendencias-cadastro`, `/por-sala`, `/inventario`, `/tipos`):
+`/pendencias-cadastro`, `/por-sala`, `/inventario`, `/tipos`) e painéis de
+Tecnologia (`/tecnologia/{resumo,por-categoria,por-unidade,por-status,
+sem-responsavel,tempo-registro}`; `/tecnologia/export` = CSV/XLSX, permissão
+`exports.create`, auditado, via `csv_safety`; filtros `TechFilters`):
 `require_auth -> require_aal2_for_adm -> require_permission("reports.read") ->
 rate_limit`; escopo de unidade sempre (ADM sem bypass), só bens ativos,
 `Cache-Control: no-store`. Todas aceitam os MESMOS filtros opcionais
@@ -31,7 +34,7 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from flask import Blueprint, g, jsonify, request
+from flask import Blueprint, Response, g, jsonify, request
 from werkzeug.exceptions import BadRequest
 
 from app.api.v1.catalog_http import LIST_LIMIT, WINDOW, require_aal2_for_adm
@@ -46,20 +49,30 @@ from app.api.v1.dashboard_schemas import (
     ResumoOut,
     RotuloItem,
     SerieMensal,
+    TechCategoriaOut,
+    TechExportQuery,
+    TechFilters,
+    TechResumoOut,
+    TechSemResponsavelOut,
+    TechTempoItem,
     TipoItem,
+    TechCountItem,
 )
 from app.api.v1.schemas import parse_query
-from app.api.v1.user_admin_http import admin_rate_limit_key, validation_error
+from app.api.v1.user_admin_http import admin_rate_limit_key, error_response, validation_error
 from app.auth.supabase_auth import require_auth
 from app.authorization.rbac import require_permission
+from app.authorization.security_events import get_request_id
 from app.database.session import get_db_session
 from app.security.rate_limit import rate_limit
-from app.services import dashboard_service
+from app.services import dashboard_service, dashboard_tech_service
+from app.services.report_service import ReportError
 from app.services.alerts import evaluate_alerts
 
 dashboard_bp = Blueprint("dashboard", __name__)
 
 _ALERTS_LIMIT = 120
+TECH_EXPORT_LIMIT = 30  # exportações por usuário/hora (mesmo teto de /reports)
 _WINDOW_SECONDS = 3600
 DASHBOARD_READ_LIMIT = LIST_LIMIT
 
@@ -199,3 +212,99 @@ def get_inventory_status():
 @rate_limit(admin_rate_limit_key, limit=DASHBOARD_READ_LIMIT, window_seconds=WINDOW)
 def get_type_options():
     return _aggregate("tipos", dashboard_service.type_options, TipoItem, many=True)
+
+
+# ---------------------------------------------------------------------------
+# Painéis de Tecnologia (`/dashboard/tecnologia/*`): mesmos decorators e
+# política das leituras acima, com `TechFilters` (categoria/tipo_ti/status).
+# ---------------------------------------------------------------------------
+
+
+def _tech_summary(db: Any, actor_id: Any, query: TechFilters) -> dict[str, Any]:
+    data = dashboard_tech_service.summary(db, actor_id, query)
+    data["filtros_aplicados"] = query.active_names()  # só NOMES, nunca valores
+    return data
+
+
+def _tech(context: str, compute: Callable[[Any, Any, Any], Any], out_model: Any, *, many: bool):
+    return _aggregate(f"tecnologia_{context}", compute, out_model, many=many, schema=TechFilters)
+
+
+@dashboard_bp.route("/dashboard/tecnologia/resumo", methods=["GET"])
+@require_auth
+@require_aal2_for_adm
+@require_permission("reports.read")
+@rate_limit(admin_rate_limit_key, limit=DASHBOARD_READ_LIMIT, window_seconds=WINDOW)
+def get_tech_summary():
+    return _tech("resumo", _tech_summary, TechResumoOut, many=False)
+
+
+@dashboard_bp.route("/dashboard/tecnologia/por-categoria", methods=["GET"])
+@require_auth
+@require_aal2_for_adm
+@require_permission("reports.read")
+@rate_limit(admin_rate_limit_key, limit=DASHBOARD_READ_LIMIT, window_seconds=WINDOW)
+def get_tech_by_category():
+    return _tech("por_categoria", dashboard_tech_service.by_category, TechCategoriaOut, many=False)
+
+
+@dashboard_bp.route("/dashboard/tecnologia/por-unidade", methods=["GET"])
+@require_auth
+@require_aal2_for_adm
+@require_permission("reports.read")
+@rate_limit(admin_rate_limit_key, limit=DASHBOARD_READ_LIMIT, window_seconds=WINDOW)
+def get_tech_by_unit():
+    return _tech("por_unidade", dashboard_tech_service.by_unit, PorUnidadeItem, many=True)
+
+
+@dashboard_bp.route("/dashboard/tecnologia/por-status", methods=["GET"])
+@require_auth
+@require_aal2_for_adm
+@require_permission("reports.read")
+@rate_limit(admin_rate_limit_key, limit=DASHBOARD_READ_LIMIT, window_seconds=WINDOW)
+def get_tech_by_status():
+    return _tech("por_status", dashboard_tech_service.by_status, TechCountItem, many=True)
+
+
+@dashboard_bp.route("/dashboard/tecnologia/sem-responsavel", methods=["GET"])
+@require_auth
+@require_aal2_for_adm
+@require_permission("reports.read")
+@rate_limit(admin_rate_limit_key, limit=DASHBOARD_READ_LIMIT, window_seconds=WINDOW)
+def get_tech_without_owner():
+    return _tech("sem_responsavel", dashboard_tech_service.without_owner, TechSemResponsavelOut, many=False)
+
+
+@dashboard_bp.route("/dashboard/tecnologia/tempo-registro", methods=["GET"])
+@require_auth
+@require_aal2_for_adm
+@require_permission("reports.read")
+@rate_limit(admin_rate_limit_key, limit=DASHBOARD_READ_LIMIT, window_seconds=WINDOW)
+def get_tech_registration_age():
+    return _tech("tempo_registro", dashboard_tech_service.registration_age, TechTempoItem, many=True)
+
+
+@dashboard_bp.route("/dashboard/tecnologia/export", methods=["GET"])
+@require_auth
+@require_aal2_for_adm
+@require_permission("exports.create")
+@rate_limit(admin_rate_limit_key, limit=TECH_EXPORT_LIMIT, window_seconds=WINDOW)
+def export_tech():
+    """CSV/XLSX da tabela agregada (sem dados pessoais), via `csv_safety`, auditado."""
+    try:
+        query = parse_query(TechExportQuery, request.args, context="dashboard.tecnologia_export")
+    except BadRequest as exc:
+        return validation_error(exc)
+    try:
+        with get_db_session() as db:
+            result = dashboard_tech_service.export_tech(
+                db, g.current_user.id, query, request_id=get_request_id()
+            )
+    except ReportError as exc:
+        return error_response(exc.status_code, exc.code, exc.message)
+    response = Response(result.content, status=200, content_type=result.mimetype)
+    response.headers["Content-Disposition"] = f'attachment; filename="{result.filename}"'
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Report-Rows"] = str(result.rows)
+    return response

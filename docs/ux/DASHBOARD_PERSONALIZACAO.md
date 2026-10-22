@@ -281,3 +281,49 @@ novos); `e2e/security-dashboard-charts-functional.spec.ts` (L-2). Telas novas em
 migração de `dashboard_layout` são entregues em paralelo e precisam estar no ar
 para salvar — sem eles, o GET antigo mantém o layout padrão e o PATCH de layout
 recebe 400).
+
+## Painéis de Tecnologia (2026-10-22)
+
+Seis painéis novos entram na personalização (ids `tech_summary`, `tech_category`,
+`tech_units`, `tech_status`, `tech_no_owner`, `tech_age`), ao fim da ordem padrão: o
+`dashboard_layout` passa a ter **15 ids** (`order` completo; esconder todos continua
+400). Usuários que já personalizaram veem os novos ao fim da própria ordem. Backend
+anterior (9 ids) é aceito: os novos entram ao fim. Contrato e regras:
+`docs/architecture/dashboard-api.md` (seção "Painéis de Tecnologia").
+
+| Painel (`data-dashboard-block`) | Conteúdo | Gráfico |
+|---|---|---|
+| Tecnologia: indicadores (`tecnologia-indicadores`) | total no filtro, bens de TI, não classificados, TI sem responsável / sem tipo / sem situação + exportar CSV/XLSX | cartões (`StatCard`) |
+| Bens por categoria (`tecnologia-categoria`) | categorias (incl. "Não classificado") e tipos de TI | barras horizontais |
+| Tecnologia por unidade (`tecnologia-por-unidade`) | tipos de TI por unidade, "Outras" somada | barras empilhadas |
+| Por situação operacional (`tecnologia-situacao`) | em uso / estoque / manutenção / baixado / "Não informado" | barras horizontais |
+| Sem responsável (`tecnologia-sem-responsavel`) | contagem, percentual do backend e ranking por unidade (nenhuma pessoa) | cartões + barras |
+| Tempo desde o registro (`tecnologia-tempo-registro`) | faixas pela data de REGISTRO do bem | barras horizontais |
+
+Princípios: números só do backend (o percentual vem pronto); valores ausentes aparecem
+como "não classificado"/"não informado" (nunca um padrão inventado); "tempo desde o
+registro" não é idade do equipamento e não há prazo de garantia (a tela diz isso); cada
+gráfico usa `chart-shell` (resumo em texto + tabela alternativa sr-only); só contagens,
+inclusive para RH; erro por bloco com "Tentar novamente" sem a mensagem do backend; painel
+oculto não consulta o backend; sem animação de números não confirmados.
+
+**Filtros**: `categoria`, `tipo_ti` e `status` (grupo "Classificação (painéis de
+Tecnologia)" em "Mais filtros") ficam na URL como os demais, mas só são enviados às
+consultas de Tecnologia (os endpoints antigos os recusam) e não entram nas queryKeys dos
+outros painéis. O resumo de filtros avisa que eles filtram só a Tecnologia. Os painéis
+de Tecnologia também recebem os filtros comuns (unidade, período etc.).
+
+**Exportação**: botões "Exportar CSV"/"Exportar XLSX" no painel de indicadores (não
+aparecem no relatório imprimível); `GET /dashboard/tecnologia/export` via `requestFile`
+(Bearer, nada de token na URL); mensagens fixas para 403/429/413/erro.
+
+Testes: `frontend/e2e/dashboard-tech-functional.spec.ts` (renderização, tabela/resumo,
+filtros, exportação, erro isolado, oculto sem consulta, RH, axe, 320/768/1920 sem rolagem
+horizontal); `dashboard-layout-functional.spec.ts` (15 ids); mocks em
+`e2e/support/dashboard-mocks.ts` (`defaultTech`, `TECH_FILTER_RULES`).
+
+**Rebuild na VPS:** backend + frontend. A migração `0015_asset_tech_classification` só
+com autorização explícita (aplicar o espelho `sql/0018` e depois `alembic stamp
+0015_asset_tech_classification`). Sem a migração aplicada, os seis blocos mostram erro
+isolado ("Tentar novamente"); o restante do dashboard segue normal. Depois de aplicada,
+rodar `flask classify-assets` (dry-run) e, se aprovado, `flask classify-assets --apply`.

@@ -53,6 +53,8 @@ export default defineConfig({
     { name: "e2e", testMatch: /functional\.spec\.ts/ },
     // Dashboard de indicadores e relatório imprimível (/dashboard*).
     { name: "dashboard", testMatch: /(^|[\/])dashboard\.spec\.ts$/ },
+    // Rolagem única da página (janela nunca rola; só o <main>) + axe.
+    { name: "scroll", testMatch: /page-scroll\.spec\.ts/ },
     // Fundação de animações (reduced motion, transição de rota, modal, hidratação).
     { name: "motion", testMatch: /motion-.*\.spec\.ts/ },
   ],

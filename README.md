@@ -191,6 +191,20 @@ vhost).
   corrigido; SEC-VF-02 pendente; `certifi` 2026.10.19 aplicado em 2026-10-21).
 - **Importação de Bens:** só depois do deploy desta versão.
 
+### Painéis de Tecnologia no dashboard (2026-10-22)
+
+- Seis painéis novos (`/dashboard/tecnologia/*`: indicadores, categoria, por unidade,
+  situação operacional, sem responsável e tempo desde o registro) + exportação
+  CSV/XLSX agregada (`csv_safety`, auditada). Só contagens (RH sem dados pessoais).
+  Contrato: `docs/architecture/dashboard-api.md`; UX: `docs/ux/DASHBOARD_PERSONALIZACAO.md`.
+- Migração `0015_asset_tech_classification` (espelho `backend/migrations/sql/0018_*.sql`):
+  **PENDENTE, NÃO aplicada** (Supabase único: dev = prod). Só com autorização: executar
+  o espelho no SQL Editor e depois `alembic stamp 0015_asset_tech_classification`.
+- Classificação inicial: `flask classify-assets` (dry-run por padrão; `--apply` grava).
+  A importação preenche categoria/tipo só quando nulos. Não há garantia nem idade do
+  equipamento: "tempo desde o registro" usa a data de cadastro do bem.
+- Rebuild: backend + frontend.
+
 ### Painéis personalizáveis, recuperação de senha e expurgo (2026-10-21)
 
 - **Personalizar painéis:** cada usuário mostra/oculta e reordena os painéis
@@ -264,6 +278,7 @@ Scripts (Git Bash/Linux):
 | `scripts/test-backend.sh [--venv]`     | pytest + cobertura (use `--venv` para um ambiente isolado) |
 | `scripts/test-frontend.sh`             | lint, typecheck e build do Next                            |
 | `scripts/test-responsive.sh`           | Playwright: 9 resoluções + axe (WCAG 2.2 AA)               |
+| `npx playwright test --project=scroll` | rolagem única da página (ver `docs/ux/LAYOUT_ROLAGEM.md`)  |
 | `scripts/security-audit.sh [--strict]` | bandit, pip-audit, npm audit, gitleaks, semgrep, trivy fs  |
 | `scripts/check-dependencies.sh`        | dependências desatualizadas/vulneráveis                    |
 

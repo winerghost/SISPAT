@@ -69,7 +69,10 @@ def test_invite_redirect_to_na_allow_list_chama_a_api_com_sucesso() -> None:
     mock_request.assert_called_once()
     assert result["id"] == "auth-user-123"
     _, kwargs = mock_request.call_args
-    assert kwargs["json"]["redirect_to"] == ALLOWED_REDIRECT
+    # Regressão: o GoTrue lê `redirect_to` da query string, nunca do corpo.
+    assert kwargs["params"] == {"redirect_to": ALLOWED_REDIRECT}
+    assert "redirect_to" not in kwargs["json"]
+    assert kwargs["json"]["email"] == "novo@exemplo.com"
     assert kwargs["json"]["data"]["name"] == "Novo Usuário"
 
 

@@ -125,6 +125,7 @@ from app.models.assets import Asset
 from app.models.audit import AuditLog
 from app.models.imports import ImportPreview, ImportPreviewItem
 from app.security.text_search import contains_ci
+from app.services.asset_classification import apply_if_unclassified
 from app.services.pagination import DEFAULT_PAGE_SIZE, coerce_page_size, page_count
 from app.models.sync import RawImportRecord, SyncJob
 from app.services.patrimony_lock import (
@@ -439,6 +440,7 @@ class ImportService:
                 updated_by=confirmed_by_user_id,
                 version=1,
             )
+            apply_if_unclassified(asset, asset.description)  # só preenche; regra fechada
             self._db.add(asset)
             self._db.flush()
             item.matched_asset_id = asset.id
@@ -475,6 +477,8 @@ class ImportService:
             bond = self._bond_status_of(item.normalized_values or {})
             if bond is not None and bond != asset.bond_status:
                 asset.bond_status = bond
+            # Classificação: só quando ainda nula (nunca sobrescreve a existente).
+            apply_if_unclassified(asset, asset.description)
             asset.source_system = "google_sheets"
             asset.source_record_id = item.source_record_id
             asset.source_updated_at = (

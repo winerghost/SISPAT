@@ -42,7 +42,10 @@ export interface TypeSeries {
 }
 
 /** Tipos ordenados por total (maior primeiro); do 5º em diante vira "Outros". */
-export function buildTypeSeries(rows: UnitBreakdownRow[]): { series: TypeSeries[]; hasOthers: boolean; head: string[] } {
+export function buildTypeSeries(
+  rows: UnitBreakdownRow[],
+  labelOf: (tipo: string) => string = humanizeCode,
+): { series: TypeSeries[]; hasOthers: boolean; head: string[] } {
   const totals = new Map<string, number>();
   for (const row of rows) {
     for (const [tipo, count] of Object.entries(row.tipos)) totals.set(tipo, (totals.get(tipo) ?? 0) + count);
@@ -52,7 +55,7 @@ export function buildTypeSeries(rows: UnitBreakdownRow[]): { series: TypeSeries[
     .map(([tipo]) => tipo);
   const hasOthers = ordered.length > MAX_TYPE_SERIES;
   const head = hasOthers ? ordered.slice(0, MAX_TYPE_SERIES - 1) : ordered;
-  const series: TypeSeries[] = head.map((tipo) => ({ key: tipo, label: humanizeCode(tipo) }));
+  const series: TypeSeries[] = head.map((tipo) => ({ key: tipo, label: labelOf(tipo) }));
   if (hasOthers) {
     series.push({ key: OTHERS_SERIES_KEY, label: `Outros (${ordered.length - head.length})` });
   }
@@ -73,8 +76,9 @@ export interface UnitModel {
   head: string[];
 }
 
-export function buildUnitModel(rows: UnitBreakdownRow[]): UnitModel {
-  const { series, head } = buildTypeSeries(rows);
+/** `labelOf`: chaves já rotuladas pelo backend (Tecnologia) usam `(k) => k`. */
+export function buildUnitModel(rows: UnitBreakdownRow[], labelOf: (tipo: string) => string = humanizeCode): UnitModel {
+  const { series, head } = buildTypeSeries(rows, labelOf);
   const categories = rows.map((row, i) => ({ key: `u${i}`, label: row.unidade }));
   return {
     series,

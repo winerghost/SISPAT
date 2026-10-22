@@ -19,9 +19,9 @@ import {
 
 // =============================================================================
 // "Personalizar painéis" (preferência `dashboard_layout`). Contrato MOCKADO:
-//   GET  /api/v1/me/preferences -> dashboard_layout: {order: [9 ids], hidden: [ids]}
+//   GET  /api/v1/me/preferences -> dashboard_layout: {order: [15 ids], hidden: [ids]}
 //   PATCH {version, dashboard_layout: {order?, hidden?}} | {dashboard_layout: null}
-//   400 se esconder os 9; 409 em conflito de versão.
+//   400 se esconder todos; 409 em conflito de versão.
 // Cobre: padrão, mover/ocultar por teclado (foco + anúncio), PATCH, estado
 // honesto (nada muda antes da confirmação), persistência, relatório com a
 // mesma ordem, restaurar, todos ocultos, 400, 409, backend anterior (sem a
@@ -42,6 +42,12 @@ const BLOCK_OF: Record<string, string> = {
   pending: "pendencias-cadastro",
   rooms: "por-sala",
   inventory: "inventario",
+  tech_summary: "tecnologia-indicadores",
+  tech_category: "tecnologia-categoria",
+  tech_units: "tecnologia-por-unidade",
+  tech_status: "tecnologia-situacao",
+  tech_no_owner: "tecnologia-sem-responsavel",
+  tech_age: "tecnologia-tempo-registro",
 };
 
 async function open(page: Page, opts: MockOptions = { role: "USER" }, path = "/dashboard"): Promise<MockState> {
@@ -74,7 +80,7 @@ function dashboardCalls(state: MockState, endpoint: string): number {
 }
 
 test.describe("padrão", () => {
-  test("9 painéis na ordem padrão; diálogo lista todos; restaurar e salvar desabilitados", async ({ page }) => {
+  test("15 painéis na ordem padrão; diálogo lista todos; restaurar e salvar desabilitados", async ({ page }) => {
     await open(page);
     await expectDashboardLoaded(page);
     expect(await gridOrder(page)).toEqual(DASHBOARD_PANEL_IDS.map((id) => BLOCK_OF[id]));
@@ -84,13 +90,14 @@ test.describe("padrão", () => {
     const d = dialog(page);
     await expect(d).toBeVisible();
     expect(await dialogOrder(d)).toEqual([...DASHBOARD_PANEL_IDS]);
-    await expect(d.getByRole("checkbox")).toHaveCount(9);
+    await expect(d.getByRole("checkbox")).toHaveCount(DASHBOARD_PANEL_IDS.length);
     for (const box of await d.getByRole("checkbox").all()) await expect(box).toBeChecked();
     await expect(d.getByRole("button", { name: "Restaurar padrão" })).toBeDisabled();
     await expect(d.getByRole("button", { name: "Salvar" })).toBeDisabled();
     // Bordas: o primeiro não sobe e o último não desce.
     await expect(d.getByRole("button", { name: "Mover Indicadores para cima" })).toBeDisabled();
-    await expect(d.getByRole("button", { name: "Mover Inventário para baixo" })).toBeDisabled();
+    await expect(d.getByRole("button", { name: "Mover Tecnologia: tempo desde o registro para baixo" })).toBeDisabled();
+    await expect(d.getByRole("button", { name: "Mover Inventário para baixo" })).toBeEnabled();
   });
 });
 
@@ -108,10 +115,10 @@ test.describe("personalizar", () => {
     await page.keyboard.press("Enter");
     await expect(up).toBeFocused();
     await expect(d.locator("[data-layout-announcement]")).toHaveText(
-      "Bens por vínculo movido para a posição 5 de 9.",
+      "Bens por vínculo movido para a posição 5 de 15.",
     );
     await page.keyboard.press("Enter");
-    await expect(d.locator("[data-layout-announcement]")).toHaveText(/posição 4 de 9/);
+    await expect(d.locator("[data-layout-announcement]")).toHaveText(/posição 4 de 15/);
     // "Inventário" oculto pelo teclado (Espaço no checkbox).
     const inventory = d.getByRole("checkbox", { name: /Inventário/ });
     await inventory.focus();
@@ -129,7 +136,10 @@ test.describe("personalizar", () => {
     });
     const request = page.waitForRequest((r) => PREFS_URL(r.url()) && r.method() === "PATCH");
     await d.getByRole("button", { name: "Salvar" }).click();
-    const expectedOrder = ["kpis", "units", "status", "bond", "monthly", "location", "pending", "rooms", "inventory"];
+    const expectedOrder = [
+      "kpis", "units", "status", "bond", "monthly", "location", "pending", "rooms", "inventory",
+      "tech_summary", "tech_category", "tech_units", "tech_status", "tech_no_owner", "tech_age",
+    ];
     expect((await request).postDataJSON()).toEqual({
       version: 0,
       dashboard_layout: { order: expectedOrder, hidden: ["inventory"] },

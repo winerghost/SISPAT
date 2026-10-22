@@ -186,6 +186,14 @@ html[data-font-scale="125"] {
     transition-timing-function: var(--motion-ease);
   }
 
+  /* Altura da "tela de aplicativo" (shell e sidebar): 100vh de fallback e 100dvh onde
+     houver suporte (barra de endereço móvel não gera rolagem extra). Declarados na
+     mesma regra, em ordem, para o fallback nunca sobrescrever o dvh. */
+  .h-app {
+    height: 100vh;
+    height: 100dvh;
+  }
+
   /* Feedback de press (botões): cores + transform, 150ms. */
   .transition-factory-press {
     transition-property: color, background-color, border-color, outline-color, fill, stroke,

@@ -185,3 +185,15 @@ Na VPS, com autorização do responsável e após conferir o backup do Supabase:
 `alembic stamp 0011_dashboard_charts_prefs` ->
 `Running stamp_revision 0006_email_settings_permission -> 0011_dashboard_charts_prefs`;
 `alembic current` -> `0011_dashboard_charts_prefs (head)`. Nenhum DDL executado.
+
+## 0015_asset_tech_classification (2026-10-22) - PENDENTE DE APLICACAO
+
+Aditiva e reversivel: colunas `assets.asset_category`, `assets.tech_type`,
+`assets.operational_status` (`text NULL`, sem default), 3 CHECKs fechados e o indice
+parcial `ix_assets_category_active`. Espelho: `backend/migrations/sql/0018_asset_tech_classification.sql`
+(cabecalho "PENDENTE DE APLICACAO", sem BEGIN/COMMIT). Sem backfill (a classificacao
+inicial e o comando `flask classify-assets`, dry-run por padrao). NAO aplicada em banco
+algum (o Supabase e unico: dev = prod); so com autorizacao, executar o espelho e depois
+`alembic stamp 0015_asset_tech_classification`. Downgrade remove apenas o que criou.
+O CHECK de tamanho de `dashboard_layout` (1024) nao mudou (15 ids cabem). Detalhes:
+`docs/architecture/dashboard-api.md`.

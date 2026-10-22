@@ -43,6 +43,8 @@ export interface CatalogImportMockOptions {
   confirmStatus?: number;
   /** Confirmação devolve uma falha por item. */
   failures?: boolean;
+  /** Confirmação devolve 200 com created=0 e TODOS os itens rejeitados (falha total). */
+  allFail?: boolean;
   /** Prévia sem nenhuma pendência (relatório limpo). */
   cleanReport?: boolean;
   /** Atraso (ms) da confirmação — testa botão em `loading`. */
@@ -75,6 +77,7 @@ export function defaultCatalogImport(opts: CatalogImportMockOptions = {}): Catal
     confirmStatus: opts.confirmStatus ?? null,
     pendingStatus: opts.pendingStatus ?? null,
     failures: opts.failures ?? false,
+    allFail: opts.allFail ?? false,
     cleanReport: opts.cleanReport ?? false,
     confirmDelayMs: opts.confirmDelayMs ?? 0,
     expired: opts.expired ?? false,
@@ -466,18 +469,47 @@ export async function handleCatalogImports(ctx: CatalogImportRequestContext): Pr
     preview.confirmed = true;
     const chosen = new Set(body.item_ids as string[]);
     const eligible = items.filter((it) => chosen.has(it.id) && (it.classification === "NOVO" || it.classification === "EXISTENTE"));
-    const failing = state.failures ? eligible.find((it) => it.classification === "NOVO") : undefined;
-    const written = eligible.filter((it) => it !== failing);
+    // `allFail`: HTTP 200 com created=0 e todos os itens rejeitados (falha total).
+    const failing = state.allFail
+      ? eligible
+      : state.failures
+        ? eligible.filter((it) => it.classification === "NOVO").slice(0, 1)
+        : [];
+    const written = eligible.filter((it) => !failing.includes(it));
+    const unwrittenItems = items.filter((it) => it.classification !== "NOVO" && it.classification !== "EXISTENTE");
+    const porClassificacao: Record<string, number> = { DUPLICADO: 0, INVALIDO: 0, CONFLITANTE: 0 };
+    const porMotivo: Record<string, number> = {};
+    for (const it of unwrittenItems) {
+      porClassificacao[it.classification] = (porClassificacao[it.classification] ?? 0) + 1;
+      const codes = it.pendencias.length > 0 ? it.pendencias : [it.classification === "DUPLICADO" ? "duplicado_na_origem" : "outro"];
+      for (const code of codes) porMotivo[code] = (porMotivo[code] ?? 0) + 1;
+    }
+    const created = written.filter((it) => it.classification === "NOVO").length;
+    const updated = written.filter((it) => it.classification === "EXISTENTE").length;
     await respond(200, {
       preview_id: segment,
       kind: preview.kind,
       sync_job_id: "51000000-0000-4000-8000-000000000001",
-      created: written.filter((it) => it.classification === "NOVO").length,
-      updated: written.filter((it) => it.classification === "EXISTENTE").length,
+      status: failing.length > 0 ? (created + updated === 0 ? "FALHOU" : "PARCIAL") : "CONCLUIDO",
+      created,
+      updated,
       ignorados: chosen.size - eligible.length,
-      falhas: failing
-        ? [{ item_id: failing.id, row: failing.row, label: failing.label, reason: "Falha sintética ao gravar este item." }]
-        : [],
+      inalterados: 0,
+      nao_gravados: {
+        total: unwrittenItems.length,
+        por_classificacao: porClassificacao,
+        por_motivo: porMotivo,
+        nao_selecionados: items.filter(
+          (it) => (it.classification === "NOVO" || it.classification === "EXISTENTE") && !chosen.has(it.id),
+        ).length,
+      },
+      falhas_total: failing.length,
+      falhas: failing.map((it) => ({
+        item_id: it.id,
+        row: it.row,
+        label: it.label,
+        reason: "Falha sintética ao gravar este item.",
+      })),
     });
     return true;
   }

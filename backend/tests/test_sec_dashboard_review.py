@@ -276,11 +276,20 @@ def test_servico_sem_sql_bruto():
         assert needle not in src
 
 
+def test_servico_de_tecnologia_sem_sql_textual():
+    src = (ROOT / "backend/app/services/dashboard_tech_service.py").read_text(encoding="utf-8")
+    for needle in ("text(", ".execute(", "f\"SELECT", "f'SELECT", "literal_column", "% ("):
+        assert needle not in src
+
+
 def test_rotas_novas_sem_unit_id_vindo_do_cliente():
     src = (ROOT / "backend/app/api/v1/dashboard.py").read_text(encoding="utf-8")
     assert "request.args.get" not in src and "request.json" not in src
-    assert src.count('\n@require_permission("reports.read")') == len(ENDPOINTS)
-    assert src.count("\n@require_aal2_for_adm") == len(ENDPOINTS)
+    # + 6 painéis de Tecnologia (`reports.read`) e a exportação (`exports.create`)
+    assert src.count('\n@require_permission("reports.read")') == len(ENDPOINTS) + 6
+    assert src.count('\n@require_permission("exports.create")') == 1
+    assert src.count("\n@require_aal2_for_adm") == len(ENDPOINTS) + 7
+    assert src.count("\n@require_auth") == src.count("\n@dashboard_bp.route")
 
 
 FRONT_FILES = [

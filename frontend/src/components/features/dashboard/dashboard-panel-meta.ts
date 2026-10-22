@@ -26,6 +26,12 @@ export const DASHBOARD_PANEL_META: Record<DashboardPanelId, DashboardPanelMeta> 
   pending: { title: "Pendências de cadastro", blockId: "pendencias-cadastro", wide: false },
   rooms: { title: "Bens por sala", blockId: "por-sala", wide: false },
   inventory: { title: "Inventário", blockId: "inventario", wide: false },
+  tech_summary: { title: "Tecnologia: indicadores", blockId: "tecnologia-indicadores", wide: true },
+  tech_category: { title: "Tecnologia: bens por categoria", blockId: "tecnologia-categoria", wide: false },
+  tech_units: { title: "Tecnologia por unidade", blockId: "tecnologia-por-unidade", wide: true },
+  tech_status: { title: "Tecnologia por situação operacional", blockId: "tecnologia-situacao", wide: false },
+  tech_no_owner: { title: "Tecnologia sem responsável", blockId: "tecnologia-sem-responsavel", wide: false },
+  tech_age: { title: "Tecnologia: tempo desde o registro", blockId: "tecnologia-tempo-registro", wide: false },
 };
 
 /** Painéis exibidos, na ordem escolhida (sem os ocultos). */

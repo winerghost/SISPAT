@@ -284,7 +284,10 @@ class SupabaseAdminClient:
         response = self._request(
             "POST",
             "/auth/v1/invite",
-            json_body={"email": email, "data": {"name": name}, "redirect_to": redirect_to},
+            # O GoTrue lê `redirect_to` da QUERY STRING (no corpo é ignorado e o
+            # e-mail cai no Site URL). Corpo: só e-mail e metadados.
+            json_body={"email": email, "data": {"name": name}},
+            params={"redirect_to": redirect_to},
         )
         return self._json_object(response, "convite")
 

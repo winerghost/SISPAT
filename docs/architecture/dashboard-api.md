@@ -97,3 +97,72 @@ Parâmetro desconhecido (auditado), repetido ou inválido -> 400
 
 Rótulos de sala/vínculo vêm da planilha (não confiáveis): saem como texto JSON
 (`application/json`), sem HTML; o frontend os exibe com o escape do React.
+
+## Painéis de Tecnologia (`/dashboard/tecnologia/*`)
+
+Código: rotas em `dashboard.py`; regras em `backend/app/services/dashboard_tech_service.py`;
+vocabulário e regra de classificação em `backend/app/services/asset_classification.py`;
+schemas `TechFilters`/`Tech*Out` em `dashboard_schemas.py`. Testes:
+`backend/tests/test_dashboard_tech.py`, `test_dashboard_tech_preferences.py`,
+`test_import_classification.py`, `test_db_static.py` (migração 0015).
+
+**Migração `0015_asset_tech_classification`** (espelho `backend/migrations/sql/0018_*.sql`):
+colunas `assets.asset_category`, `assets.tech_type`, `assets.operational_status`
+(`text NULL`, SEM default: `NULL` = "não informado"/"não classificado"; nunca há valor
+fictício), CHECKs fechados, índice parcial `ix_assets_category_active`
+(`deleted_at IS NULL AND asset_category IS NOT NULL`). **PENDENTE DE APLICAÇÃO**: sem ela
+as rotas de Tecnologia respondem erro de banco; só com autorização (padrão do projeto:
+executar o espelho `.sql` e depois `alembic stamp 0015_asset_tech_classification`).
+
+| Campo | Valores |
+|---|---|
+| `asset_category` | `TECNOLOGIA`, `MOBILIARIO`, `VEICULO`, `EQUIPAMENTO`, `OUTROS` |
+| `tech_type` (só com `TECNOLOGIA`) | `COMPUTADOR`, `NOTEBOOK`, `MONITOR`, `IMPRESSORA`, `OUTRO_TI` |
+| `operational_status` | `EM_USO`, `ESTOQUE`, `MANUTENCAO`, `BAIXADO` |
+
+Não existe coluna de garantia/data de aquisição: não há indicador de fim de garantia.
+"Tempo desde o registro" usa `registration_date` e é rotulado assim.
+
+**Classificação inicial** (`app/services/asset_classification.py`): regra determinística pela
+primeira palavra da descrição (mesmo `infer_type`); palavra desconhecida => continua nula.
+Usada (1) pela importação, que preenche SÓ quando `asset_category` é nula (nunca
+sobrescreve a existente) e (2) pelo comando `flask classify-assets` — **dry-run por padrão**
+(`--apply` grava, em lotes, só bens ativos sem categoria, incrementa `version`, audita
+`ASSETS_CLASSIFIED`; saída só com contagens). `operational_status` nunca é deduzido.
+
+**Política**: igual às demais leituras (`require_auth -> require_aal2_for_adm ->
+require_permission("reports.read") -> rate_limit`, `no-store`, escopo `asset_scope_clause`,
+só `deleted_at IS NULL`, só contagens: RH não recebe nenhum dado pessoal; ADM sem bypass).
+
+**Filtros (`TechFilters`, `extra="forbid"`)**: todos os de `DashboardFilters` mais
+`categoria` (`TECNOLOGIA|MOBILIARIO|VEICULO|EQUIPAMENTO|OUTROS|NAO_CLASSIFICADO`), `tipo_ti`
+(`COMPUTADOR|NOTEBOOK|MONITOR|IMPRESSORA|OUTRO_TI|NAO_INFORMADO`) e `status`
+(`EM_USO|ESTOQUE|MANUTENCAO|BAIXADO|NAO_INFORMADO`), todos `Literal` fechados. Período
+`registrado_desde/ate` <= 5 anos (UTC no banco; datas de calendário). Valor fora da lista,
+repetido ou desconhecido => 400 sem eco de valor. Os endpoints ANTERIORES recusam (400) as
+três chaves novas. ID de unidade alheio == inexistente (resultado vazio, escopo antes do filtro).
+
+Rotas:
+- `GET /tecnologia/resumo` -> `{total_bens, tecnologia, nao_classificados,
+  tecnologia_sem_responsavel, tecnologia_sem_tipo, tecnologia_sem_status, filtros_aplicados}`.
+- `GET /tecnologia/por-categoria` -> `{categorias:[{id,label,value}], tipos_ti:[...]}`;
+  `categorias` soma EXATAMENTE o total do filtro (inclui `NAO_CLASSIFICADO`); `tipos_ti` só
+  TECNOLOGIA (inclui `NAO_INFORMADO`). Só `value > 0`.
+- `GET /tecnologia/por-unidade` -> `[{unidade, total, tipos:{"Notebook":n,...}}]` (rótulos pt-BR),
+  top 15 + `Outras` com a soma exata (inclusive por tipo).
+- `GET /tecnologia/por-status` -> `[{id,label,value}]` situação operacional dos bens de TI.
+- `GET /tecnologia/sem-responsavel` -> `{tecnologia, sem_responsavel, percentual|null,
+  por_unidade:[{unidade,value}]}` (só contagens).
+- `GET /tecnologia/tempo-registro` -> faixas `ate_1_ano`, `1_a_3_anos`, `3_a_5_anos`,
+  `mais_de_5_anos`, `data_futura`, `sem_data` (só `value > 0`; referência = hoje em
+  America/Araguaina).
+- `GET /tecnologia/export?format=csv|xlsx&<filtros>` (permissão `exports.create`, 30/h):
+  tabela agregada `Unidade; Categoria; Tipo de TI; Situação operacional; Quantidade`, sem
+  linha por bem e sem dados pessoais; toda célula passa por `app.security.csv_safety`
+  (`report_export`); acima de `MAX_EXPORT_ROWS` => 413; auditoria `DASHBOARD_TECH_EXPORTED`
+  (formato, nº de linhas e NOMES dos filtros; nunca valores) na mesma transação.
+
+Painéis de layout novos (`dashboard_layout`): `tech_summary`, `tech_category`,
+`tech_units`, `tech_status`, `tech_no_owner`, `tech_age` (ao fim da ordem padrão; 15 ids no
+total). O CHECK de tamanho de `dashboard_layout` (1024 bytes) comporta o pior caso (cerca de
+600 bytes): não foi alterado.

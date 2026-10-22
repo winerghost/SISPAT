@@ -20,10 +20,11 @@
 // destino vindo da URL (`?next=`/`?redirect=`), evitando open redirect.
 // =============================================================================
 
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { useQueryClient } from "@tanstack/react-query";
 
+import { activationRedirectFor } from "@/lib/activation-redirect";
 import { UNAUTHORIZED_EVENT } from "@/lib/api-client";
 import { signOutEverywhere, useSupabaseSession } from "@/lib/session";
 import { clearUiCookie } from "@/lib/ui-preferences";
@@ -42,13 +43,27 @@ export function AuthGuard({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient();
   const isPublic = isPublicRoute(pathname);
   const { session, loading } = useSupabaseSession();
+  // Raiz: `undefined` = ainda não conferiu a URL; `null` = nada a repassar.
+  const [rootActivation, setRootActivation] = useState<string | null | undefined>(
+    pathname === "/" ? undefined : null,
+  );
 
   useEffect(() => {
-    if (!isPublic && !loading && !session) {
+    if (pathname !== "/") {
+      setRootActivation(null);
+      return;
+    }
+    const target = activationRedirectFor(window.location.search);
+    setRootActivation(target);
+    if (target) router.replace(target);
+  }, [pathname, router]);
+
+  useEffect(() => {
+    if (!isPublic && !loading && !session && rootActivation === null) {
       clearUiCookie(); // sessão expirou/encerrada em outra aba: não deixa a preferência para o próximo usuário
       router.replace("/login");
     }
-  }, [isPublic, loading, session, router]);
+  }, [isPublic, loading, session, router, rootActivation]);
 
   useEffect(() => {
     if (isPublic) return;
@@ -61,7 +76,7 @@ export function AuthGuard({ children }: { children: ReactNode }) {
 
   if (isPublic) return <>{children}</>;
 
-  if (loading || !session) {
+  if (loading || !session || rootActivation !== null) {
     return (
       <div className="p-8 text-body-sm text-warm-granite" role="status" aria-live="polite">
         Verificando sessão…

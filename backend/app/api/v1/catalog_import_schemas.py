@@ -41,6 +41,40 @@ class CatalogConfirmRequest(_StrictModel):
     alias_item_ids: list[uuid.UUID] = Field(default_factory=list, max_length=10000)
 
 
+class CatalogFailureOut(_StrictModel):
+    """Falha de um item na confirmação (sem PII além do rótulo já exibido na prévia)."""
+
+    item_id: str | None = Field(default=None, max_length=64)
+    row: int | None = Field(default=None, ge=0, le=10_000_000)
+    label: str | None = Field(default=None, max_length=300)
+    reason: str | None = Field(default=None, max_length=300)
+
+
+class CatalogUnwrittenOut(_StrictModel):
+    """Itens da prévia não gravados, por classificação e motivo (só contadores)."""
+
+    total: int = Field(ge=0, le=1_000_000)
+    por_classificacao: dict[str, int]
+    por_motivo: dict[str, int]
+    nao_selecionados: int = Field(ge=0, le=1_000_000)
+
+
+class CatalogConfirmResponse(_StrictModel):
+    """Corpo de resposta da confirmação (validado antes de sair; extra proibido)."""
+
+    preview_id: str = Field(max_length=64)
+    kind: Literal["units", "rooms", "people"]
+    sync_job_id: str = Field(max_length=64)
+    status: Literal["CONCLUIDO", "PARCIAL", "FALHOU"]
+    created: int = Field(ge=0, le=1_000_000)
+    updated: int = Field(ge=0, le=1_000_000)
+    ignorados: int = Field(ge=0, le=1_000_000)
+    inalterados: int = Field(ge=0, le=1_000_000)
+    nao_gravados: CatalogUnwrittenOut
+    falhas_total: int = Field(ge=0, le=1_000_000)
+    falhas: list[CatalogFailureOut] = Field(max_length=100)
+
+
 class CatalogItemsQuery(_StrictModel):
     """Query string de `GET /catalog-imports/<preview_id>/items` (allowlist)."""
 

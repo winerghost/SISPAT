@@ -132,7 +132,7 @@ def test_db_alembic_revision_chain_is_linear() -> None:
     down_targets = [d for d in revisions.values() if d is not None]
     assert len(down_targets) == len(set(down_targets)), "ramificação (branch) de revisões"
     heads = set(revisions) - set(down_targets)
-    assert heads == {"0014_unaccent_search"}, heads
+    assert heads == {"0015_asset_tech_classification"}, heads
 
 
 def test_db_alembic_revision_ids_cabem_em_alembic_version() -> None:
@@ -898,3 +898,89 @@ def test_db_0013_model_matches_migration() -> None:
     assert checks["ck_user_preferences_dashboard_charts_size"] == (
         "octet_length(dashboard_charts::text) <= 512"
     )
+
+
+# ---------------------------------------------------------------------------
+# Migração 0015_asset_tech_classification
+# ---------------------------------------------------------------------------
+
+TECH_PY = VERSIONS_DIR / "0015_asset_tech_classification.py"
+TECH_SQL = SQL_DIR / "0018_asset_tech_classification.sql"
+
+
+@pytest.fixture(scope="module")
+def tech_migration() -> ModuleType:
+    return _load_module(TECH_PY)
+
+
+def test_db_0015_revises_0014(tech_migration) -> None:
+    assert tech_migration.revision == "0015_asset_tech_classification"
+    assert tech_migration.down_revision == "0014_unaccent_search"
+
+
+def test_db_0015_columns_checks_and_index(tech_migration) -> None:
+    cols = tech_migration.ADD_COLUMNS_SQL
+    for name in ("asset_category", "tech_type", "operational_status"):
+        assert f"ADD COLUMN IF NOT EXISTS {name} text NULL" in cols
+    assert "DEFAULT" not in cols.upper()  # NULL = "não informado"; nunca valor fictício
+    checks = tech_migration.ADD_CHECKS_SQL
+    for name in ("ck_assets_asset_category", "ck_assets_tech_type", "ck_assets_operational_status"):
+        assert f"conname = '{name}'" in checks  # idempotente
+    assert "('TECNOLOGIA','MOBILIARIO','VEICULO','EQUIPAMENTO','OUTROS')" in checks
+    assert "asset_category = 'TECNOLOGIA' AND tech_type IN" in checks
+    assert "('COMPUTADOR','NOTEBOOK','MONITOR','IMPRESSORA','OUTRO_TI')" in checks
+    assert "('EM_USO','ESTOQUE','MANUTENCAO','BAIXADO')" in checks
+    index = tech_migration.CREATE_INDEX_SQL
+    assert "CREATE INDEX IF NOT EXISTS ix_assets_category_active" in index
+    assert "WHERE deleted_at IS NULL AND asset_category IS NOT NULL" in index
+    upgrade_sql = chr(10).join(tech_migration.UPGRADE_STATEMENTS)
+    assert tech_migration.UPGRADE_STATEMENTS == (
+        tech_migration.ADD_COLUMNS_SQL, tech_migration.ADD_CHECKS_SQL, tech_migration.CREATE_INDEX_SQL
+    )
+    assert not re.search(r"ADD\s+COLUMN\s+(?!IF\s+NOT\s+EXISTS)", upgrade_sql)
+    assert not re.search(r"(UPDATE|DELETE|INSERT|TRUNCATE|DROP|GRANT)", upgrade_sql, re.IGNORECASE)
+
+
+def test_db_0015_downgrade_only_removes_its_objects(tech_migration) -> None:
+    sql = tech_migration.DOWNGRADE_SQL
+    assert re.findall(r"DROP INDEX IF EXISTS public\.(\w+)", sql) == ["ix_assets_category_active"]
+    assert set(re.findall(r"DROP CONSTRAINT IF EXISTS (\w+)", sql)) == {
+        "ck_assets_asset_category", "ck_assets_tech_type", "ck_assets_operational_status",
+    }
+    assert set(re.findall(r"DROP COLUMN IF EXISTS (\w+)", sql)) == {
+        "asset_category", "tech_type", "operational_status",
+    }
+    assert "bond_status" not in sql and "DROP TABLE" not in sql.upper()
+    assert not re.search(r"^\s*DELETE\s+FROM|TRUNCATE", sql, re.IGNORECASE | re.MULTILINE)
+
+
+def test_db_0015_sql_mirror_matches_alembic(tech_migration) -> None:
+    mirror = TECH_SQL.read_text(encoding="utf-8")
+    for statement in tech_migration.UPGRADE_STATEMENTS:
+        assert statement.strip(chr(10)) in mirror
+    # NÃO aplicada: o cabeçalho avisa e nenhum texto afirma o contrário.
+    assert "PENDENTE DE APLICAÇÃO" in mirror
+    assert "PENDENTE DE APLICAÇÃO" in TECH_PY.read_text(encoding="utf-8")
+    assert "alembic stamp 0015_asset_tech_classification" in mirror
+    assert not re.search(r"^\s*(BEGIN|COMMIT)\s*;", mirror, re.IGNORECASE | re.MULTILINE)
+
+
+def test_db_0015_model_matches_migration_and_vocabulary(tech_migration) -> None:
+    from app.services import asset_classification as ac
+
+    table = Asset.__table__
+    for name in ("asset_category", "tech_type", "operational_status"):
+        column = table.c[name]
+        assert isinstance(column.type, Text) and column.nullable
+        assert column.server_default is None and column.default is None
+    checks = {c.name: str(c.sqltext) for c in table.constraints if c.name}
+    for name in ("ck_assets_asset_category", "ck_assets_tech_type", "ck_assets_operational_status"):
+        assert name in checks
+    # o vocabulário em Python é o mesmo dos CHECKs do banco (migração e modelo)
+    for values in (ac.CATEGORIES, ac.TECH_TYPES, ac.OPERATIONAL_STATUSES):
+        listed = "(" + ",".join(f"'{v}'" for v in values) + ")"
+        assert listed in tech_migration.ADD_CHECKS_SQL
+        assert listed in "".join(checks.values())
+    idx = {i.name: i for i in table.indexes}["ix_assets_category_active"]
+    assert not idx.unique
+    assert "asset_category IS NOT NULL" in str(idx.dialect_options["postgresql"]["where"])

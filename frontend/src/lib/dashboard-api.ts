@@ -17,6 +17,15 @@
 //   GET /v1/dashboard/por-sala
 //   GET /v1/dashboard/inventario
 //   GET /v1/dashboard/tipos
+//   GET /v1/dashboard/tecnologia/{resumo,por-categoria,por-unidade,por-status,
+//                                 sem-responsavel,tempo-registro}
+//   GET /v1/dashboard/tecnologia/export?format=csv|xlsx   (arquivo, auditado)
+//
+// Painéis de TECNOLOGIA: aceitam os filtros comuns + `categoria`, `tipo_ti` e
+// `status` (classificação). Os endpoints ANTERIORES recusam (400) essas três
+// chaves, então elas só saem nas consultas de Tecnologia e nunca entram nas
+// queryKeys dos demais painéis (trocar a classificação não refaz as outras
+// consultas).
 //
 // FILTROS (docs/architecture/dashboard-api.md): todos os endpoints aceitam o
 // mesmo conjunto (`DashboardFilters`). Aqui eles só são SERIALIZADOS: chaves
@@ -52,13 +61,30 @@ export const DASHBOARD_FILTER_KEYS = [
   "registrado_ate",
   "inventario",
   "movimentacao_pendente",
+  "categoria",
+  "tipo_ti",
+  "status",
 ] as const;
+
+/** Chaves de classificação: valem SÓ para os painéis de Tecnologia. */
+export const TECH_FILTER_KEYS = ["categoria", "tipo_ti", "status"] as const;
+export type TechFilterKey = (typeof TECH_FILTER_KEYS)[number];
+const isTechKey = (key: string): key is TechFilterKey => (TECH_FILTER_KEYS as readonly string[]).includes(key);
 
 export type DashboardFilterKey = (typeof DASHBOARD_FILTER_KEYS)[number];
 
 export type BoolText = "true" | "false";
 export type LocatedFilterValue = "SIM" | "NAO" | "DESCONHECIDO";
 export type InventoryFilterValue = "conferido" | "nao_conferido" | "encontrado" | "nao_encontrado";
+export type CategoriaFilterValue =
+  | "TECNOLOGIA"
+  | "MOBILIARIO"
+  | "VEICULO"
+  | "EQUIPAMENTO"
+  | "OUTROS"
+  | "NAO_CLASSIFICADO";
+export type TipoTiFilterValue = "COMPUTADOR" | "NOTEBOOK" | "MONITOR" | "IMPRESSORA" | "OUTRO_TI" | "NAO_INFORMADO";
+export type StatusFilterValue = "EM_USO" | "ESTOQUE" | "MANUTENCAO" | "BAIXADO" | "NAO_INFORMADO";
 
 /** Todos opcionais; ausente = sem filtro. Valores sempre texto (como na URL). */
 export interface DashboardFilters {
@@ -75,6 +101,10 @@ export interface DashboardFilters {
   registrado_ate?: string;
   inventario?: InventoryFilterValue;
   movimentacao_pendente?: BoolText;
+  /** Só painéis de Tecnologia. */
+  categoria?: CategoriaFilterValue;
+  tipo_ti?: TipoTiFilterValue;
+  status?: StatusFilterValue;
 }
 
 export const NO_DASHBOARD_FILTERS: DashboardFilters = Object.freeze({});
@@ -90,6 +120,30 @@ export const INVENTORY_VALUES: readonly InventoryFilterValue[] = [
   "nao_conferido",
   "encontrado",
   "nao_encontrado",
+];
+
+export const CATEGORIA_VALUES: readonly CategoriaFilterValue[] = [
+  "TECNOLOGIA",
+  "MOBILIARIO",
+  "VEICULO",
+  "EQUIPAMENTO",
+  "OUTROS",
+  "NAO_CLASSIFICADO",
+];
+export const TIPO_TI_VALUES: readonly TipoTiFilterValue[] = [
+  "COMPUTADOR",
+  "NOTEBOOK",
+  "MONITOR",
+  "IMPRESSORA",
+  "OUTRO_TI",
+  "NAO_INFORMADO",
+];
+export const STATUS_VALUES: readonly StatusFilterValue[] = [
+  "EM_USO",
+  "ESTOQUE",
+  "MANUTENCAO",
+  "BAIXADO",
+  "NAO_INFORMADO",
 ];
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -152,6 +206,12 @@ function cleanFilterValue(key: DashboardFilterKey, raw: unknown): string | null 
     case "registrado_desde":
     case "registrado_ate":
       return isCalendarDate(raw) ? raw : null;
+    case "categoria":
+      return (CATEGORIA_VALUES as readonly string[]).includes(raw) ? raw : null;
+    case "tipo_ti":
+      return (TIPO_TI_VALUES as readonly string[]).includes(raw) ? raw : null;
+    case "status":
+      return (STATUS_VALUES as readonly string[]).includes(raw) ? raw : null;
   }
 }
 
@@ -184,18 +244,25 @@ export function parseDashboardFilters(params: { getAll(name: string): string[] }
   return sanitizeDashboardFilters(raw);
 }
 
+/** Quais chaves entram: `all` (URL e Tecnologia) ou `base` (painéis gerais, sem classificação). */
+export type FilterScope = "all" | "base";
+
 /** Pares chave/valor na ordem fixa (para a API e para a URL). */
-export function dashboardFilterEntries(filters: DashboardFilters): [DashboardFilterKey, string][] {
+export function dashboardFilterEntries(
+  filters: DashboardFilters,
+  scope: FilterScope = "all",
+): [DashboardFilterKey, string][] {
   const clean = sanitizeDashboardFilters(filters as Record<string, unknown>);
   return DASHBOARD_FILTER_KEYS.flatMap((key) => {
     const value = clean[key];
-    return value === undefined ? [] : [[key, value] as [DashboardFilterKey, string]];
+    if (value === undefined || (scope === "base" && isTechKey(key))) return [];
+    return [[key, value] as [DashboardFilterKey, string]];
   });
 }
 
 /** Query string estável (`a=1&b=2`, sem "?"); vazia sem filtros. */
-export function dashboardFiltersQueryString(filters: DashboardFilters): string {
-  return new URLSearchParams(dashboardFilterEntries(filters)).toString();
+export function dashboardFiltersQueryString(filters: DashboardFilters, scope: FilterScope = "all"): string {
+  return new URLSearchParams(dashboardFilterEntries(filters, scope)).toString();
 }
 
 export function countDashboardFilters(filters: DashboardFilters): number {
@@ -294,6 +361,45 @@ export interface TypeOption {
   count: number;
 }
 
+// --- Tecnologia ---------------------------------------------------------------
+
+export interface TechSummary {
+  total_bens: number;
+  tecnologia: number;
+  nao_classificados: number;
+  tecnologia_sem_responsavel: number;
+  tecnologia_sem_tipo: number;
+  tecnologia_sem_status: number;
+  /** NOMES dos filtros aplicados pelo backend (nunca valores). */
+  filtros_aplicados: DashboardFilterKey[];
+}
+
+/** `id` do vocabulário fechado + `label` pt-BR do backend + contagem (> 0). */
+export interface TechCount {
+  id: string;
+  label: string;
+  value: number;
+}
+
+export interface TechCategories {
+  categorias: TechCount[];
+  tipos_ti: TechCount[];
+}
+
+export interface TechUnitRow {
+  unidade: string;
+  total: number;
+  tipos: Record<string, number>;
+}
+
+export interface TechWithoutOwner {
+  tecnologia: number;
+  sem_responsavel: number;
+  /** Percentual (%) calculado pelo backend; `null` sem bens de TI. */
+  percentual: number | null;
+  por_unidade: { unidade: string; value: number }[];
+}
+
 // ---------------------------------------------------------------------------
 // Limites (defesa em profundidade contra respostas anômalas)
 // ---------------------------------------------------------------------------
@@ -354,7 +460,7 @@ function isAppliedFilters(value: unknown): value is DashboardFilterKey[] {
   return (
     Array.isArray(value) &&
     value.length <= DASHBOARD_FILTER_KEYS.length &&
-    value.every((name) => (DASHBOARD_FILTER_KEYS as readonly unknown[]).includes(name))
+    value.every((name) => (DASHBOARD_FILTER_KEYS as readonly unknown[]).includes(name) && !isTechKey(String(name)))
   );
 }
 
@@ -450,14 +556,91 @@ export function isTypeOptions(value: unknown): value is TypeOption[] {
   );
 }
 
+const TECH_ID_RE = /^[A-Z_]{1,32}$/;
+const TECH_AGE_ID_RE = /^[a-z0-9_]{1,24}$/;
+const MAX_TECH_ITEMS = 8;
+
+export function isTechSummary(value: unknown): value is TechSummary {
+  if (!isRecord(value)) return false;
+  if (
+    !hasCounts(value, [
+      "total_bens",
+      "tecnologia",
+      "nao_classificados",
+      "tecnologia_sem_responsavel",
+      "tecnologia_sem_tipo",
+      "tecnologia_sem_status",
+    ])
+  ) {
+    return false;
+  }
+  const applied = value.filtros_aplicados;
+  return (
+    Array.isArray(applied) &&
+    applied.length <= DASHBOARD_FILTER_KEYS.length &&
+    applied.every((name) => (DASHBOARD_FILTER_KEYS as readonly unknown[]).includes(name))
+  );
+}
+
+function techCountGuard(pattern: RegExp) {
+  const isItem = (value: unknown): value is TechCount =>
+    isRecord(value) &&
+    typeof value.id === "string" &&
+    pattern.test(value.id) &&
+    isLabel(value.label) &&
+    isCount(value.value) &&
+    value.value > 0;
+  return (value: unknown): value is TechCount[] =>
+    Array.isArray(value) && value.length <= MAX_TECH_ITEMS && value.every(isItem);
+}
+
+export const isTechCounts = techCountGuard(TECH_ID_RE);
+export const isTechAge = techCountGuard(TECH_AGE_ID_RE);
+
+export function isTechCategories(value: unknown): value is TechCategories {
+  return isRecord(value) && isTechCounts(value.categorias) && isTechCounts(value.tipos_ti);
+}
+
+export function isTechUnits(value: unknown): value is TechUnitRow[] {
+  return (
+    Array.isArray(value) &&
+    value.length <= MAX_LABELED_ROWS &&
+    value.every(
+      (row) =>
+        isRecord(row) &&
+        isKey(row.unidade) &&
+        isCount(row.total) &&
+        isRecord(row.tipos) &&
+        Object.entries(row.tipos).length <= MAX_TECH_ITEMS &&
+        Object.entries(row.tipos).every(([name, n]) => isKey(name) && isCount(n)),
+    )
+  );
+}
+
+export function isTechWithoutOwner(value: unknown): value is TechWithoutOwner {
+  if (!isRecord(value) || !hasCounts(value, ["tecnologia", "sem_responsavel"])) return false;
+  const pct = value.percentual;
+  if (pct !== null && !(typeof pct === "number" && Number.isFinite(pct) && pct >= 0 && pct <= 100)) return false;
+  return (
+    Array.isArray(value.por_unidade) &&
+    value.por_unidade.length <= MAX_LABELED_ROWS &&
+    value.por_unidade.every((row) => isRecord(row) && isKey(row.unidade) && isCount(row.value) && row.value > 0)
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Transporte
 // ---------------------------------------------------------------------------
 
 type SearchParams = Record<string, string | number>;
 
-function filterParams(filters: DashboardFilters, extra?: SearchParams): SearchParams | undefined {
-  const params: SearchParams = Object.fromEntries(dashboardFilterEntries(filters));
+/** `scope="base"` (padrão): os endpoints gerais recusam as chaves de classificação. */
+export function filterParams(
+  filters: DashboardFilters,
+  extra?: SearchParams,
+  scope: FilterScope = "base",
+): SearchParams | undefined {
+  const params: SearchParams = Object.fromEntries(dashboardFilterEntries(filters, scope));
   if (extra) Object.assign(params, extra);
   return Object.keys(params).length > 0 ? params : undefined;
 }
@@ -533,12 +716,34 @@ export const getDashboardInventory = (filters: DashboardFilters = NO_DASHBOARD_F
 export const getDashboardTypes = (filters: DashboardFilters = NO_DASHBOARD_FILTERS) =>
   fetchValidated("/v1/dashboard/tipos", isTypeOptions, "tipos de bem", filterParams(withoutFilter(filters, "tipo")));
 
+// --- Tecnologia: sempre com TODAS as chaves (comuns + classificação) -------------
+
+const techGet = <T,>(path: string, guard: (value: unknown) => value is T, label: string, filters: DashboardFilters) =>
+  fetchValidated(`/v1/dashboard/tecnologia/${path}`, guard, label, filterParams(filters, undefined, "all"));
+
+export const getTechSummary = (filters: DashboardFilters = NO_DASHBOARD_FILTERS) =>
+  techGet("resumo", isTechSummary, "indicadores de tecnologia", filters);
+export const getTechCategories = (filters: DashboardFilters = NO_DASHBOARD_FILTERS) =>
+  techGet("por-categoria", isTechCategories, "tecnologia por categoria", filters);
+export const getTechByUnit = (filters: DashboardFilters = NO_DASHBOARD_FILTERS) =>
+  techGet("por-unidade", isTechUnits, "tecnologia por unidade", filters);
+export const getTechByStatus = (filters: DashboardFilters = NO_DASHBOARD_FILTERS) =>
+  techGet("por-status", isTechCounts, "tecnologia por situação operacional", filters);
+export const getTechWithoutOwner = (filters: DashboardFilters = NO_DASHBOARD_FILTERS) =>
+  techGet("sem-responsavel", isTechWithoutOwner, "tecnologia sem responsável", filters);
+export const getTechRegistrationAge = (filters: DashboardFilters = NO_DASHBOARD_FILTERS) =>
+  techGet("tempo-registro", isTechAge, "tempo desde o registro", filters);
+
 // ---------------------------------------------------------------------------
 // Hooks (react-query) — filtros em TODAS as queryKeys
 // ---------------------------------------------------------------------------
 
-/** Parte da queryKey que identifica os filtros (string estável, ordem fixa). */
-const filterKey = (filters: DashboardFilters) => dashboardFiltersQueryString(filters);
+/**
+ * Parte da queryKey que identifica os filtros (string estável, ordem fixa).
+ * Painéis gerais ignoram a classificação; os de Tecnologia usam todas as chaves.
+ */
+const filterKey = (filters: DashboardFilters) => dashboardFiltersQueryString(filters, "base");
+const techFilterKey = (filters: DashboardFilters) => dashboardFiltersQueryString(filters, "all");
 
 export const DASHBOARD_QUERY_KEYS = {
   summary: (filters: DashboardFilters) => ["dashboard", "resumo", filterKey(filters)],
@@ -551,6 +756,7 @@ export const DASHBOARD_QUERY_KEYS = {
   byRoom: (filters: DashboardFilters) => ["dashboard", "por-sala", filterKey(filters)],
   inventory: (filters: DashboardFilters) => ["dashboard", "inventario", filterKey(filters)],
   types: (filters: DashboardFilters) => ["dashboard", "tipos", filterKey(withoutFilter(filters, "tipo"))],
+  tech: (name: string, filters: DashboardFilters) => ["dashboard", "tecnologia", name, techFilterKey(filters)],
 } as const;
 
 function shouldRetry(failureCount: number, error: unknown): boolean {
@@ -654,3 +860,25 @@ export function useDashboardTypes(
     ...COMMON,
   });
 }
+
+function useTechQuery<T>(
+  name: string,
+  fetcher: (filters: DashboardFilters) => Promise<T>,
+  filters: DashboardFilters,
+): UseQueryResult<T, unknown> {
+  return useQuery({
+    queryKey: DASHBOARD_QUERY_KEYS.tech(name, filters),
+    queryFn: () => fetcher(filters),
+    ...COMMON,
+  });
+}
+
+export const useTechSummary = (filters: DashboardFilters) => useTechQuery("resumo", getTechSummary, filters);
+export const useTechCategories = (filters: DashboardFilters) =>
+  useTechQuery("por-categoria", getTechCategories, filters);
+export const useTechByUnit = (filters: DashboardFilters) => useTechQuery("por-unidade", getTechByUnit, filters);
+export const useTechByStatus = (filters: DashboardFilters) => useTechQuery("por-status", getTechByStatus, filters);
+export const useTechWithoutOwner = (filters: DashboardFilters) =>
+  useTechQuery("sem-responsavel", getTechWithoutOwner, filters);
+export const useTechRegistrationAge = (filters: DashboardFilters) =>
+  useTechQuery("tempo-registro", getTechRegistrationAge, filters);
