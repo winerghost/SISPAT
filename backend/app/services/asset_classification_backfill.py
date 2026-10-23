@@ -90,3 +90,34 @@ def classify_existing_assets(db: Session, *, apply: bool = False) -> Classificat
         )
     report.classified = updated
     return report
+
+
+LIST_DESCRIPTION_MAX = 80
+LIST_LIMIT_MAX = 1000
+
+
+def _safe_description(value: str | None) -> str:
+    """Descrição para listagem: sem controle, espaços colapsados e truncada."""
+    text = " ".join("".join(c if c.isprintable() else " " for c in (value or "")).split())
+    if len(text) > LIST_DESCRIPTION_MAX:
+        text = text[: LIST_DESCRIPTION_MAX - 1] + "…"
+    return text or "(sem descrição)"
+
+
+def list_unclassified_assets(db: Session, *, limit: int = LIST_LIMIT_MAX) -> list[tuple[str, str]]:
+    """SOMENTE LEITURA: `(id, descrição truncada)` dos bens ativos sem categoria
+    que NENHUMA regra classifica. Nada é gravado; não expõe patrimônio, notas
+    nem responsável."""
+    rows = (
+        db.query(Asset.id, Asset.description)
+        .filter(Asset.deleted_at.is_(None), Asset.asset_category.is_(None))
+        .order_by(Asset.description, Asset.id)
+        .all()
+    )
+    result: list[tuple[str, str]] = []
+    for asset_id, description in rows:
+        if classify_description(description)[0] is None:
+            result.append((str(asset_id), _safe_description(description)))
+            if len(result) >= limit:
+                break
+    return result

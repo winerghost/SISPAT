@@ -18,6 +18,10 @@ import { apiClient } from "@/lib/api-client";
 
 export type LocatedStatus = "SIM" | "NAO" | "DESCONHECIDO";
 
+export type AssetCategory = "TECNOLOGIA" | "MOBILIARIO" | "VEICULO" | "EQUIPAMENTO" | "OUTROS";
+export type TechType = "COMPUTADOR" | "NOTEBOOK" | "MONITOR" | "IMPRESSORA" | "OUTRO_TI";
+export type OperationalStatus = "EM_USO" | "ESTOQUE" | "MANUTENCAO" | "BAIXADO";
+
 export interface AssetUnitRef {
   id: string;
   code: string;
@@ -44,6 +48,11 @@ export interface AssetRecord {
   location_id: string | null;
   location: AssetNamedRef | null;
   located: LocatedStatus;
+  /** Classificação (null = não informado). Editável por ADM/USER via PATCH. */
+  asset_category?: AssetCategory | null;
+  /** Só com categoria TECNOLOGIA. */
+  tech_type?: TechType | null;
+  operational_status?: OperationalStatus | null;
   /**
    * Vínculo do bem (1ª coluna RESPONSAVEL da planilha: "Servidor",
    * "Terceirizado", "Ocioso"...). Somente leitura: vem da importação, nunca do
@@ -121,6 +130,10 @@ export interface UpdateAssetRequest {
   registration_date?: string | null;
   owner_unit_id?: string | null;
   located?: LocatedStatus;
+  /** `null` = "não informado". `tech_type` exige categoria TECNOLOGIA (422). */
+  asset_category?: AssetCategory | null;
+  tech_type?: TechType | null;
+  operational_status?: OperationalStatus | null;
 }
 
 export interface AssetActionRequest {

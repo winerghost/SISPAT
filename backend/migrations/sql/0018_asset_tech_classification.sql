@@ -14,7 +14,8 @@
 -- inicial é o comando `flask classify-assets` (dry-run por padrão).
 --
 -- Pré-requisito: 0017_unaccent_search.sql (Alembic 0014). Tabela existente:
--- RLS/REVOKE já vêm da 0006 (nenhuma tabela nova aqui).
+-- RLS/REVOKE já vêm de 0006_db_security_hardening.sql (no Alembic: 0004,
+-- as numerações do espelho .sql e do Alembic diferem; nenhuma tabela nova aqui).
 -- Aditivo e idempotente. Sem BEGIN/COMMIT (SQL Editor do Supabase).
 -- Downgrade: ver DOWNGRADE_SQL na migração Alembic correspondente.
 

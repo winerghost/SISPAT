@@ -12,6 +12,7 @@ from typing import Literal
 from pydantic import Field, field_validator
 from app.api.v1.pagination import DEFAULT_PAGE_SIZE, PageSize
 
+from app.api.v1.import_confirm_common import ConfirmUnwrittenOut, JobStatus, Count
 from app.api.v1.schemas import _StrictModel
 
 CATALOG_KINDS = ("units", "rooms", "people")
@@ -50,29 +51,29 @@ class CatalogFailureOut(_StrictModel):
     reason: str | None = Field(default=None, max_length=300)
 
 
-class CatalogUnwrittenOut(_StrictModel):
-    """Itens da prévia não gravados, por classificação e motivo (só contadores)."""
-
-    total: int = Field(ge=0, le=1_000_000)
-    por_classificacao: dict[str, int]
-    por_motivo: dict[str, int]
-    nao_selecionados: int = Field(ge=0, le=1_000_000)
+# Resumo de não gravados: contrato comum a bens e cadastros (`import_confirm_common`).
+CatalogUnwrittenOut = ConfirmUnwrittenOut
 
 
 class CatalogConfirmResponse(_StrictModel):
-    """Corpo de resposta da confirmação (validado antes de sair; extra proibido)."""
+    """Corpo de resposta da confirmação (validado antes de sair; extra proibido).
+
+    `degraded=true`: a validação falhou APÓS o commit; os dados estão gravados e
+    só os contadores mínimos são confiáveis (sem falhas detalhadas/não gravados).
+    """
 
     preview_id: str = Field(max_length=64)
     kind: Literal["units", "rooms", "people"]
     sync_job_id: str = Field(max_length=64)
-    status: Literal["CONCLUIDO", "PARCIAL", "FALHOU"]
-    created: int = Field(ge=0, le=1_000_000)
-    updated: int = Field(ge=0, le=1_000_000)
-    ignorados: int = Field(ge=0, le=1_000_000)
-    inalterados: int = Field(ge=0, le=1_000_000)
+    status: JobStatus
+    created: Count
+    updated: Count
+    ignorados: Count
+    inalterados: Count
     nao_gravados: CatalogUnwrittenOut
-    falhas_total: int = Field(ge=0, le=1_000_000)
+    falhas_total: Count
     falhas: list[CatalogFailureOut] = Field(max_length=100)
+    degraded: bool = False
 
 
 class CatalogItemsQuery(_StrictModel):

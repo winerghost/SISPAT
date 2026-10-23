@@ -20,6 +20,7 @@ import { defaultInventories, handleInventories, type InventoryMockState } from "
 import { defaultCatalog, handleCatalog, type CatalogMockState } from "./catalog-mocks";
 import {
   defaultCatalogImport,
+  assetConfirmResponse,
   handleCatalogImports,
   PENDING_COUNTS_MOCK,
   type CatalogImportMockOptions,
@@ -1631,13 +1632,7 @@ export async function installMocks(page: Page, opts: MockOptions = {}): Promise<
 
     if (path === "/v1/imports/google-sheets/confirm" && method === "POST") {
       const ids = (body as { selected_item_ids?: string[] }).selected_item_ids ?? [];
-      return json(route, 200, {
-        sync_job_id: "50000000-0000-4000-8000-000000000001",
-        created: ids.length,
-        updated: 0,
-        ignorados: 0,
-        falhas: [],
-      });
+      return json(route, 200, assetConfirmResponse(state.catalogImport, ids, PREVIEW_ITEMS));
     }
 
     return json(route, 404, { error: { code: "NOT_FOUND", message: `não mockado: ${method} ${path}` } });

@@ -70,6 +70,9 @@ OP_CREATED = "ASSET_CREATED"
 OP_UPDATED = "ASSET_UPDATED"
 OP_DELETED = "ASSET_DELETED"
 OP_RESTORED = "ASSET_RESTORED"
+OP_CLASSIFICATION_UPDATED = "ASSET_CLASSIFICATION_UPDATED"
+_CLASSIFICATION_FIELDS = ("asset_category", "tech_type", "operational_status")
+_TECH_CATEGORY = "TECNOLOGIA"
 
 _ZERO_UUID = uuid.UUID(int=0)
 _DEFAULT_LOCATED = "DESCONHECIDO"
@@ -148,6 +151,14 @@ class AssetLinkMismatchError(AssetError):
     status_code = 409
     code = "link_unit_mismatch"
     message = "O vínculo informado pertence a outra unidade."
+
+
+class AssetClassificationError(AssetError):
+    """Tipo de TI incoerente com a categoria (422; sem eco de valores)."""
+
+    status_code = 422
+    code = "classification_inconsistent"
+    message = "O tipo de TI só é válido para a categoria Tecnologia."
 
 
 class AssetFieldForbiddenError(AssetError):
@@ -393,6 +404,9 @@ class AssetService:
             "location_id": str(asset.location_id) if asset.location_id else None,
             "location": look.locations.get(asset.location_id),
             "located": asset.located,
+            "asset_category": asset.asset_category,
+            "tech_type": asset.tech_type,
+            "operational_status": asset.operational_status,
             # Vínculo (da planilha). SEC-VF-02: saída pela MESMA regra da
             # gravação (sem Cc/Cf nem `__...__`); no-op para dado já normalizado.
             "bond_status": normalize_bond_status(asset.bond_status),
@@ -566,6 +580,22 @@ class AssetService:
         if location_row.room_id is not None and location_row.room_id != effective_room_id:
             raise AssetLinkMismatchError()
 
+    @staticmethod
+    def _classification_changes(asset: Asset, body: Any, requested: set[str]) -> dict[str, Any]:
+        """Mudanças de classificação; garante tipo de TI só com categoria TECNOLOGIA.
+
+        Mudar a categoria para outra que não TECNOLOGIA exige limpar o tipo de TI
+        no mesmo pedido (nunca limpo em silêncio). Sem valores no erro.
+        """
+        wanted = {f: getattr(body, f) for f in _CLASSIFICATION_FIELDS if f in requested}
+        if not wanted:
+            return {}
+        category = wanted.get("asset_category", asset.asset_category) if "asset_category" in wanted else asset.asset_category
+        tech = wanted["tech_type"] if "tech_type" in wanted else asset.tech_type
+        if tech is not None and category != _TECH_CATEGORY:
+            raise AssetClassificationError()
+        return {f: v for f, v in wanted.items() if getattr(asset, f) != v}
+
     def update(self, actor_id: Any, asset_id: uuid.UUID, body: Any) -> tuple[dict[str, Any], bool]:
         self._guard_fields(body, _ADM_ONLY_UPDATE, self._is_adm)
         asset = self._load(actor_id, asset_id, for_update=True)
@@ -576,6 +606,8 @@ class AssetService:
         for field in _PLAIN_FIELDS:
             if field in requested and getattr(asset, field) != getattr(body, field):
                 changes[field] = getattr(body, field)
+        classification = self._classification_changes(asset, body, requested)
+        changes.update(classification)
         rows: dict[str, Any] = {}
         if "owner_unit_id" in requested:
             raw = body.owner_unit_id
@@ -615,12 +647,16 @@ class AssetService:
         previous = {f: _json_value(getattr(asset, f)) for f in changes if f != "notes"}
         new = {f: _json_value(v) for f, v in changes.items() if f != "notes"}
         new["changed_fields"] = sorted(changes)  # `notes`: só o nome do campo
+        only_classification = set(changes) <= set(_CLASSIFICATION_FIELDS)
         for field, value in changes.items():
             setattr(asset, field, value)
         asset.version = asset.version + 1
         asset.updated_by = actor_id
         self._flush_or_conflict()
-        self._audit(asset.id, OP_UPDATED, actor_id, previous, new)
+        self._audit(
+            asset.id, OP_CLASSIFICATION_UPDATED if only_classification else OP_UPDATED,
+            actor_id, previous, new,
+        )
         return self._serialize_many([asset])[0], True
 
     def delete(self, actor_id: Any, asset_id: uuid.UUID, body: Any) -> dict[str, Any]:

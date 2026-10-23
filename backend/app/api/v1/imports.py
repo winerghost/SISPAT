@@ -43,6 +43,8 @@ from typing import Any
 
 from flask import Blueprint, abort, g, jsonify, request
 
+from app.api.v1.import_confirm_common import safe_confirm_payload
+from app.api.v1.import_confirm_schemas import AssetImportConfirmResponse
 from app.api.v1.schemas import ConfirmImportRequest, ImportItemsQuery, get_json_body, parse_body, parse_query
 from app.api.v1.user_admin_http import admin_rate_limit_key, reject_any_body
 from app.auth.supabase_auth import require_auth
@@ -72,6 +74,32 @@ _UPSTREAM_ERROR_MESSAGE = (
     "Não foi possível ler a planilha de origem (Google Sheets) neste momento. "
     "Tente novamente mais tarde."
 )
+
+
+def _confirm_raw(result: dict[str, Any]) -> dict[str, Any]:
+    """Corpo da resposta (ainda não validado) a partir do resultado do serviço."""
+    return {
+        "sync_job_id": str(result["sync_job_id"]),
+        "status": result["status"],
+        "created": result["created"],
+        "updated": result["updated"],
+        "ignorados": result["ignorados"],
+        "inalterados": result["inalterados"],
+        "nao_gravados": result["nao_gravados"],
+        "pendencias_vinculo": result.get("pendencias_vinculo") or {},
+        "falhas_total": result["falhas_total"],
+        "falhas": [
+            {
+                "item_id": f.get("item_id"),
+                "row": f.get("row"),
+                "patrimony_number": (
+                    str(f["patrimony_number"])[:200] if f.get("patrimony_number") else None
+                ),
+                "reason": str(f["reason"])[:300] if f.get("reason") else None,
+            }
+            for f in result["falhas"]
+        ],
+    }
 
 
 def _serialize_item(item: ImportPreviewItem) -> dict[str, Any]:
@@ -211,6 +239,10 @@ def confirm_preview_endpoint():
     """`POST /api/v1/imports/google-sheets/confirm`.
 
     Corpo JSON obrigatório: `{"preview_id": "...", "selected_item_ids": [...]}`.
+    Resposta (`AssetImportConfirmResponse`): `status` do job (CONCLUIDO/PARCIAL/
+    FALHOU), contadores, `inalterados`, `nao_gravados`, `pendencias_vinculo`,
+    `falhas_total` e até 100 `falhas`. Falha total (todos rejeitados) responde
+    200 com `status=FALHOU` (a prévia é consumida; ver docs).
     Mapeia erros de domínio para HTTP: 404 (prévia inexistente), 409 (prévia
     não confirmável — já confirmada, falhou ou expirada; este é também o
     mecanismo de idempotência desta operação, ver
@@ -232,13 +264,15 @@ def confirm_preview_endpoint():
                 confirmed_by_user_id=user.id,
                 selected_item_ids=selected_item_ids,
             )
-            payload = {
-                "sync_job_id": str(result["sync_job_id"]),
-                "created": result["created"],
-                "updated": result["updated"],
-                "ignorados": result["ignorados"],
-                "falhas": result["falhas"],
-            }
+            # O serviço já deu commit: falha ao validar a resposta NÃO pode virar
+            # 500 (B-3) -> 200 degradado com contadores mínimos válidos.
+            payload = safe_confirm_payload(
+                AssetImportConfirmResponse,
+                lambda: _confirm_raw(result),
+                identity={},
+                result=result,
+                context="imports",
+            )
     except PreviewNotFoundError:
         abort(404, description="Pré-visualização não encontrada.")
         raise AssertionError("inalcançável")  # pragma: no cover

@@ -388,8 +388,12 @@ def test_existente_com_vinculo_de_pessoa_mantem_valor_atual_e_avisa(world):
     _confirm(service, world.db, service.create_preview(ACTOR))
     service, preview, item = _preview_one(world, RESP1="Phillipe Farias Ferreira", RESP2="Outra Pessoa")
     assert item.classification == "EXISTENTE" and AVISO_CADASTRO in item.validation_errors
-    assert _confirm(service, world.db, preview)["updated"] == 1
+    result = _confirm(service, world.db, preview)
+    # Vínculo descartado = vazio: nada difere do bem -> INALTERADO (contrato novo:
+    # não grava nem incrementa `version`). O valor atual é mantido (regra de segurança).
+    assert result["updated"] == 0 and result["inalterados"] == 1 and result["status"] == "CONCLUIDO"
     assert _one_asset(world).bond_status == "Servidor"
+    assert _one_asset(world).version == 1
 
 
 def test_existente_com_reservado_mantem_valor_atual(world):

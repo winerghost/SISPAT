@@ -80,16 +80,43 @@ export interface ImportConfirmRequest {
   selected_item_ids: string[];
 }
 
+/** Falha de um item de bens (sem descrição/PII): linha, número patrimonial (TEXTO) e motivo fixo. */
 export interface ImportConfirmFailureItem {
-  [key: string]: unknown;
+  item_id: string | null;
+  row: number | null;
+  patrimony_number: string | null;
+  reason: string | null;
 }
 
+/** Itens da prévia que a confirmação NÃO grava (só contadores; sem PII). */
+export interface ImportConfirmUnwritten {
+  total: number;
+  /** DUPLICADO / INVALIDO / CONFLITANTE → quantidade. */
+  por_classificacao: Record<string, number>;
+  /** Código do motivo (pendência, `duplicado_na_origem`, ...) → quantidade. */
+  por_motivo: Record<string, number>;
+  /** NOVO/EXISTENTE que o ADM desmarcou. */
+  nao_selecionados: number;
+}
+
+/** Mesmo contrato da confirmação dos cadastros (D2): status do job e totais reais. */
 export interface ImportConfirmResponse {
   sync_job_id: string;
+  /** Status do SyncJob gravado pelo backend. */
+  status: "CONCLUIDO" | "PARCIAL" | "FALHOU";
   created: number;
   updated: number;
   ignorados: number;
+  /** EXISTENTE sem diferença com a planilha (nada gravado). */
+  inalterados: number;
+  nao_gravados: ImportConfirmUnwritten;
+  /** Pendências de vínculo dos bens CRIADOS (sala, pessoa, unidade pertencente...). */
+  pendencias_vinculo: Record<string, number>;
+  /** Total de falhas (a lista `falhas` traz no máximo 100). */
+  falhas_total: number;
   falhas: ImportConfirmFailureItem[];
+  /** O backend gravou, mas falhou ao validar a resposta: só os contadores valem. */
+  degraded: boolean;
 }
 
 /** `POST /api/v1/imports/google-sheets/preview` — gera uma nova prévia. */

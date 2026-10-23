@@ -14,8 +14,12 @@ import { BondStatusText, DeletedBadge, LocatedBadge, PatrimonyNumber } from "./a
 import {
   assetErrorMessage,
   ASSET_VERSION_CONFLICT_MESSAGE,
+  CATEGORY_LABEL,
+  classificationLabel,
   formatCalendarDate,
   formatDateTime,
+  OPERATIONAL_STATUS_LABEL,
+  TECH_TYPE_LABEL,
   isAssetNotFound,
   unitRefText,
 } from "./asset-labels";
@@ -197,6 +201,13 @@ export function AssetDetailSheet({ asset: listAsset, open, onOpenChange, isAdmin
                 <Field label="Responsável">{asset.responsible_person?.name ?? "—"}</Field>
                 <Field label="Vínculo">
                   <BondStatusText value={asset.bond_status} />
+                </Field>
+                <Field label="Categoria">{classificationLabel(CATEGORY_LABEL, asset.asset_category)}</Field>
+                {asset.asset_category === "TECNOLOGIA" ? (
+                  <Field label="Tipo de TI">{classificationLabel(TECH_TYPE_LABEL, asset.tech_type)}</Field>
+                ) : null}
+                <Field label="Situação operacional">
+                  {classificationLabel(OPERATIONAL_STATUS_LABEL, asset.operational_status)}
                 </Field>
                 <Field label="Data de registro">{formatCalendarDate(asset.registration_date) ?? "—"}</Field>
                 {"notes" in asset ? <Field label="Observações">{asset.notes ?? "—"}</Field> : null}

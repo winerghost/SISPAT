@@ -200,7 +200,10 @@ vhost).
 - Migração `0015_asset_tech_classification` (espelho `backend/migrations/sql/0018_*.sql`):
   **PENDENTE, NÃO aplicada** (Supabase único: dev = prod). Só com autorização: executar
   o espelho no SQL Editor e depois `alembic stamp 0015_asset_tech_classification`.
-- Classificação inicial: `flask classify-assets` (dry-run por padrão; `--apply` grava).
+- Classificação inicial: `flask classify-assets` (dry-run por padrão; `--apply` grava;
+  `--list-unclassified` só lê e lista id + descrição truncada dos bens sem regra).
+  Correção manual: PATCH `/assets/<id>` (ADM/USER, escopo, `version`) e tela de
+  edição do bem (categoria, tipo de TI, situação operacional).
   A importação preenche categoria/tipo só quando nulos. Não há garantia nem idade do
   equipamento: "tempo desde o registro" usa a data de cadastro do bem.
 - Rebuild: backend + frontend.
@@ -286,6 +289,9 @@ Dependências Python: `backend/requirements.txt` (pins exatos), `backend/require
 (hashes, usado no Docker) e `backend/requirements-dev.txt` (testes/ferramentas). Para
 regenerar o lock: `scripts/check-dependencies.sh --lock`.
 CI: `.github/workflows/ci.yml` (sem deploy) + `.github/dependabot.yml`.
+
+Next.js está em `15.5.28` (corrige GHSA-2464-fhr4-w9xw e GHSA-p3m5-59mp-jv5r); histórico em
+`docs/security/HISTORICO_DEPENDENCIAS.md`.
 
 ### Estado do banco de produção (Supabase `tocbtonqnahmtegfkrmn`, 2026-10-14)
 
@@ -433,7 +439,7 @@ A IA é **consultiva e somente leitura**: nunca altera dados nem executa ações
    `/ai/insights` e assistente `/ai/ask`, ADM + AAL2) concluídas. Evidências em
    `docs/security/evidence/settings-module-etapa*.md`.
    API de importação dos cadastros (`/api/v1/catalog-imports`, ADM + AAL2) e `GET
-/imports/google-sheets/<id>/pending`: ver `docs/architecture/cadastros-apoio-api.md`.
+/imports/google-sheets/<id>/pending`: ver `docs/architecture/cadastros-apoio-api.md`. A confirmação de bens (`POST /imports/google-sheets/confirm`) segue o mesmo contrato dos cadastros (status CONCLUIDO/PARCIAL/FALHOU, inalterados, não gravados, falhas_total, resposta degradada pós-commit com `degraded=true`).
 
 ### Contrato de paginação (todas as listagens da API v1)
 

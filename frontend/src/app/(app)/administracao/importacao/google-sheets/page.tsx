@@ -6,7 +6,7 @@ import { AnimatePresence } from "motion/react";
 import { FileSpreadsheet } from "lucide-react";
 import { toast } from "sonner";
 
-import { AnimatedCounter, SlideIn } from "@/components/animations";
+import { SlideIn } from "@/components/animations";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { FormMessage } from "@/components/ui/form-message";
@@ -17,6 +17,13 @@ import { PreviewReviewAlert } from "@/components/features/imports/preview-review
 import { PreviewItemsTable, type SelectionSummary } from "@/components/features/imports/preview-items-table";
 import { ConfirmImportDialog } from "@/components/features/imports/confirm-import-dialog";
 import { PendingCountsPanel } from "@/components/features/imports/pending-counts-panel";
+import { CatalogImportResult } from "@/components/features/imports/catalog-import-result";
+import {
+  assetResultView,
+  deriveOutcome,
+  summaryToast,
+  type CatalogOutcome,
+} from "@/components/features/imports/catalog-import-outcome";
 import { ApiError } from "@/lib/api-client";
 import { rateLimitMessage } from "@/lib/api-errors";
 import {
@@ -88,10 +95,14 @@ export default function ImportacaoGoogleSheetsPage() {
       // o usuário precisa gerar uma nova para uma próxima importação.
       setPreview(null);
       setSelection(EMPTY_SELECTION);
-      toast.success(
-        `Importação concluída: ${data.created} criado(s), ${data.updated} atualizado(s), ${data.ignorados} ignorado(s)` +
-          (data.falhas?.length ? `, ${data.falhas.length} falha(s).` : "."),
-      );
+      // Verde só quando algo foi salvo SEM rejeições (status do job do backend
+      // tem precedência); falha total é erro; parcial/nada salvo é aviso.
+      const view = assetResultView(data);
+      const outcome = deriveOutcome(view);
+      const message = summaryToast(view);
+      if (outcome === "success") toast.success(message);
+      else if (outcome === "failure") toast.error(message);
+      else toast.warning(message);
     },
     onError: (error) => {
       setConfirmOpen(false);
@@ -135,7 +146,7 @@ export default function ImportacaoGoogleSheetsPage() {
     confirmError: confirmMutation.isError,
     hasPreview: !!preview,
     isExpired,
-    hasResult: !!lastResult,
+    outcome: lastResult ? deriveOutcome(assetResultView(lastResult)) : null,
   });
 
   return (
@@ -214,17 +225,7 @@ export default function ImportacaoGoogleSheetsPage() {
           </SlideIn>
         ) : lastResult ? (
           <SlideIn key={`result-${lastResult.sync_job_id}`} distance="sm">
-            <div className="flex flex-col gap-3 rounded-cards border border-metric-green/40 bg-carbon-lift p-card-padding">
-              <p role="status" className="text-body-sm text-metric-green">
-                Última importação concluída com sucesso.
-              </p>
-              <dl className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-                <ResultStat label="Criados" value={lastResult.created} />
-                <ResultStat label="Atualizados" value={lastResult.updated} />
-                <ResultStat label="Ignorados" value={lastResult.ignorados} />
-                <ResultStat label="Falhas" value={lastResult.falhas?.length ?? 0} />
-              </dl>
-            </div>
+            <CatalogImportResult result={assetResultView(lastResult)} />
           </SlideIn>
         ) : !previewError ? (
           <SlideIn key="idle" distance="sm">
@@ -249,17 +250,6 @@ export default function ImportacaoGoogleSheetsPage() {
   );
 }
 
-function ResultStat({ label, value }: { label: string; value: number }) {
-  return (
-    <div className="flex flex-col gap-1">
-      <dt className="text-eyebrow text-pale-stone">{label}</dt>
-      <dd className="text-body text-bone">
-        <AnimatedCounter value={value} live="off" />
-      </dd>
-    </div>
-  );
-}
-
 interface RequestStatusInput {
   lastAction: LastAction;
   previewPending: boolean;
@@ -268,7 +258,7 @@ interface RequestStatusInput {
   confirmError: boolean;
   hasPreview: boolean;
   isExpired: boolean;
-  hasResult: boolean;
+  outcome: CatalogOutcome | null;
 }
 
 /** Estado exibido no indicador — derivado só do estado real das mutations. */
@@ -277,7 +267,10 @@ function requestStatus(input: RequestStatusInput): { state: StatusIndicatorState
   if (input.confirmPending) return { state: "loading", label: "Confirmando importação…" };
   if (input.lastAction === "confirm") {
     if (input.confirmError) return { state: "error", label: "Falha na confirmação" };
-    if (input.hasResult) return { state: "success", label: "Importação concluída" };
+    if (input.outcome === "failure") return { state: "error", label: "Nenhum item salvo" };
+    if (input.outcome === "partial") return { state: "warning", label: "Importação parcial" };
+    if (input.outcome === "nothing") return { state: "warning", label: "Nada foi salvo" };
+    if (input.outcome === "success") return { state: "success", label: "Importação concluída" };
   }
   if (input.lastAction === "preview" && input.previewError) {
     return { state: "error", label: "Falha na leitura" };

@@ -287,7 +287,7 @@ test.describe("importação Google Sheets", () => {
     await dialog.getByRole("button", { name: "Confirmar", exact: true }).click();
     const body = (await confirm).postDataJSON() as { selected_item_ids: string[] };
     expect(body.selected_item_ids).toHaveLength(4);
-    await expect(page.getByText("Última importação concluída com sucesso.")).toBeVisible();
+    await expect(page.getByTestId("catalog-import-result")).toHaveAttribute("data-outcome", "success");
   });
 
   test("marcadores XSS nas descrições/erros são exibidos como texto, sem executar", async ({ page }) => {

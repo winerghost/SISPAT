@@ -300,9 +300,16 @@ def test_confirm_adm_com_permissao_sucesso_200(client):
     mock_service = MagicMock()
     mock_service.confirm_preview.return_value = {
         "sync_job_id": sync_job_id,
+        "status": "CONCLUIDO",
         "created": 1,
         "updated": 0,
         "ignorados": 0,
+        "inalterados": 0,
+        "nao_gravados": {
+            "total": 0, "por_classificacao": {}, "por_motivo": {}, "nao_selecionados": 0,
+        },
+        "pendencias_vinculo": {},
+        "falhas_total": 0,
         "falhas": [],
     }
 
@@ -318,7 +325,7 @@ def test_confirm_adm_com_permissao_sucesso_200(client):
     assert response.status_code == 200
     body = response.get_json()
     assert body["sync_job_id"] == str(sync_job_id)
-    assert body["created"] == 1
+    assert body["created"] == 1 and body["status"] == "CONCLUIDO" and body["degraded"] is False
     mock_service.confirm_preview.assert_called_once_with(
         preview_id=preview_id, confirmed_by_user_id=user.id, selected_item_ids=[item_id]
     )

@@ -106,6 +106,18 @@ ADM e USER recebem ainda: `notes`, `assigned_user_id`, `source_record_id`,
   `unit_id` malformado/inexistente/alheio => 404 uniforme.
 - `PATCH /assets/<id>` (200, devolve o bem): `version` + ao menos um campo
   editável. `patrimony_number` e `located` não aceitam `null`.
+- **Classificação manual** (2026-10-23): `asset_category`, `tech_type` e
+  `operational_status` (vocabulário fechado = CHECKs da migração 0015, ver
+  `app/services/asset_classification.py`) aparecem na leitura (todos os perfis) e
+  são editáveis SOMENTE no `PATCH` por quem já tem `assets.update` (ADM e USER, dentro
+  do escopo de unidade; RH segue sem editar). Não são campos privilegiados, mas valem:
+  valor fora da allowlist => 400 `validation_error`; `null` = "não informado"/limpa;
+  `tech_type` exige categoria `TECNOLOGIA` (efetiva após o pedido) => 422
+  `classification_inconsistent` (nada é limpo em silêncio: ao sair de TECNOLOGIA envie
+  `tech_type: null`); `version` obrigatório (409 `version_conflict`); bem alheio/
+  inexistente => 404 uniforme. `POST` continua rejeitando os três (400). Auditoria:
+  `ASSET_CLASSIFICATION_UPDATED` (só os 3 campos, antes/depois, sem PII) ou
+  `ASSET_UPDATED` quando misturada a outros campos.
 - `POST /assets/<id>/delete` e `/restore` (200, devolve o bem): `{version, reason?}`
   (`reason` ≤500). Excluir bem já excluído e restaurar bem ativo => 404.
 

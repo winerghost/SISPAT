@@ -89,6 +89,20 @@ de pendências" (`GET /imports/google-sheets/<id>/pending`, lista todos os
 códigos) e um link para a importação de cadastros quando há pendências. O fluxo
 e os controles anteriores não mudaram.
 
+### Resultado da confirmação de bens
+Bens usa o MESMO quadro de resultado dos cadastros (`CatalogImportResult`,
+`deriveOutcome`): o `status` do job do backend decide o tom. FALHOU = laranja
+com ícone de erro e toast de erro (nunca verde nem "nada salvo" neutro);
+PARCIAL = laranja; status desconhecido também nunca é verde; só CONCLUIDO com
+algo salvo e sem rejeições é verde. O quadro mostra Salvos, Criados,
+Atualizados, Inalterados, Rejeitados e Ignorados, os não gravados por
+classificação/motivo (inclusive "unidade sem alias"), as falhas (linha e
+"Patrimônio <número>" em texto, sem descrição), os "Bens criados com vínculo
+pendente" (sala, pessoa, unidade pertencente) e, se `degraded=true`, o aviso de
+que os dados foram gravados mas o detalhamento não está disponível. O indicador
+"Requisição" segue o mesmo desfecho. Testado com axe e sem rolagem horizontal
+em 320, 768 e 1366 px (`catalog-import-functional.spec.ts`).
+
 ## Acessibilidade e motion
 - WCAG 2.2 AA verificado por axe (1366 e 375 px) e matriz 320–1920 px nas telas
   `cadastros-*` e `importacao-pendencias` (`frontend/e2e/support/screens.ts`).

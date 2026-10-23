@@ -104,5 +104,36 @@ def test_resposta_sem_campos_extras_nem_pii(env):
     body = _confirm(env, preview_id, {"item_ids": _ids(env, preview_id)}).get_json()
     assert set(body) == {
         "preview_id", "kind", "sync_job_id", "status", "created", "updated", "ignorados",
-        "inalterados", "nao_gravados", "falhas_total", "falhas",
+        "inalterados", "nao_gravados", "falhas_total", "falhas", "degraded",
     }
+    assert body["degraded"] is False
+
+
+def test_resposta_invalida_pos_commit_vira_200_degradado_sem_500(env, monkeypatch):
+    """B-3: o serviço já gravou; falha ao validar a resposta não pode ser 500."""
+    from app.services.catalog_import_service import CatalogImportService
+
+    original = CatalogImportService.confirm_preview
+
+    def corrupted(self, *args, **kwargs):
+        result = original(self, *args, **kwargs)
+        result["nao_gravados"]["por_motivo"] = {"x": "texto"}  # viola dict[str, int]
+        result["falhas"] = [{"item_id": "i", "row": -1, "label": "L", "reason": "R"}]
+        result["falhas_total"] = 1
+        return result
+
+    monkeypatch.setattr(CatalogImportService, "confirm_preview", corrupted)
+    preview_id = _create(env, "rooms", _rooms_result([["1", "Sala A", "UEA"], ["2", "Sala B", "UEA"]]))
+    response = _confirm(env, preview_id, {"item_ids": _ids(env, preview_id)})
+    assert response.status_code == 200
+    body = response.get_json()
+    assert body["degraded"] is True
+    assert body["created"] == 2 and body["status"] in {"CONCLUIDO", "PARCIAL", "FALHOU"}
+    assert body["falhas"] == [] and body["falhas_total"] == 1
+    assert body["nao_gravados"] == {
+        "total": 0, "por_classificacao": {}, "por_motivo": {}, "nao_selecionados": 0,
+    }
+    # Os dados foram mesmo gravados e a prévia consumida (2ª confirmação -> 409).
+    assert len(env.db.execute(select(Room)).scalars().all()) == 2
+    monkeypatch.setattr(CatalogImportService, "confirm_preview", original)
+    assert _confirm(env, preview_id, {"item_ids": []}).status_code == 409

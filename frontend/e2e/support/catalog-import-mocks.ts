@@ -55,6 +55,13 @@ export interface CatalogImportMockOptions {
   pendingStatus?: number;
   /** Linhas NOVO extras em "people" (testa paginação 50/100/200). */
   extraPeople?: number;
+  /**
+   * Confirmação de BENS (`POST /imports/google-sheets/confirm`): `allFail` => 200 com
+   * status FALHOU (todos rejeitados); `failures` => PARCIAL; `degraded` => resposta
+   * degradada pós-commit (só contadores); `unknownStatus` => status fora do contrato.
+   */
+  assetsDegraded?: boolean;
+  assetsUnknownStatus?: boolean;
 }
 
 export interface CatalogImportMockState extends Required<Omit<CatalogImportMockOptions, "previewStatus" | "itemsStatus" | "confirmStatus" | "pendingStatus">> {
@@ -82,6 +89,8 @@ export function defaultCatalogImport(opts: CatalogImportMockOptions = {}): Catal
     confirmDelayMs: opts.confirmDelayMs ?? 0,
     expired: opts.expired ?? false,
     extraPeople: opts.extraPeople ?? 0,
+    assetsDegraded: opts.assetsDegraded ?? false,
+    assetsUnknownStatus: opts.assetsUnknownStatus ?? false,
     previews: {},
   };
 }
@@ -515,4 +524,60 @@ export async function handleCatalogImports(ctx: CatalogImportRequestContext): Pr
   }
 
   return false;
+}
+
+// -----------------------------------------------------------------------------
+// Confirmação de BENS (mesmo contrato D2 dos cadastros; ver docs/architecture)
+// -----------------------------------------------------------------------------
+
+/** Corpo de `POST /v1/imports/google-sheets/confirm` conforme as opções do mock. */
+export function assetConfirmResponse(
+  state: CatalogImportMockState,
+  selectedIds: string[],
+  items: { id: string; classification: string }[],
+): Record<string, unknown> {
+  const chosen = new Set(selectedIds);
+  const eligible = items.filter(
+    (it) => chosen.has(it.id) && (it.classification === "NOVO" || it.classification === "EXISTENTE"),
+  );
+  const failing = state.allFail ? eligible : state.failures ? eligible.slice(0, 1) : [];
+  const written = eligible.length - failing.length;
+  const created = Math.max(written - 1, 0);
+  const updated = written > 0 ? 1 : 0;
+  const base = {
+    sync_job_id: "50000000-0000-4000-8000-000000000001",
+    status: failing.length > 0 ? (written === 0 ? "FALHOU" : "PARCIAL") : "CONCLUIDO",
+    created,
+    updated,
+    ignorados: selectedIds.length - eligible.length,
+    inalterados: 0,
+    nao_gravados: {
+      total: 3,
+      por_classificacao: { DUPLICADO: 1, INVALIDO: 1, CONFLITANTE: 1 },
+      por_motivo: { duplicado_na_origem: 1, unidade_sem_alias: 1, patrimonio_conflitante: 1 },
+      nao_selecionados: items.filter(
+        (it) => (it.classification === "NOVO" || it.classification === "EXISTENTE") && !chosen.has(it.id),
+      ).length,
+    },
+    pendencias_vinculo: written > 0 ? { sala_nao_encontrada: 2, pessoa_nao_encontrada: 1 } : {},
+    falhas_total: failing.length,
+    falhas: failing.map((it, index) => ({
+      item_id: it.id,
+      row: index + 2,
+      patrimony_number: "000123",
+      reason: "Falha sintética ao gravar este item.",
+    })),
+    degraded: false,
+  };
+  if (state.assetsDegraded) {
+    return {
+      ...base,
+      nao_gravados: { total: 0, por_classificacao: {}, por_motivo: {}, nao_selecionados: 0 },
+      pendencias_vinculo: {},
+      falhas: [],
+      degraded: true,
+    };
+  }
+  if (state.assetsUnknownStatus) return { ...base, status: "DESCONHECIDO" };
+  return base;
 }

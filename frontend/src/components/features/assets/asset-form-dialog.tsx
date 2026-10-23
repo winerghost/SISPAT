@@ -10,9 +10,12 @@ import { Input } from "@/components/ui/input";
 import {
   createAsset,
   updateAsset,
+  type AssetCategory,
   type AssetRecord,
   type CreateAssetRequest,
   type LocatedStatus,
+  type OperationalStatus,
+  type TechType,
   type UpdateAssetRequest,
 } from "@/lib/assets-api";
 import type { AccessibleUnit } from "@/lib/catalog-api";
@@ -24,11 +27,18 @@ import {
   ASSET_NOT_FOUND_MESSAGE,
   ASSET_VERSION_CONFLICT_MESSAGE,
   blankToNull,
+  CATEGORY_LABEL,
+  CATEGORY_OPTIONS,
   isAssetNotFound,
   isAssetVersionConflict,
   LOCATED_LABEL,
   LOCATED_OPTIONS,
+  NOT_INFORMED_LABEL,
+  OPERATIONAL_STATUS_LABEL,
+  OPERATIONAL_STATUS_OPTIONS,
   PATRIMONY_MAX,
+  TECH_TYPE_LABEL,
+  TECH_TYPE_OPTIONS,
   TEXT_MAX,
   unitRefText,
 } from "./asset-labels";
@@ -100,6 +110,9 @@ function AssetFormBody({
   const [registrationDate, setRegistrationDate] = useState(asset?.registration_date ?? "");
   const [ownerUnitId, setOwnerUnitId] = useState(asset?.owner_unit_id ?? "");
   const [located, setLocated] = useState<LocatedStatus>(asset?.located ?? "DESCONHECIDO");
+  const [category, setCategory] = useState<AssetCategory | "">(asset?.asset_category ?? "");
+  const [techType, setTechType] = useState<TechType | "">(asset?.tech_type ?? "");
+  const [opStatus, setOpStatus] = useState<OperationalStatus | "">(asset?.operational_status ?? "");
   const [removeLocation, setRemoveLocation] = useState(false);
   const [errors, setErrors] = useState<Partial<Record<FieldKey, string>>>({});
   const [formError, setFormError] = useState<string | null>(null);
@@ -119,6 +132,9 @@ function AssetFormBody({
     owner: ownerUnitId !== (asset?.owner_unit_id ?? ""),
     located: located !== (asset?.located ?? "DESCONHECIDO"),
     location: removeLocation,
+    category: editing && category !== (asset?.asset_category ?? ""),
+    techType: editing && techType !== (asset?.tech_type ?? ""),
+    opStatus: editing && opStatus !== (asset?.operational_status ?? ""),
   };
   const dirty = !editing || Object.values(changed).some(Boolean);
 
@@ -147,6 +163,9 @@ function AssetFormBody({
       if (isAdmin && changed.owner) body.owner_unit_id = ownerUnitId || null;
       if (isAdmin && changed.located) body.located = located;
       if (changed.location) body.location_id = null;
+      if (changed.category) body.asset_category = category || null;
+      if (changed.techType) body.tech_type = techType || null;
+      if (changed.opStatus) body.operational_status = opStatus || null;
       return updateAsset(asset.id, body);
     },
     onSuccess: (saved) => {
@@ -190,6 +209,11 @@ function AssetFormBody({
     setRoomId("");
     setPersonId("");
     setErrors((prev) => ({ ...prev, unit: undefined }));
+  }
+
+  function chooseCategory(value: AssetCategory | "") {
+    setCategory(value);
+    if (value !== "TECNOLOGIA") setTechType(""); // tipo de TI só existe em Tecnologia
   }
 
   const pending = mutation.isPending;
@@ -398,6 +422,73 @@ function AssetFormBody({
           />
         )}
       </FormField>
+
+      {editing ? (
+        <>
+          <FormField id="bem-categoria" label="Categoria" surface="light">
+            {(field) => (
+              <select
+                {...field}
+                name="asset_category"
+                className={selectControlClassName}
+                value={category}
+                disabled={pending}
+                onChange={(event) => chooseCategory(event.target.value as AssetCategory | "")}
+              >
+                <option value="">{NOT_INFORMED_LABEL}</option>
+                {CATEGORY_OPTIONS.map((value) => (
+                  <option key={value} value={value}>
+                    {CATEGORY_LABEL[value]}
+                  </option>
+                ))}
+              </select>
+            )}
+          </FormField>
+          <FormField
+            id="bem-tipo-ti"
+            label="Tipo de TI"
+            surface="light"
+            hint={category !== "TECNOLOGIA" ? "Disponível só para a categoria Tecnologia." : undefined}
+          >
+            {(field) => (
+              <select
+                {...field}
+                name="tech_type"
+                className={selectControlClassName}
+                value={techType}
+                disabled={pending || category !== "TECNOLOGIA"}
+                onChange={(event) => setTechType(event.target.value as TechType | "")}
+              >
+                <option value="">{NOT_INFORMED_LABEL}</option>
+                {TECH_TYPE_OPTIONS.map((value) => (
+                  <option key={value} value={value}>
+                    {TECH_TYPE_LABEL[value]}
+                  </option>
+                ))}
+              </select>
+            )}
+          </FormField>
+          <FormField id="bem-situacao" label="Situação operacional" surface="light">
+            {(field) => (
+              <select
+                {...field}
+                name="operational_status"
+                className={selectControlClassName}
+                value={opStatus}
+                disabled={pending}
+                onChange={(event) => setOpStatus(event.target.value as OperationalStatus | "")}
+              >
+                <option value="">{NOT_INFORMED_LABEL}</option>
+                {OPERATIONAL_STATUS_OPTIONS.map((value) => (
+                  <option key={value} value={value}>
+                    {OPERATIONAL_STATUS_LABEL[value]}
+                  </option>
+                ))}
+              </select>
+            )}
+          </FormField>
+        </>
+      ) : null}
 
       {isAdmin ? (
         <>

@@ -199,15 +199,16 @@ test.describe("importação — estados e contadores", () => {
     await expect(dialog).toBeVisible();
     // Nenhum sinal de sucesso antes da resposta.
     await page.waitForTimeout(400);
-    await expect(page.getByText("Última importação concluída com sucesso.")).toHaveCount(0);
+    await expect(page.getByTestId("catalog-import-result")).toHaveCount(0);
     await expect(page.getByText(/Importação concluída:/)).toHaveCount(0);
 
     confirm.release();
-    await expect(page.getByText("Última importação concluída com sucesso.")).toBeVisible();
+    const result = page.getByTestId("catalog-import-result");
+    await expect(result).toHaveAttribute("data-outcome", "success");
     await expect(page.getByText(/Importação concluída: \d+ criado/)).toBeVisible();
     await expect(status(page)).toContainText("Importação concluída");
-    const criados = page.locator("dt", { hasText: "Criados" }).locator("..").locator('span[aria-hidden="true"]');
-    await expect(criados).toHaveText(String(ELIGIBLE));
+    // Números = os do backend (criados + atualizados), sem animação.
+    await expect(result.locator("[data-stat=Salvos]")).toHaveText(String(ELIGIBLE));
   });
 
   const PREVIEW_ERRORS: Array<[number, RegExp]> = [

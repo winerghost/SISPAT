@@ -56,6 +56,9 @@ export interface AssetMock {
   room_id: string | null;
   location_id: string | null;
   located: "SIM" | "NAO" | "DESCONHECIDO";
+  asset_category: string | null;
+  tech_type: string | null;
+  operational_status: string | null;
   /** Vínculo (1ª coluna RESPONSAVEL da planilha); só leitura, vem da importação. */
   bond_status: string | null;
   registration_date: string | null;
@@ -120,6 +123,9 @@ export function defaultAssets(units: CatalogUnitRef[]): AssetMockState {
     room_id: null,
     location_id: null,
     located: "DESCONHECIDO",
+    asset_category: null,
+    tech_type: null,
+    operational_status: null,
     bond_status: null,
     registration_date: null,
     created_at: iso(0),
@@ -255,7 +261,15 @@ const CREATE_KEYS = new Set([
   "located",
   "registration_date",
 ]);
-const PATCH_KEYS = new Set([...CREATE_KEYS].filter((key) => key !== "unit_id").concat("version"));
+const CLASSIFICATION_ALLOW: Record<string, readonly string[]> = {
+  asset_category: ["TECNOLOGIA", "MOBILIARIO", "VEICULO", "EQUIPAMENTO", "OUTROS"],
+  tech_type: ["COMPUTADOR", "NOTEBOOK", "MONITOR", "IMPRESSORA", "OUTRO_TI"],
+  operational_status: ["EM_USO", "ESTOQUE", "MANUTENCAO", "BAIXADO"],
+};
+// Classificação: só no PATCH (POST continua rejeitando), allowlist + consistência (422).
+const PATCH_KEYS = new Set(
+  [...CREATE_KEYS].filter((key) => key !== "unit_id").concat("version", ...Object.keys(CLASSIFICATION_ALLOW)),
+);
 const ADM_ONLY_CREATE = ["owner_unit_id", "located"];
 const ADM_ONLY_PATCH = ["patrimony_number", "owner_unit_id", "located"];
 const LINK_KEYS = ["room_id", "location_id", "responsible_person_id"] as const;
@@ -355,6 +369,9 @@ function view(state: AssetHandlerState, asset: AssetMock): Record<string, unknow
     location_id: asset.location_id,
     location: location ? { id: location.id, name: location.name } : null,
     located: asset.located,
+    asset_category: asset.asset_category,
+    tech_type: asset.tech_type,
+    operational_status: asset.operational_status,
     bond_status: asset.bond_status,
     registration_date: asset.registration_date,
     created_at: asset.created_at,
@@ -622,6 +639,9 @@ async function createAsset(ctx: AssetRequestContext, err: Err): Promise<boolean>
     room_id: (body.room_id as string | null | undefined) ?? null,
     location_id: (body.location_id as string | null | undefined) ?? null,
     located: located as AssetMock["located"],
+    asset_category: null,
+    tech_type: null,
+    operational_status: null,
     bond_status: null,
     registration_date: date,
     created_at: stamp,
@@ -686,6 +706,15 @@ async function patchAsset(ctx: AssetRequestContext, id: string, err: Err): Promi
     }
     next.owner_unit_id = owner as string | null;
   }
+  for (const [key, allowed] of Object.entries(CLASSIFICATION_ALLOW)) {
+    if (!(key in body)) continue;
+    const value = body[key];
+    if (value !== null && (typeof value !== "string" || !allowed.includes(value))) return err(400, "validation_error");
+    (next as Record<string, unknown>)[key] = value;
+  }
+  const finalCategory = "asset_category" in next ? next.asset_category : asset.asset_category;
+  const finalTech = "tech_type" in next ? next.tech_type : asset.tech_type;
+  if (finalTech && finalCategory !== "TECNOLOGIA") return err(422, "classification_inconsistent");
   const linkError = await checkLinks(state, asset.unit_id, body, asset, err);
   if (linkError) return true;
   for (const key of LINK_KEYS) if (key in body) next[key] = (body[key] as string | null) ?? null;
@@ -712,7 +741,8 @@ async function patchAsset(ctx: AssetRequestContext, id: string, err: Err): Promi
   if (changed) {
     asset.version += 1;
     asset.updated_at = iso(state.assetClock++);
-    record(state, asset, "ASSET_UPDATED", previous, after);
+    const onlyClassification = Object.keys(after).every((key) => key in CLASSIFICATION_ALLOW);
+    record(state, asset, onlyClassification ? "ASSET_CLASSIFICATION_UPDATED" : "ASSET_UPDATED", previous, after);
   }
   await respond(200, view(state, asset));
   return true;

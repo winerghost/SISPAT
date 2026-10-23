@@ -1,9 +1,10 @@
 """Revisão AppSec (Fase 3, 2026-10-22): classificação de bens de TI.
 
 Trava que `asset_category`, `tech_type` e `operational_status` NÃO são aceitos do
-cliente em nenhum endpoint de escrita de bens (mass assignment -> 400, sem
-gravação) e que o contrato da API de leitura de bens não mudou de forma que
-permita escrita. Só SQLite local; nada toca Supabase.
+cliente na CRIAÇÃO (400) e, na EDIÇÃO (PATCH), só dentro da allowlist (valor
+fora dela -> 400, sem gravação; contrato de 2026-10-23, ver
+test_asset_classification_edit.py). Campos realmente privilegiados continuam
+rejeitados. Só SQLite local; nada toca Supabase.
 """
 from __future__ import annotations
 
@@ -39,8 +40,32 @@ def test_classificacao_nao_vem_do_cliente_na_criacao(ast, field, value):  # noqa
         assert db.execute(select(Asset)).first() is None
 
 
-@pytest.mark.parametrize("field,value", CLASSIFICATION_FIELDS)
-def test_classificacao_nao_vem_do_cliente_na_edicao(ast, field, value):  # noqa: F811
+FORGED_VALUES = [
+    ("asset_category", "'; DROP TABLE assets;--"),
+    ("asset_category", "tecnologia"),
+    ("asset_category", 1),
+    ("tech_type", "SERVIDOR_X"),
+    ("operational_status", "EM_USO; --"),
+    ("operational_status", ["EM_USO"]),
+]
+
+
+@pytest.mark.parametrize(
+    "field,value", [("role", "ADM"), ("unit_id", str(uuid.uuid4())), ("deleted_at", "2026-01-01"), ("deleted_by", "x")]
+)
+def test_edicao_continua_rejeitando_campos_realmente_privilegiados(ast, field, value):  # noqa: F811
+    asset_id = ast.w.asset(ast.a, "CL-8")
+    r = ast.client.patch(
+        f"/api/v1/assets/{asset_id}", headers=h(ADM),
+        json={"version": 1, "asset_category": "OUTROS", field: value},
+    )
+    assert r.status_code == 400
+    row = ast.w.row(asset_id)
+    assert row.version == 1 and row.asset_category is None and row.deleted_at is None
+
+
+@pytest.mark.parametrize("field,value", FORGED_VALUES)
+def test_edicao_rejeita_valores_fora_da_allowlist(ast, field, value):  # noqa: F811
     asset_id = ast.w.asset(ast.a, "CL-9")
     for sub in (USER_A, ADM):
         r = ast.client.patch(

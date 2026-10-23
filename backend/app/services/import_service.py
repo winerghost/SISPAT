@@ -125,7 +125,7 @@ from app.models.assets import Asset
 from app.models.audit import AuditLog
 from app.models.imports import ImportPreview, ImportPreviewItem
 from app.security.text_search import contains_ci
-from app.services.asset_classification import apply_if_unclassified
+from app.services.asset_classification import apply_if_unclassified, classify_description
 from app.services.pagination import DEFAULT_PAGE_SIZE, coerce_page_size, page_count
 from app.models.sync import RawImportRecord, SyncJob
 from app.services.patrimony_lock import (
@@ -184,6 +184,9 @@ _VALID_LOCATED = frozenset({"SIM", "NAO", "DESCONHECIDO"})
 _IMPORT_SOURCE = "google_sheets"
 
 _SELECTABLE_CLASSIFICATIONS = ("NOVO", "EXISTENTE")
+# Falhas detalhadas devolvidas na resposta (o total vai em `falhas_total`);
+# a lista completa fica nos `RawImportRecord` REJEITADO do SyncJob.
+MAX_LISTED_FAILURES = 100
 _ERROR_PREFIX = "erro:"
 
 
@@ -292,6 +295,24 @@ def _parse_iso_datetime(value: Any) -> datetime | None:
     except ValueError:
         return None
     return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
+
+
+def _same_instant(a: datetime | None, b: datetime | None) -> bool:
+    """Igualdade de instantes tolerando naive (tratado como UTC) vs aware."""
+    if a is None or b is None:
+        return a is b
+    if a.tzinfo is None:
+        a = a.replace(tzinfo=timezone.utc)
+    if b.tzinfo is None:
+        b = b.replace(tzinfo=timezone.utc)
+    return a == b
+
+
+def would_classify(asset: Any, description: str | None) -> bool:
+    """True se `apply_if_unclassified` alteraria o bem (sem alterá-lo)."""
+    if getattr(asset, "asset_category", None) is not None:
+        return False
+    return classify_description(description)[0] is not None
 
 
 class ImportService:
@@ -469,22 +490,36 @@ class ImportService:
                 )
             if asset.deleted_at is not None:
                 return ("o bem foi excluído logicamente após a pré-visualização", 0, 0)
-            if item.description:
-                asset.description = item.description
             # Vínculo é da planilha (não editável na UI): atualiza quando muda;
             # célula vazia NÃO apaga o valor existente (mesma regra da descrição).
             # Vínculo descartado (pessoa/reservado) conta como vazio: mantém o atual.
             bond = self._bond_status_of(item.normalized_values or {})
+            source_updated = _parse_iso_datetime(
+                (item.normalized_values or {}).get("source_updated_at_utc")
+            )
+            new_description = item.description if item.description else asset.description
+            # INALTERADO: nada que a planilha traga difere do bem. Não grava nem
+            # incrementa `version` (idempotência: reimportar a mesma planilha é
+            # no-op) e a resposta conta o item em `inalterados`, não em `updated`.
+            unchanged = (
+                new_description == asset.description
+                and (bond is None or bond == asset.bond_status)
+                and asset.source_system == _IMPORT_SOURCE
+                and asset.source_record_id == item.source_record_id
+                and (source_updated is None or _same_instant(source_updated, asset.source_updated_at))
+                and not would_classify(asset, new_description)
+            )
+            if unchanged:
+                return None, 0, 0
+            if item.description:
+                asset.description = item.description
             if bond is not None and bond != asset.bond_status:
                 asset.bond_status = bond
             # Classificação: só quando ainda nula (nunca sobrescreve a existente).
             apply_if_unclassified(asset, asset.description)
             asset.source_system = "google_sheets"
             asset.source_record_id = item.source_record_id
-            asset.source_updated_at = (
-                _parse_iso_datetime((item.normalized_values or {}).get("source_updated_at_utc"))
-                or now
-            )
+            asset.source_updated_at = source_updated or now
             asset.updated_by = confirmed_by_user_id
             asset.version = asset.version + 1
             self._db.add(asset)
@@ -870,9 +905,12 @@ class ImportService:
                `confirmed_at`/`confirmed_by`, e CONFIRMA (`commit()`) tudo
                de uma vez.
 
-        Retorna um dict: `{"sync_job_id", "created", "updated", "ignorados",
-        "falhas"}`, onde `falhas` é uma lista de dicts
-        `{"item_id", "patrimony_number", "reason"}`.
+        Retorna um dict: `{"sync_job_id", "status" (CONCLUIDO/PARCIAL/FALHOU),
+        "created", "updated", "ignorados", "inalterados" (EXISTENTE sem
+        diferença: nada gravado), "nao_gravados" (por classificação/motivo),
+        "pendencias_vinculo", "falhas_total", "falhas"}`, onde `falhas` é uma
+        lista (<= `MAX_LISTED_FAILURES`) de dicts
+        `{"item_id", "row", "patrimony_number", "reason"}`.
         """
         preview = self._db.query(ImportPreview).filter(ImportPreview.id == preview_id).first()
         if preview is None:
@@ -930,9 +968,14 @@ class ImportService:
         eligible_items.sort(key=lambda it: (it.patrimony_number or "", str(it.id)))
         eligible_ids = {item.id for item in eligible_items}
         ignorados = len(selected_ids_set - eligible_ids)
+        nao_gravados = self._unwritten_summary(items, selected_ids_set)
 
         created = 0
         updated = 0
+        inalterados = 0
+        # Pendências de vínculo dos bens EFETIVAMENTE criados (resolução
+        # autoritativa da confirmação): só contadores por código.
+        pendencias_vinculo: dict[str, int] = {code: 0 for code in PENDING_CODES}
         falhas: list[dict[str, Any]] = []
 
         sync_job = SyncJob(
@@ -988,11 +1031,21 @@ class ImportService:
                     savepoint.commit()
                     created += delta_created
                     updated += delta_updated
+                    if failure_reason is not None:
+                        pass  # rejeitado por revalidação: contado em `falhas`
+                    elif not (delta_created or delta_updated):
+                        inalterados += 1
+                    elif delta_created:
+                        links = (item.normalized_values or {}).get(_LINKS_KEY) or {}
+                        for code in links.get("pendencias") or []:
+                            if code in pendencias_vinculo:
+                                pendencias_vinculo[code] += 1
 
             if failure_reason is not None:
                 falhas.append(
                     {
                         "item_id": str(item.id),
+                        "row": _source_row_number_of(item),
                         "patrimony_number": item.patrimony_number,
                         "reason": failure_reason,
                     }
@@ -1051,7 +1104,9 @@ class ImportService:
                     "created": created,
                     "updated": updated,
                     "ignorados": ignorados,
+                    "inalterados": inalterados,
                     "falhas": len(falhas),
+                    "job_status": sync_job.status,
                 },
                 result=audit_result,
             )
@@ -1064,8 +1119,51 @@ class ImportService:
 
         return {
             "sync_job_id": sync_job.id,
+            "status": sync_job.status,
             "created": created,
             "updated": updated,
             "ignorados": ignorados,
-            "falhas": falhas,
+            "inalterados": inalterados,
+            "nao_gravados": nao_gravados,
+            "pendencias_vinculo": pendencias_vinculo,
+            "falhas_total": len(falhas),
+            # Lista completa só no RawImportRecord; a resposta traz no máximo N.
+            "falhas": falhas[:MAX_LISTED_FAILURES],
+        }
+
+    @staticmethod
+    def _unwritten_summary(
+        items: list[ImportPreviewItem], wanted: set[uuid.UUID]
+    ) -> dict[str, Any]:
+        """Itens da prévia que esta confirmação NÃO grava, por classificação e motivo.
+
+        Só contadores e códigos (sem PII, sem valores da planilha). O motivo é o
+        código da pendência que bloqueou o vínculo (`unidade_sem_alias`...),
+        `duplicado_na_origem`, `patrimonio_conflitante` ou `dados_invalidos`.
+        `nao_selecionados` = NOVO/EXISTENTE que o ADM desmarcou.
+        """
+        by_class = {"DUPLICADO": 0, "INVALIDO": 0, "CONFLITANTE": 0}
+        by_reason: dict[str, int] = {}
+        not_selected = 0
+        for item in items:
+            if item.classification in _SELECTABLE_CLASSIFICATIONS:
+                if item.id not in wanted:
+                    not_selected += 1
+                continue
+            by_class[item.classification] = by_class.get(item.classification, 0) + 1
+            blocking = ((item.normalized_values or {}).get(_LINKS_KEY) or {}).get("blocking")
+            if blocking in PENDING_CODES:
+                code = blocking
+            elif item.classification == "DUPLICADO":
+                code = "duplicado_na_origem"
+            elif item.classification == "CONFLITANTE":
+                code = "patrimonio_conflitante"
+            else:
+                code = "dados_invalidos"
+            by_reason[code] = by_reason.get(code, 0) + 1
+        return {
+            "total": sum(by_class.values()),
+            "por_classificacao": by_class,
+            "por_motivo": by_reason,
+            "nao_selecionados": not_selected,
         }

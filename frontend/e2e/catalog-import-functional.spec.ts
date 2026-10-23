@@ -543,3 +543,137 @@ test.describe("bens — pendências de vínculo na prévia", () => {
     await expect(page.getByRole("table")).toBeVisible();
   });
 });
+
+// -----------------------------------------------------------------------------
+// Bens — resultado da confirmação (mesmo contrato D2 dos cadastros). O STATUS do
+// job do backend decide o tom: FALHOU nunca é verde nem "nada salvo" neutro;
+// PARCIAL nunca é verde. Quadro de resultado testado em 320/768/1366 px.
+// -----------------------------------------------------------------------------
+
+async function confirmBens(page: Page) {
+  await page.getByRole("button", { name: "Pré-visualizar Importação" }).click();
+  await expect(page.getByTestId("pending-panel")).toBeVisible();
+  await page.getByRole("button", { name: "Confirmar Importação" }).click();
+  const dialog = page.getByRole("dialog", { name: "Confirmar importação" });
+  await dialog.getByRole("button", { name: "Confirmar", exact: true }).click();
+  const result = page.getByTestId("catalog-import-result");
+  await expect(result).toBeVisible();
+  return result;
+}
+
+async function noHorizontalScroll(page: Page): Promise<boolean> {
+  return page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth);
+}
+
+const RESULT_VIEWPORTS = [
+  { width: 320, height: 568 },
+  { width: 768, height: 1024 },
+  { width: 1366, height: 768 },
+] as const;
+
+test.describe("bens — resultado da confirmação", () => {
+  test("falha total (HTTP 200, status FALHOU): sem verde, sem 'gravados', toast de erro, axe", async ({ page }) => {
+    await open(page, BENS_PATH, { role: "ADM", catalogImport: { allFail: true } });
+    const result = await confirmBens(page);
+    await expect(result).toHaveAttribute("data-outcome", "failure");
+    await expect(result).toContainText("Nenhum item foi salvo");
+    await expect(result).not.toContainText(/gravados|concluída com sucesso/i);
+    await expect(result.locator("[data-stat=Salvos]")).toHaveText("0");
+    await expect(result.locator("[data-stat=Rejeitados]")).toHaveText("5");
+    await expect(page.getByTestId("catalog-import-failures").getByRole("listitem")).toHaveCount(5);
+    // Número patrimonial é TEXTO (zeros à esquerda preservados); nenhuma descrição.
+    await expect(page.getByTestId("catalog-import-failures")).toContainText("Linha 2 — Patrimônio 000123");
+    await expect(result).not.toHaveClass(/border-metric-green/);
+    await expect(page.getByTestId("import-request-status")).toContainText("Nenhum item salvo");
+    await expect(page.getByTestId("import-request-status")).not.toContainText("concluída");
+    await expect(page.locator("[data-sonner-toast][data-type=error]")).toContainText("Nenhum item foi salvo: 5 rejeitado(s)");
+    await expect(page.locator("[data-sonner-toast][data-type=success]")).toHaveCount(0);
+    // Nova prévia exigida: a anterior foi consumida.
+    await expect(page.getByRole("button", { name: "Confirmar Importação" })).toBeDisabled();
+    expect(await axeViolations(page)).toEqual([]);
+  });
+
+  test("parcial (status PARCIAL): laranja, parte salva e parte rejeitada, axe", async ({ page }) => {
+    await open(page, BENS_PATH, { role: "ADM", catalogImport: { failures: true } });
+    const result = await confirmBens(page);
+    await expect(result).toHaveAttribute("data-outcome", "partial");
+    await expect(result).toContainText("Importação parcial");
+    await expect(result.locator("[data-stat=Rejeitados]")).toHaveText("1");
+    await expect(result.locator("[data-stat=Salvos]")).toHaveText("4");
+    await expect(result).not.toHaveClass(/border-metric-green/);
+    await expect(page.getByTestId("import-request-status")).toContainText("Importação parcial");
+    await expect(page.locator("[data-sonner-toast][data-type=success]")).toHaveCount(0);
+    expect(await axeViolations(page)).toEqual([]);
+  });
+
+  test("sucesso: verde, não gravados por motivo e avisos de pendências de vínculo e de alias", async ({ page }) => {
+    const state = await open(page, BENS_PATH);
+    const result = await confirmBens(page);
+    await expect(result).toHaveAttribute("data-outcome", "success");
+    await expect(result.locator("[data-stat=Salvos]")).toHaveText("5");
+    await expect(result.locator("[data-stat=Inalterados]")).toHaveText("0");
+    await expect(page.getByTestId("catalog-import-unwritten")).toContainText("Inválidos: 1");
+    await expect(page.getByTestId("catalog-import-unwritten")).toContainText("Duplicados: 1");
+    await expect(page.getByTestId("catalog-import-unwritten")).toContainText("Conflitantes: 1");
+    await expect(result.locator("[data-unwritten-reason=patrimonio_conflitante]")).toContainText("1");
+    await expect(page.getByTestId("catalog-import-alias-warning")).toContainText("não tem alias cadastrado");
+    const links = page.getByTestId("catalog-import-link-pending");
+    await expect(links.locator("[data-link-pending=sala_nao_encontrada]")).toContainText("Sala não encontrada: 2");
+    await expect(links.locator("[data-link-pending=pessoa_nao_encontrada]")).toContainText(
+      "Pessoa responsável não encontrada: 1",
+    );
+    await expect(page.locator("[data-sonner-toast][data-type=success]")).toBeVisible();
+    // Corpo enviado: só preview_id e selected_item_ids (nada privilegiado).
+    const confirm = calls(state, "POST", "/v1/imports/google-sheets/confirm");
+    expect(Object.keys(confirm[0]!.body as object).sort()).toEqual(["preview_id", "selected_item_ids"]);
+    expect(await axeViolations(page)).toEqual([]);
+  });
+
+  test("status fora do contrato nunca é verde", async ({ page }) => {
+    await open(page, BENS_PATH, { role: "ADM", catalogImport: { assetsUnknownStatus: true } });
+    const result = await confirmBens(page);
+    await expect(result).toHaveAttribute("data-outcome", "partial");
+    await expect(result).not.toHaveClass(/border-metric-green/);
+  });
+
+  test("resposta degradada (gravou, sem detalhamento): aviso explícito e totais do backend", async ({ page }) => {
+    await open(page, BENS_PATH, { role: "ADM", catalogImport: { assetsDegraded: true } });
+    const result = await confirmBens(page);
+    await expect(page.getByTestId("catalog-import-degraded")).toContainText("Os dados foram gravados");
+    await expect(result.locator("[data-stat=Salvos]")).toHaveText("5");
+    await expect(page.getByTestId("catalog-import-unwritten")).toHaveCount(0);
+    expect(await axeViolations(page)).toEqual([]);
+  });
+
+  for (const viewport of RESULT_VIEWPORTS) {
+    test(`quadro de resultado sem rolagem horizontal e sem violações axe em ${viewport.width}px`, async ({ page }) => {
+      await page.setViewportSize(viewport);
+      await open(page, BENS_PATH, { role: "ADM", catalogImport: { failures: true } });
+      const result = await confirmBens(page);
+      await expect(result).toHaveAttribute("data-outcome", "partial");
+      await waitForAnimations(page);
+      expect(await noHorizontalScroll(page)).toBe(true);
+      const box = await result.boundingBox();
+      expect(box!.x).toBeGreaterThanOrEqual(0);
+      expect(box!.x + box!.width).toBeLessThanOrEqual(viewport.width + 1);
+      expect(await axeViolations(page)).toEqual([]);
+    });
+  }
+});
+
+test.describe("cadastros — quadro de resultado responsivo", () => {
+  for (const viewport of RESULT_VIEWPORTS) {
+    test(`falha total sem rolagem horizontal em ${viewport.width}px`, async ({ page }) => {
+      await page.setViewportSize(viewport);
+      await open(page, CADASTROS_PATH, { role: "ADM", catalogImport: { allFail: true } });
+      await generateCatalogPreview(page, "units");
+      const dialog = await openConfirm(page, "Confirmar importação de unidades");
+      await dialog.getByRole("button", { name: "Confirmar importação" }).click();
+      const result = page.getByTestId("catalog-import-result");
+      await expect(result).toHaveAttribute("data-outcome", "failure");
+      await waitForAnimations(page);
+      expect(await noHorizontalScroll(page)).toBe(true);
+      expect(await axeViolations(page)).toEqual([]);
+    });
+  }
+});

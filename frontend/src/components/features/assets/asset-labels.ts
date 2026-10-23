@@ -9,7 +9,13 @@
 
 import { ApiError } from "@/lib/api-client";
 import { rateLimitMessage } from "@/lib/api-errors";
-import type { AssetRecord, LocatedStatus } from "@/lib/assets-api";
+import type {
+  AssetCategory,
+  AssetRecord,
+  LocatedStatus,
+  OperationalStatus,
+  TechType,
+} from "@/lib/assets-api";
 import { AAL2_MESSAGE, errorCode, formatDateTime } from "@/components/features/users/user-labels";
 
 export { formatDateTime };
@@ -26,6 +32,42 @@ export const LOCATED_LABEL: Record<LocatedStatus, string> = {
 };
 
 export const LOCATED_OPTIONS: LocatedStatus[] = ["SIM", "NAO", "DESCONHECIDO"];
+
+export const NOT_INFORMED_LABEL = "Não informado";
+
+export const CATEGORY_LABEL: Record<AssetCategory, string> = {
+  TECNOLOGIA: "Tecnologia",
+  MOBILIARIO: "Mobiliário",
+  VEICULO: "Veículo",
+  EQUIPAMENTO: "Equipamento",
+  OUTROS: "Outros",
+};
+export const CATEGORY_OPTIONS = Object.keys(CATEGORY_LABEL) as AssetCategory[];
+
+export const TECH_TYPE_LABEL: Record<TechType, string> = {
+  COMPUTADOR: "Computador",
+  NOTEBOOK: "Notebook",
+  MONITOR: "Monitor",
+  IMPRESSORA: "Impressora",
+  OUTRO_TI: "Outro item de TI",
+};
+export const TECH_TYPE_OPTIONS = Object.keys(TECH_TYPE_LABEL) as TechType[];
+
+export const OPERATIONAL_STATUS_LABEL: Record<OperationalStatus, string> = {
+  EM_USO: "Em uso",
+  ESTOQUE: "Em estoque",
+  MANUTENCAO: "Em manutenção",
+  BAIXADO: "Baixado",
+};
+export const OPERATIONAL_STATUS_OPTIONS = Object.keys(OPERATIONAL_STATUS_LABEL) as OperationalStatus[];
+
+/** Rótulo de um valor da classificação; `null`/desconhecido => "Não informado". */
+export function classificationLabel(map: Record<string, string>, value: string | null | undefined): string {
+  return (value ? map[value] : undefined) ?? NOT_INFORMED_LABEL;
+}
+
+export const ASSET_CLASSIFICATION_INCONSISTENT_MESSAGE =
+  "O tipo de TI só vale para a categoria Tecnologia. Ajuste a categoria ou deixe o tipo como “Não informado”.";
 
 export const ASSET_VERSION_CONFLICT_MESSAGE =
   "Outra pessoa alterou este bem enquanto você editava. Os dados foram recarregados — revise e tente de novo.";
@@ -82,6 +124,7 @@ export function assetErrorMessage(error: unknown, fallback: string): string {
     }
     return "Já existe um bem com este número patrimonial. Revise o número e tente de novo.";
   }
+  if (error.status === 422) return ASSET_CLASSIFICATION_INCONSISTENT_MESSAGE;
   if (error.status === 429) return rateLimitMessage(error);
   if (error.status === 400) return "Os dados enviados não foram aceitos. Revise os campos e tente novamente.";
   return fallback;
@@ -118,6 +161,7 @@ export const OPERATION_LABEL: Record<string, string> = {
   ASSET_UPDATED: "Bem atualizado",
   ASSET_DELETED: "Bem excluído (lógico)",
   ASSET_RESTORED: "Bem restaurado",
+  ASSET_CLASSIFICATION_UPDATED: "Classificação atualizada",
 };
 
 export const FIELD_LABEL: Record<string, string> = {
@@ -130,18 +174,27 @@ export const FIELD_LABEL: Record<string, string> = {
   room_id: "Sala",
   location_id: "Local",
   located: "Localizado",
+  asset_category: "Categoria",
+  tech_type: "Tipo de TI",
+  operational_status: "Situação operacional",
   bond_status: "Vínculo",
   registration_date: "Data de registro",
   deleted_at: "Excluído em",
   version: "Versão",
 };
 
+const CLASSIFICATION_FIELDS = new Set(["asset_category", "tech_type", "operational_status"]);
+
 /** Valor do histórico como TEXTO (React escapa; nunca HTML). `notes` nunca vem com valor. */
 export function historyValue(field: string, value: unknown): string {
+  if ((value === null || value === undefined) && CLASSIFICATION_FIELDS.has(field)) return NOT_INFORMED_LABEL;
   if (value === null || value === undefined || value === "") return "—";
   if (typeof value === "boolean") return value ? "Sim" : "Não";
   if (typeof value === "string") {
     if (field === "located" && value in LOCATED_LABEL) return LOCATED_LABEL[value as LocatedStatus];
+    if (field === "asset_category") return classificationLabel(CATEGORY_LABEL, value);
+    if (field === "tech_type") return classificationLabel(TECH_TYPE_LABEL, value);
+    if (field === "operational_status") return classificationLabel(OPERATIONAL_STATUS_LABEL, value);
     if (field === "registration_date") return formatCalendarDate(value) ?? value;
     if (field.endsWith("_at")) return formatDateTime(value) ?? value;
     return value;

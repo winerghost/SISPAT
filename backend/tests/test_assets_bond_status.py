@@ -89,12 +89,14 @@ def test_importacao_novo_vinculo_vazio_fica_nulo(world) -> None:
     assert _asset(world).bond_status is None
 
 
-def _reimport(world, resp1):
+def _reimport(world, resp1, *, unchanged=False):
     service = _service(world, [_line(RESP1=resp1)])
     preview = service.create_preview(ACTOR)
     assert [i.classification for i in _items(world.db, preview.id)] == ["EXISTENTE"]
     out = _confirm(service, world.db, preview)
-    assert out["updated"] == 1 and out["falhas"] == []
+    # Contrato novo: sem diferença com a planilha = INALTERADO (não grava, version intacta).
+    expected = (0, 1) if unchanged else (1, 0)
+    assert (out["updated"], out["inalterados"]) == expected and out["falhas"] == []
     world.db.expire_all()
     return _asset(world)
 
@@ -112,10 +114,10 @@ def test_importacao_existente_atualiza_vinculo_quando_muda(world) -> None:
 def test_importacao_existente_vazio_nao_apaga_vinculo(world) -> None:
     service = _service(world, [_line(RESP1="Ocioso")])
     _confirm(service, world.db, service.create_preview(ACTOR))
-    after = _reimport(world, "")
-    assert after.bond_status == "Ocioso"
-    after = _reimport(world, "   ")
-    assert after.bond_status == "Ocioso"
+    after = _reimport(world, "", unchanged=True)
+    assert after.bond_status == "Ocioso" and after.version == 1
+    after = _reimport(world, "   ", unchanged=True)
+    assert after.bond_status == "Ocioso" and after.version == 1
 
 
 def test_importacao_existente_preenche_vinculo_ausente(world) -> None:

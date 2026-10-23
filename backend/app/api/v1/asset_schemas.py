@@ -15,6 +15,9 @@ alheio tem a MESMA resposta (404) no serviço, sem pista de formato.
 Campos por perfil (aplicado no serviço, não aqui): `owner_unit_id`, `located` e
 `patrimony_number` (em edição) só o ADM pode enviar.
 
+Classificação (`asset_category`, `tech_type`, `operational_status`): NÃO são
+privilegiados; só o PATCH os aceita (allowlist; POST continua rejeitando).
+
 PATCH: `version` obrigatório (controle otimista); `null` limpa campos opcionais.
 """
 from __future__ import annotations
@@ -33,6 +36,11 @@ from app.services.import_normalizer import BOND_STATUS_MAX
 PATRIMONY_MAX = 64
 TEXT_MAX = 2000
 LocatedStatus = Literal["SIM", "NAO", "DESCONHECIDO"]
+# Allowlists da classificação (espelham os CHECKs da migração 0015; um teste
+# garante a igualdade com `app.services.asset_classification`).
+AssetCategory = Literal["TECNOLOGIA", "MOBILIARIO", "VEICULO", "EQUIPAMENTO", "OUTROS"]
+TechType = Literal["COMPUTADOR", "NOTEBOOK", "MONITOR", "IMPRESSORA", "OUTRO_TI"]
+OperationalStatus = Literal["EM_USO", "ESTOQUE", "MANUTENCAO", "BAIXADO"]
 _ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _VERSION = Field(ge=1, le=2_147_483_647)
 _LINK_FIELDS = ("owner_unit_id", "responsible_person_id", "room_id", "location_id")
@@ -102,6 +110,11 @@ class AssetUpdateRequest(_AssetModel):
     location_id: str | None = Field(default=None, max_length=64)
     located: LocatedStatus | None = None
     registration_date: date | None = None
+    # Classificação (editável só na edição; `null` = "não informado"/limpar).
+    # Consistência tipo x categoria é checada no serviço (422).
+    asset_category: AssetCategory | None = None
+    tech_type: TechType | None = None
+    operational_status: OperationalStatus | None = None
 
     @model_validator(mode="after")
     def _check(self) -> "AssetUpdateRequest":

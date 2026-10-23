@@ -2,8 +2,6 @@
 
 import { CircleCheck, CircleX, TriangleAlert } from "lucide-react";
 
-import type { CatalogImportConfirmResponse } from "@/lib/catalog-imports-api";
-
 import { pendingLabel } from "./catalog-import-labels";
 import {
   CLASSIFICATION_PT,
@@ -13,6 +11,7 @@ import {
   savedCount,
   UNWRITTEN_REASON_LABEL,
   type CatalogOutcome,
+  type ConfirmResultView,
 } from "./catalog-import-outcome";
 
 // =============================================================================
@@ -21,7 +20,9 @@ import {
 // nunca de forma otimista, e os números não são animados. O tom depende do
 // estado derivado: sucesso (verde), parcial (laranja), falha total/nada salvo
 // (laranja com ícone de erro) — nunca "sucesso" quando nada foi salvo. Ícone +
-// texto (a cor nunca é o único sinal). As falhas trazem linha, nome e motivo
+// texto (a cor nunca é o único sinal). Serve cadastros e bens (mesmo contrato):
+// em bens (`kind` ausente) mostra também as pendências de vínculo dos bens criados
+// (sala, pessoa, unidade pertencente) e o aviso de resposta degradada. As falhas trazem linha, nome e motivo
 // (texto escapado pelo React); o backend lista no máximo 100 e informa o total.
 // =============================================================================
 
@@ -47,7 +48,17 @@ function reasonLabel(code: string): string {
   return UNWRITTEN_REASON_LABEL[code] ?? pendingLabel(code);
 }
 
-export function CatalogImportResult({ result }: { result: CatalogImportConfirmResponse }) {
+const LINK_PENDING_CODES_ORDER = [
+  "sala_nao_encontrada",
+  "sala_ambigua",
+  "pessoa_nao_encontrada",
+  "pessoa_ambigua",
+  "usuario_pessoa_nao_encontrada",
+  "usuario_pessoa_ambigua",
+  "unidade_pertencente_nao_encontrada",
+];
+
+export function CatalogImportResult({ result }: { result: ConfirmResultView }) {
   const failures = result.falhas ?? [];
   const failuresTotal = failureCount(result);
   const outcome = deriveOutcome(result);
@@ -57,6 +68,14 @@ export function CatalogImportResult({ result }: { result: CatalogImportConfirmRe
   const reasons = Object.entries(unwritten?.por_motivo ?? {}).filter(([, count]) => count > 0);
   const aliasMissing = unwritten?.por_motivo?.unidade_sem_alias ?? 0;
   const dependsOnAlias = result.kind !== "units";
+  const isAssets = result.kind === undefined;
+  const linkPending = Object.entries(result.pendencias_vinculo ?? {})
+    .filter(([, count]) => count > 0)
+    .sort(([a], [b]) => {
+      const ia = LINK_PENDING_CODES_ORDER.indexOf(a);
+      const ib = LINK_PENDING_CODES_ORDER.indexOf(b);
+      return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
+    });
   const Icon = outcome === "success" ? CircleCheck : outcome === "failure" ? CircleX : TriangleAlert;
 
   return (
@@ -73,6 +92,21 @@ export function CatalogImportResult({ result }: { result: CatalogImportConfirmRe
         <Icon className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
         <span>{OUTCOME_TITLE[outcome]}</span>
       </p>
+
+      {result.degraded ? (
+        <p
+          role="status"
+          data-testid="catalog-import-degraded"
+          className="flex items-start gap-2 text-body-sm text-signal-orange"
+        >
+          <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+          <span>
+            Os dados foram gravados, mas o servidor não conseguiu montar o detalhamento completo. Os totais abaixo são
+            confiáveis; as listas de itens não gravados e rejeitados não estão disponíveis (consulte o histórico da
+            sincronização).
+          </span>
+        </p>
+      ) : null}
 
       <dl className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
         <Stat label="Salvos" value={savedCount(result)} />
@@ -135,6 +169,26 @@ export function CatalogImportResult({ result }: { result: CatalogImportConfirmRe
             Importe primeiro as unidades (marcando a criação das siglas) e gere uma nova prévia.
           </span>
         </p>
+      ) : null}
+
+      {isAssets && linkPending.length > 0 ? (
+        <div className="flex flex-col gap-2" data-testid="catalog-import-link-pending">
+          <h3 className="text-eyebrow text-pale-stone">Bens criados com vínculo pendente</h3>
+          <p className="text-body-sm text-warm-granite">
+            Estes bens foram gravados sem o vínculo abaixo (não bloqueia): cadastre o item de apoio e vincule-o na edição
+            do bem.
+          </p>
+          <ul className="flex flex-col gap-1 text-body-sm">
+            {linkPending.map(([code, count]) => (
+              <li key={code} data-link-pending={code} className="flex min-w-0 items-start gap-2 break-words [overflow-wrap:anywhere]">
+                <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0 text-signal-orange" aria-hidden="true" />
+                <span>
+                  {pendingLabel(code)}: <span className="text-bone">{count}</span>
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
       ) : null}
 
       {failuresTotal > 0 ? (

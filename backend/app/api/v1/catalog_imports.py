@@ -44,6 +44,7 @@ from app.api.v1.catalog_import_schemas import (
     CatalogItemsQuery,
 )
 from app.api.v1.catalog_http import read_body
+from app.api.v1.import_confirm_common import safe_confirm_payload
 from app.api.v1.schemas import parse_query
 from app.api.v1.user_admin_http import (
     admin_rate_limit_key,
@@ -129,6 +130,31 @@ def _deny_not_found(reason: str):
         details={"reason": reason, "context": "catalog_imports"},
     )
     return not_found_response()
+
+
+def _confirm_raw(preview_id: uuid.UUID, kind: str, result: dict[str, Any]) -> dict[str, Any]:
+    """Monta o corpo da resposta (ainda não validado) a partir do resultado do serviço."""
+    return {
+        "preview_id": str(preview_id),
+        "kind": kind,
+        "sync_job_id": str(result["sync_job_id"]),
+        "status": result["status"],
+        "created": result["created"],
+        "updated": result["updated"],
+        "ignorados": result["ignorados"],
+        "inalterados": result["inalterados"],
+        "nao_gravados": result["nao_gravados"],
+        "falhas_total": result["falhas_total"],
+        "falhas": [
+            {
+                "item_id": f.get("item_id"),
+                "row": f.get("row"),
+                "label": str(f["label"])[:300] if f.get("label") else None,
+                "reason": str(f["reason"])[:300] if f.get("reason") else None,
+            }
+            for f in result["falhas"]
+        ],
+    }
 
 
 def _parse_uuid(raw: str) -> uuid.UUID | None:
@@ -319,35 +345,22 @@ def catalog_confirm_endpoint(preview_id: str):
             preview, kind, denied = _authorized_preview(db, preview_id)
             if denied is not None:
                 return denied
+            confirmed_preview_id = preview.id  # antes do commit expirar o objeto
             result = CatalogImportService(db, GoogleSheetsClient()).confirm_preview(
-                preview_id=preview.id,
+                preview_id=confirmed_preview_id,
                 confirmed_by_user_id=user.id,
                 selected_item_ids=list(body.item_ids),
                 alias_item_ids=list(body.alias_item_ids),
             )
-            payload = CatalogConfirmResponse.model_validate(
-                {
-                    "preview_id": str(preview.id),
-                    "kind": kind,
-                    "sync_job_id": str(result["sync_job_id"]),
-                    "status": result["status"],
-                    "created": result["created"],
-                    "updated": result["updated"],
-                    "ignorados": result["ignorados"],
-                    "inalterados": result["inalterados"],
-                    "nao_gravados": result["nao_gravados"],
-                    "falhas_total": result["falhas_total"],
-                    "falhas": [
-                        {
-                            "item_id": f.get("item_id"),
-                            "row": f.get("row"),
-                            "label": str(f["label"])[:300] if f.get("label") else None,
-                            "reason": str(f["reason"])[:300] if f.get("reason") else None,
-                        }
-                        for f in result["falhas"]
-                    ],
-                }
-            ).model_dump()
+            # O serviço já deu commit: falha ao montar/validar a resposta NÃO pode
+            # virar 500 (B-3) -> 200 degradado com contadores mínimos válidos.
+            payload = safe_confirm_payload(
+                CatalogConfirmResponse,
+                lambda: _confirm_raw(confirmed_preview_id, kind, result),
+                identity={"preview_id": str(confirmed_preview_id), "kind": kind},
+                result=result,
+                context="catalog_imports",
+            )
     except PreviewNotFoundError:
         return _deny_not_found("catalog_preview_not_found")
     except PreviewNotConfirmableError:

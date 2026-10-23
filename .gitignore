@@ -121,6 +121,7 @@ coverage.xml
 junit.xml
 playwright-report/
 test-results/
+test-results-*/
 blob-report/
 *.p12
 *.pfx
