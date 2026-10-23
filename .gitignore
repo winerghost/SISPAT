@@ -20,6 +20,25 @@ google_sheets_credentials*.json
 CLAUDE.md
 DESIGN.md
 .claude
+# Next.js
+# Next.js - compilação e cache
+.next/
+.next-*/
+**/.next/
+**/.next-*/
+
+# Dependências
+node_modules/
+**/node_modules/
+
+# Arquivos temporários
+*.log
+*.tsbuildinfo
+
+# Ambiente local
+.env
+.env.local
+.env*.local
 
 # ---------------------------------------------------------------------------
 # Documentação sensível — fica só na máquina local

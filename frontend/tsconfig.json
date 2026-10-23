@@ -37,11 +37,14 @@
     ".next-e2e-d1/types/**/*.ts",
     ".next-e2e-d1b/types/**/*.ts",
     ".next-e2e-d2/types/**/*.ts",
+    ".next-e2e-d34/types/**/*.ts",
     ".next-e2e-d5/types/**/*.ts",
     ".next-e2e-d5b/types/**/*.ts",
+    ".next-e2e-qa/types/**/*.ts",
+    ".next-qa/types/**/*.ts",
     ".next/types/**/*.ts",
     "next-env.d.ts",
-    ".next-e2e-d34/types/**/*.ts"
+    ".next-qa-prod/types/**/*.ts"
   ],
   "exclude": [
     "node_modules"
