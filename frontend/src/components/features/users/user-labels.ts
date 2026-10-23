@@ -84,6 +84,7 @@ const CODE = {
   tooLarge: "file_too_large",
   unsupported: "unsupported_image",
   storage: "storage_unavailable",
+  authProvider: "auth_provider_unavailable",
 } as const;
 
 /** Código do backend normalizado (o contrato mistura `AAL2_REQUIRED` e `not_found`). */
@@ -144,7 +145,10 @@ export function userErrorMessage(error: unknown, fallback: string): string {
   if (code === CODE.unsupported) {
     return "Imagem não aceita. Envie uma foto JPEG, PNG ou WebP de até 4096 px de lado.";
   }
-  if (code === CODE.storage || error.status === 503) {
+  if (code === CODE.authProvider || error.status === 502) {
+    return "O provedor de autenticação não respondeu. Nada foi alterado; tente novamente em instantes. Se persistir, avise o suporte.";
+  }
+  if (code === CODE.storage || (error.status === 503 && !code)) {
     return "O armazenamento de fotos está indisponível no momento. O restante do sistema continua funcionando.";
   }
   if (code === CODE.notFound || error.status === 404) {

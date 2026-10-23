@@ -135,6 +135,7 @@ from app.services.invite_service import (
     UserNotFoundError,
 )
 from app.services.user_admin_service import (
+    AuthProviderUnavailableError,
     SelfChangeForbiddenError,
     UserAdminError,
     UserAdminService,
@@ -640,6 +641,15 @@ def activate_user_endpoint(user_id: uuid.UUID):
         with get_db_session() as db:
             result = _service(db).activate(actor.id, user_id, body.version)
     except UserAdminError as exc:
+        if isinstance(exc, AuthProviderUnavailableError):
+            record_security_event(
+                EVENT_USER_PROVIDER_SYNC_FAILED,
+                severity=SEVERITY_MEDIUM,
+                actor_user_id=actor.id,
+                target_type="user",
+                target_id=user_id,
+                details={"operation": "unban"},
+            )
         return service_error_response(exc, actor_id=actor.id, target_id=user_id, context="users.activate")
     return jsonify(result.summary), 200
 

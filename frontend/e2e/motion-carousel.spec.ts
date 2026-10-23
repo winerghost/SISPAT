@@ -245,13 +245,43 @@ test.describe("prefers-reduced-motion", () => {
 test.describe("mobile (< lg)", () => {
   test.use({ viewport: { width: 375, height: 667 } });
 
-  test("painel abaixo do formulário (ordem do DOM) e sem autoplay", async ({ page }) => {
+  test("painel abaixo do formulário (ordem do DOM) e com autoplay pausável", async ({ page }) => {
     const carousel = await openLogin(page);
     await expect(carousel).toBeVisible();
     const formBox = await page.getByRole("button", { name: "Entrar" }).boundingBox();
     const panelBox = await carousel.boundingBox();
     expect(panelBox!.y, "painel abaixo do formulário").toBeGreaterThan(formBox!.y + formBox!.height);
-    await expect(page.locator("[aria-roledescription='carousel']")).toHaveAttribute("data-autoplay", "off");
+    await expect(carousel).toHaveAttribute("data-autoplay", "playing");
+    await expect(carousel.getByRole("button", { name: /Pausar rotação automática/ })).toBeVisible();
+    await carousel.getByRole("button", { name: /Pausar rotação automática/ }).click();
+    await expect(carousel).toHaveAttribute("data-autoplay", "paused");
+  });
+});
+
+test.describe("320px: teclado e axe", () => {
+  test.use({ viewport: { width: 320, height: 640 } });
+
+  test("slide navegável por teclado, axe limpo e sem overflow horizontal", async ({ page }) => {
+    const carousel = await openLogin(page);
+    await carousel.focus();
+    await page.keyboard.press("ArrowRight");
+    await expectSelected(carousel, 1);
+    await page.keyboard.press("End");
+    await expectSelected(carousel, 3);
+    await page.keyboard.press("Home");
+    await expectSelected(carousel, 0);
+    // Botões e indicadores alcançáveis por Tab, ativáveis por Enter.
+    await carousel.getByRole("button", { name: "Próximo slide" }).focus();
+    await page.keyboard.press("Enter");
+    await expectSelected(carousel, 1);
+    await carousel.getByRole("button", { name: "Slide 4 de 4" }).focus();
+    await page.keyboard.press("Enter");
+    await expectSelected(carousel, 3);
+    await waitForAnimations(page);
+    const report = await collectLayoutReport(page);
+    expect(report.docScrollWidth, "rolagem horizontal do documento").toBeLessThanOrEqual(320);
+    const results = await new AxeBuilder({ page }).withTags(AXE_TAGS).exclude("nextjs-portal").analyze();
+    expect(results.violations.map((v) => v.id)).toEqual([]);
   });
 });
 
@@ -264,11 +294,9 @@ for (const width of [320, 375, 768, 1024, 1440]) {
     }) => {
       const errors = trackConsoleErrors(page);
       const carousel = await openLogin(page);
-      if (width >= 1024) {
-        await carousel.getByRole("button", { name: "Slide 2 de 4" }).click();
-        await expectSelected(carousel, 1);
-        await leaveCarousel(page);
-      }
+      await carousel.getByRole("button", { name: "Slide 2 de 4" }).click();
+      await expectSelected(carousel, 1);
+      await leaveCarousel(page);
       await waitForAnimations(page);
       const report = await collectLayoutReport(page);
       expect(report.docScrollWidth, "rolagem horizontal do documento").toBeLessThanOrEqual(width);

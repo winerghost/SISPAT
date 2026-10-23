@@ -11,15 +11,16 @@ import {
   LOGIN_INSTITUTIONAL_IMAGE,
   type AuthPanelImage,
 } from "./login-guidance";
-import { LG_QUERY, useMediaQuery } from "./use-media-query";
 
 // =============================================================================
 // Painel de orientações do login: em InfoSlider + slot opcional de imagem
 // institucional (vazio por padrão). >= lg fica ao lado do formulário; abaixo
 // de lg fica ABAIXO dele (ordem do DOM).
 // =============================================================================
-// Abaixo de lg o autoplay fica desligado (só liga quando a media query lg
-// casa — navegação manual/touch no mobile, sem rotação automática).
+// Autoplay em TODOS os tamanhos (o slide gira também no celular), sempre com
+// botão Pausar/Retomar, pausa por hover/foco/interação e desligado sob
+// prefers-reduced-motion (tratado dentro do Carousel). Sem JS, o 1º slide fica
+// visível (SSR).
 // Posicionado DEPOIS do formulário no DOM: o Tab chega primeiro aos campos.
 // =============================================================================
 
@@ -30,7 +31,6 @@ export interface AuthGuidancePanelProps {
 }
 
 export function AuthGuidancePanel({ image = LOGIN_INSTITUTIONAL_IMAGE, className }: AuthGuidancePanelProps) {
-  const isDesktop = useMediaQuery(LG_QUERY);
   const headingId = "login-orientacoes-titulo";
 
   return (
@@ -53,7 +53,7 @@ export function AuthGuidancePanel({ image = LOGIN_INSTITUTIONAL_IMAGE, className
       <InfoSlider
         label="Orientações de uso do sistema"
         items={LOGIN_GUIDANCE}
-        autoplay={isDesktop}
+        autoplay
         autoplayInterval={LOGIN_GUIDANCE_INTERVAL}
       />
     </div>

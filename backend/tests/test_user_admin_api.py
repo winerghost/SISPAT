@@ -27,6 +27,7 @@ from test_user_admin_db import (  # noqa: F401  (fixtures)
 )
 
 from app.auth.supabase_auth import has_recent_totp, session_predates_revocation
+from app.integrations.supabase_admin_client import SupabaseAdminClientError
 from app.models.rbac import Permission, RolePermission
 
 ADM_SUB = "auth-adm-principal"
@@ -303,6 +304,16 @@ def test_desativar_bloqueia_o_jwt_ja_emitido_do_alvo(scene):
     api.admin.unban_user.assert_called_once_with("auth-user-a")
     # Token antigo continua inválido (sessions_revoked_at mantido).
     assert api.client.get("/api/v1/me", headers=target_headers).status_code == 401
+
+
+def test_reativar_com_provedor_fora_devolve_502_e_audita(scene):
+    api = scene.api
+    api.client.post(f"/api/v1/users/{scene.user_a}/deactivate", json={"version": 1}, headers=_headers())
+    api.admin.unban_user.side_effect = SupabaseAdminClientError("fora")
+    response = api.client.post(f"/api/v1/users/{scene.user_a}/activate", json={"version": 2}, headers=_headers())
+    assert response.status_code == 502
+    assert response.get_json()["error"]["code"] == "auth_provider_unavailable"
+    assert any(e["event_type"] == "USER_PROVIDER_SYNC_FAILED" for e in api.events)
 
 
 def test_revogar_sessoes_rejeita_token_antigo_e_aceita_novo_login(scene):

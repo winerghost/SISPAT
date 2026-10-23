@@ -112,12 +112,12 @@ export async function collectLayoutReport(page: Page): Promise<LayoutReport> {
       return false;
     }
 
-    /** Ancestral (até <main>, exclusive) com rolagem horizontal própria. */
+    /** Ancestral (até <main>, exclusive) com rolagem horizontal própria ou que recorta o excedente (ex.: viewport de carrossel). */
     function scrollContainer(el: Element): Element | null {
       let node = el.parentElement;
       while (node && node.tagName !== "MAIN" && node !== document.body) {
         const ox = getComputedStyle(node).overflowX;
-        if (ox === "auto" || ox === "scroll") return node;
+        if (ox === "auto" || ox === "scroll" || ox === "hidden" || ox === "clip") return node;
         node = node.parentElement;
       }
       return null;

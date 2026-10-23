@@ -252,7 +252,7 @@ apenas por convite…"). Sem Sidebar/Header/AuthGuard. As demais rotas ficam em
 destino fixo, sem loop). Os grupos não alteram as URLs. O fluxo de login
 (senha → MFA TOTP → AAL2 via `/me`) e o foco WCAG 2.4.3 não mudaram; o painel
 de orientações (`AuthGuidancePanel`) fica ao lado do formulário em `lg` e abaixo
-dele em telas menores. Não há "Cadastre-se" (só convite) nem "Esqueceu a
+dele em telas menores; é um slide (Embla) com autoplay pausável em todos os tamanhos, desligado sob prefers-reduced-motion. Não há "Cadastre-se" (só convite) nem "Esqueceu a
 senha?" (fluxo inexistente). Testes: `e2e/functional.spec.ts` ("tela pública
 autônoma") e a matriz de `e2e/support/screens.ts`.
 
