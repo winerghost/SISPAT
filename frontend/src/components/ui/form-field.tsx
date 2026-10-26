@@ -121,6 +121,18 @@ export const textareaControlClassName = cn(
   "min-h-[72px] py-2 placeholder:text-warm-granite",
 );
 
+/**
+ * Variante dos MESMOS controles para superfície clara (Dialog bg-bone): fundo
+ * chalk, texto obsidian e borda graphite-mid (>= 3:1 sobre bone), com anel de
+ * foco obsidian. Acrescente `inputLightClassName` ao <Input> do mesmo diálogo.
+ * Os controles escuros acima continuam valendo para a superfície escura.
+ */
+const LIGHT_CONTROL =
+  "border-graphite-mid bg-chalk text-obsidian-canvas placeholder:text-graphite-mid hover:border-obsidian-canvas focus-visible:border-obsidian-canvas focus-visible:ring-1 focus-visible:ring-obsidian-canvas aria-[invalid=true]:border-obsidian-canvas aria-[invalid=true]:focus-visible:border-obsidian-canvas [color-scheme:light]";
+export const inputLightClassName = LIGHT_CONTROL;
+export const selectControlLightClassName = cn(selectControlClassName, LIGHT_CONTROL);
+export const textareaControlLightClassName = cn(textareaControlClassName, LIGHT_CONTROL);
+
 /** Legenda padrão "* obrigatório" para o topo de formulários. */
 export function RequiredLegend({ surface = "dark" }: { surface?: "dark" | "light" }) {
   return (

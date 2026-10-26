@@ -1349,6 +1349,78 @@ export const SCREENS: ScreenDef[] = [
     },
   },
   {
+    id: "patrimonios-detalhe-excluido",
+    title: "Patrimônios — detalhe de bem excluído (ADM: selo Excluído e Restaurar)",
+    path: "/patrimonios",
+    session: { role: "ADM" },
+    prepare: async (page) => {
+      await expect(page.getByRole("table", { name: "Patrimônios" })).toBeVisible();
+      await page.getByRole("switch", { name: "Incluir excluídos" }).check();
+      await page.getByRole("button", { name: "Ver detalhes do patrimônio DEL-0001" }).click();
+      const sheet = page.getByRole("dialog", { name: /Patrimônio DEL-0001/ });
+      await expect(sheet.getByRole("button", { name: "Restaurar", exact: true })).toBeVisible();
+      await expect(sheet.getByText("Excluído", { exact: true }).first()).toBeVisible();
+    },
+  },
+  {
+    id: "patrimonios-editar-alterado",
+    title: "Patrimônios — edição com campos alterados e resumo aberto (USER)",
+    path: "/patrimonios",
+    session: { role: "USER" },
+    prepare: async (page) => {
+      await openAssetSheet("000123")(page);
+      await page.getByRole("button", { name: "Editar" }).click();
+      const dialog = page.getByRole("dialog", { name: "Editar bem" });
+      await expect(dialog).toBeVisible();
+      await dialog.getByLabel("Descrição").fill("Descrição alterada no formulário");
+      await dialog.getByLabel("Data de registro").fill("2026-02-03");
+      await dialog.locator("summary").click();
+      await expect(dialog.getByRole("list", { name: "Resumo das alterações" }).locator("li")).toHaveCount(2);
+    },
+  },
+  {
+    id: "patrimonios-editar-salas-erro",
+    title: "Patrimônios — edição com falha ao carregar salas (aviso e recarregar)",
+    path: "/patrimonios",
+    session: { role: "USER", lookupListStatus: 500 },
+    prepare: async (page) => {
+      await openAssetSheet("000123")(page);
+      await page.getByRole("button", { name: "Editar" }).click();
+      const dialog = page.getByRole("dialog", { name: "Editar bem" });
+      await expect(dialog.getByText("Não foi possível carregar as salas.")).toBeVisible({ timeout: 15_000 });
+      await expect(dialog.getByRole("button", { name: "Recarregar salas" })).toBeVisible();
+    },
+  },
+  {
+    id: "patrimonios-editar-conflito",
+    title: "Patrimônios — edição com conflito 409 (rascunho mantido, 'no servidor')",
+    path: "/patrimonios",
+    session: { role: "USER", assetConcurrentEdit: { description: "Edição concorrente" } },
+    prepare: async (page) => {
+      await openAssetSheet("000123")(page);
+      await page.getByRole("button", { name: "Editar" }).click();
+      const dialog = page.getByRole("dialog", { name: "Editar bem" });
+      await dialog.getByLabel("Descrição").fill("Minha edição");
+      await dialog.getByRole("button", { name: "Salvar bem" }).click();
+      await expect(dialog.getByText("Este bem foi alterado por outra pessoa")).toBeVisible();
+      await expect(dialog.getByText("no servidor: Edição concorrente")).toBeVisible();
+    },
+  },
+  {
+    id: "patrimonios-editar-confirmar-saida",
+    title: "Patrimônios — confirmação ao sair da edição com alterações",
+    path: "/patrimonios",
+    session: { role: "USER" },
+    prepare: async (page) => {
+      await openAssetSheet("000123")(page);
+      await page.getByRole("button", { name: "Editar" }).click();
+      const dialog = page.getByRole("dialog", { name: "Editar bem" });
+      await dialog.getByLabel("Descrição").fill("Rascunho");
+      await dialog.getByRole("button", { name: "Cancelar" }).click();
+      await expect(page.getByRole("dialog", { name: "Descartar alterações?" })).toBeVisible();
+    },
+  },
+  {
     id: "patrimonios-excluir",
     title: "Patrimônios — confirmação de exclusão LÓGICA (ADM)",
     path: "/patrimonios",

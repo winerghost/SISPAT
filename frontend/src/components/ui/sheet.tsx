@@ -25,12 +25,16 @@ export interface SheetProps {
   onOpenChange: (open: boolean) => void;
   title: ReactNode;
   description?: ReactNode;
-  /** Conteúdo acima do título (ex.: avatar). */
+  /** Selos/metadados logo abaixo do título (ex.: situação do registro). */
+  meta?: ReactNode;
+  /** Barra de ações fixa no rodapé do painel (sticky; fica sempre visível ao rolar). */
+  footer?: ReactNode;
+  /** Conteúdo do painel. */
   children: ReactNode;
   className?: string;
 }
 
-export function Sheet({ open, onOpenChange, title, description, children, className }: SheetProps) {
+export function Sheet({ open, onOpenChange, title, description, meta, footer, children, className }: SheetProps) {
   const reduced = usePrefersReducedMotion();
   return (
     <DialogPrimitive.Root open={open} onOpenChange={onOpenChange}>
@@ -69,6 +73,7 @@ export function Sheet({ open, onOpenChange, title, description, children, classN
                     <DialogPrimitive.Title className="break-words text-body text-bone [overflow-wrap:anywhere]">
                       {title}
                     </DialogPrimitive.Title>
+                    {meta ? <div className="flex flex-wrap items-center gap-2 pt-1">{meta}</div> : null}
                     {description ? (
                       <DialogPrimitive.Description className="break-words text-body-sm text-warm-granite [overflow-wrap:anywhere]">
                         {description}
@@ -83,6 +88,11 @@ export function Sheet({ open, onOpenChange, title, description, children, classN
                   </DialogPrimitive.Close>
                 </div>
                 <div className="flex flex-1 flex-col gap-6 px-4 py-6 sm:px-6">{children}</div>
+                {footer ? (
+                  <div className="sticky bottom-0 z-10 border-t border-ash-stroke bg-obsidian-canvas px-4 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3 sm:px-6">
+                    {footer}
+                  </div>
+                ) : null}
               </m.div>
             </DialogPrimitive.Content>
           </DialogPrimitive.Portal>

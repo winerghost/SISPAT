@@ -66,7 +66,8 @@ test.describe("patrimônios — classificação manual", () => {
     });
     await expect(dialog).toBeHidden();
     await expect(sheet.getByText("Notebook")).toBeVisible();
-    await expect(sheet.getByText("Em uso")).toBeVisible();
+    // "Em uso" também é selo do cabeçalho: confere o valor no cartão de classificação.
+    await expect(sheet.locator("dd", { hasText: "Em uso" })).toBeVisible();
     expect(asset(state, ASSET_IDS.long).tech_type).toBe("NOTEBOOK");
   });
 

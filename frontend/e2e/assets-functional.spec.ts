@@ -864,7 +864,7 @@ test.describe("patrimônios — editar", () => {
     expect(asset(state, ASSET_IDS.long).location_id).not.toBe(LOCATION_ID);
   });
 
-  test("409 version_conflict: recarrega o registro, avisa e o reenvio usa a nova version", async ({ page }) => {
+  test("409 version_conflict: mantém o rascunho, avisa uma única vez e o reenvio usa a nova version", async ({ page }) => {
     const state = await open(page, { role: "USER" });
     const sheet = await openSheet(page, "000123");
     await sheet.getByRole("button", { name: "Editar" }).click();
@@ -877,10 +877,11 @@ test.describe("patrimônios — editar", () => {
 
     await dialog.getByRole("button", { name: "Salvar bem" }).click();
     await expect(dialog.getByText("Outra pessoa alterou este bem enquanto você editava.")).toBeVisible();
-    // Com o diálogo aberto o painel fica aria-hidden: localizar por data-sheet, não por role.
-    await expect(page.locator("[data-sheet]").getByText("Outra pessoa alterou este bem enquanto você editava.")).toBeVisible();
-    // O formulário reinicia com os dados atuais do servidor.
-    await expect(dialog.getByLabel("Descrição")).toHaveValue("Edição concorrente");
+    // Aviso ÚNICO: o painel (aria-hidden com o diálogo aberto) não repete a mensagem.
+    await expect(page.locator("[data-sheet]").getByText("Outra pessoa alterou este bem enquanto você editava.")).toHaveCount(0);
+    // O rascunho NÃO é perdido; o servidor aparece no aviso.
+    await expect(dialog.getByLabel("Descrição")).toHaveValue("Minha edição");
+    await expect(dialog.getByText("no servidor: Edição concorrente")).toBeVisible();
 
     await dialog.getByLabel("Descrição").fill("Minha edição revisada");
     const request = waitApi(page, "PATCH", ASSET_IDS.long);

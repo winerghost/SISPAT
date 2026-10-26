@@ -30,6 +30,10 @@ export interface ConfirmActionDialogProps {
   description: ReactNode;
   consequences?: ReactNode[];
   confirmLabel: string;
+  /** Rótulo do botão que recusa (padrão "Cancelar"). */
+  cancelLabel?: string;
+  /** Para devolver o foco a um elemento específico ao fechar (ex.: diálogo aninhado). */
+  onCloseAutoFocus?: (event: Event) => void;
   pendingLabel?: string;
   pending?: boolean;
   confirmDisabled?: boolean;
@@ -46,6 +50,8 @@ export function ConfirmActionDialog({
   description,
   consequences,
   confirmLabel,
+  cancelLabel = "Cancelar",
+  onCloseAutoFocus,
   pendingLabel,
   pending = false,
   confirmDisabled = false,
@@ -60,7 +66,7 @@ export function ConfirmActionDialog({
 
   return (
     <Dialog open={open} onOpenChange={(next) => (pending ? undefined : onOpenChange(next))}>
-      <DialogContent>
+      <DialogContent onCloseAutoFocus={onCloseAutoFocus}>
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
           <DialogDescription>{description}</DialogDescription>
@@ -85,7 +91,7 @@ export function ConfirmActionDialog({
 
           <DialogFooter>
             <Button type="button" variant="outlineOnLight" onClick={() => onOpenChange(false)} disabled={pending}>
-              Cancelar
+              {cancelLabel}
             </Button>
             <Button type="submit" loading={pending} disabled={confirmDisabled}>
               {pending && pendingLabel ? pendingLabel : confirmLabel}

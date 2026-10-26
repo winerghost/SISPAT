@@ -100,6 +100,11 @@ export interface AssetMockState {
   forceHistoryStatus: number | null;
   /** Erro HTTP forçado em `GET /assets/bond-statuses` (o filtro "Vínculo" fica indisponível). */
   forceBondStatusesStatus: number | null;
+  /**
+   * Edição concorrente simulada: aplicada UMA vez ao primeiro PATCH de qualquer bem (o bem
+   * ganha estes campos e `version + 1` antes da checagem) => 409 `version_conflict` natural.
+   */
+  concurrentEdit: Partial<AssetMock> | null;
 }
 
 export interface AssetHandlerState extends AssetMockState {
@@ -210,6 +215,7 @@ export function defaultAssets(units: CatalogUnitRef[]): AssetMockState {
     forceWriteError: null,
     forceHistoryStatus: null,
     forceBondStatusesStatus: null,
+    concurrentEdit: null,
   };
 }
 
@@ -673,6 +679,10 @@ async function patchAsset(ctx: AssetRequestContext, id: string, err: Err): Promi
   }
   const asset = UUID_RE.test(id) ? visible(state, id, false) : null;
   if (!asset) return err(404, "not_found", "Não encontrado");
+  if (state.concurrentEdit) {
+    Object.assign(asset, state.concurrentEdit, { version: asset.version + 1 });
+    state.concurrentEdit = null;
+  }
   if (version !== asset.version) return err(409, "version_conflict");
 
   const next: Partial<AssetMock> = {};

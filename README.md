@@ -454,3 +454,12 @@ O termo é dividido em tokens (qualquer espaço, inclusive NBSP; máx. 8; tokens
 (seleção no servidor) e grava em lotes de 100; `GET /imports/google-sheets/<id>/reconciliation`
 (ADM, AAL2, só leitura) lista os itens da prévia que não viraram bem, com motivo. Ver
 `docs/architecture/cadastros-apoio-api.md`.
+
+### Detalhes e edição de bem (`/patrimonios`)
+O painel de detalhes mostra o número patrimonial em destaque com selos de status, seções em cards
+(Identificação, Localização e responsável, Classificação técnica, Vínculo, Registro) e barra de
+ações fixa. O diálogo "Editar bem" agrupa os campos nas mesmas seções, marca os campos alterados,
+resume "Campo: antigo → novo" (o mesmo cálculo do PATCH, só campos alterados + `version`) e pede
+confirmação ao fechar com alterações. No conflito de versão (409) o rascunho é preservado e cada
+campo divergente mostra "no servidor: X". Mensagens de erro vêm de `asset-labels.ts`, nunca do
+backend. Só frontend; contrato da API inalterado. Testes: `frontend/e2e/assets-edit-redesign-functional.spec.ts`.

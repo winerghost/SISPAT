@@ -123,6 +123,55 @@ export async function collectLayoutReport(page: Page): Promise<LayoutReport> {
       return null;
     }
 
+    /** Interseção do retângulo com a área visível de cada ancestral que corta/rola o conteúdo (ou null se vazia). */
+    function visibleRect(el: Element, rect: DOMRect): DOMRect | null {
+      let left = rect.left;
+      let top = rect.top;
+      let right = rect.right;
+      let bottom = rect.bottom;
+      let node: Element | null = el.parentElement;
+      while (node && node !== document.body && node !== document.documentElement) {
+        const style = getComputedStyle(node);
+        const clipsX = ["auto", "scroll", "hidden", "clip"].includes(style.overflowX);
+        const clipsY = ["auto", "scroll", "hidden", "clip"].includes(style.overflowY);
+        if (clipsX || clipsY) {
+          const box = node.getBoundingClientRect();
+          if (clipsX) {
+            left = Math.max(left, box.left);
+            right = Math.min(right, box.right);
+          }
+          if (clipsY) {
+            top = Math.max(top, box.top);
+            bottom = Math.min(bottom, box.bottom);
+          }
+        }
+        node = node.parentElement;
+      }
+      if (right - left <= 0 || bottom - top <= 0) return null;
+      return new DOMRect(left, top, right - left, bottom - top);
+    }
+
+    /** `sticky` = elemento dentro de uma barra sticky; `under` = alvo dentro de um contêiner que ainda rola na vertical. */
+    function coveredBySticky(sticky: Element, under: Element): boolean {
+      let bar: Element | null = sticky;
+      let isSticky = false;
+      while (bar && bar !== document.body) {
+        if (getComputedStyle(bar).position === "sticky") {
+          isSticky = true;
+          break;
+        }
+        bar = bar.parentElement;
+      }
+      if (!isSticky || !bar || bar.contains(under)) return false;
+      let node: Element | null = under.parentElement;
+      while (node && node !== document.body) {
+        const oy = getComputedStyle(node).overflowY;
+        if ((oy === "auto" || oy === "scroll") && node.scrollHeight > node.clientHeight + 1) return node.contains(bar);
+        node = node.parentElement;
+      }
+      return false;
+    }
+
     // 1) Rolagem horizontal da página.
     const main = document.querySelector("main");
     const mainOverflowX = main ? main.scrollWidth - main.clientWidth : 0;
@@ -153,7 +202,10 @@ export async function collectLayoutReport(page: Page): Promise<LayoutReport> {
           ? el.closest("label")!
           : el;
       const rect = box.getBoundingClientRect();
-      targetRects.push({ el: box, rect });
+      // Alvo rolado para fora da área visível de um contêiner com rolagem (ex.: corpo do
+      // formulário atrás da barra de ações fixa) não está na tela: não entra na sobreposição.
+      const visible = visibleRect(box, rect);
+      if (visible) targetRects.push({ el: box, rect: visible });
       // Exceção "inline": link dentro de frase/parágrafo.
       const inline = el.tagName === "A" && !!el.closest("p, li > span, dd");
       if (!inline && (rect.width < 24 - 0.5 || rect.height < 24 - 0.5)) {
@@ -168,6 +220,8 @@ export async function collectLayoutReport(page: Page): Promise<LayoutReport> {
         const a = targetRects[i]!;
         const b = targetRects[j]!;
         if (a.el.contains(b.el) || b.el.contains(a.el)) continue;
+        // Barra "sticky" (ex.: ações do painel) sobre conteúdo que ainda rola: o conteúdo sai de baixo dela ao rolar.
+        if (coveredBySticky(a.el, b.el) || coveredBySticky(b.el, a.el)) continue;
         const w = Math.min(a.rect.right, b.rect.right) - Math.max(a.rect.left, b.rect.left);
         const h = Math.min(a.rect.bottom, b.rect.bottom) - Math.max(a.rect.top, b.rect.top);
         if (w > 2 && h > 2) overlapping.push(`${describe(a.el)} × ${describe(b.el)}`);

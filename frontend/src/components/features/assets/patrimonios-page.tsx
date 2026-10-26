@@ -179,7 +179,6 @@ export function PatrimoniosPage() {
           isAdmin={access.isAdmin}
           units={units.data?.units}
           defaultUnitId={filters.unitId}
-          conflict={false}
           onConflict={() => undefined}
           onSaved={() => undefined}
         />
