@@ -38,6 +38,8 @@ MovementType = Literal["TRANSFERENCIA_UNIDADE", "MUDANCA_SALA", "TROCA_RESPONSAV
 InventoryStatus = Literal["ABERTO", "EM_ANDAMENTO", "CONCLUIDO", "CANCELADO"]
 InventoryItemResult = Literal["ENCONTRADO", "NAO_ENCONTRADO", "DIVERGENTE"]
 
+COLUMNS_PARAM_MAX = 512  # ~15 chaves de até 30 caracteres + vírgulas, com folga
+
 _ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
@@ -45,6 +47,9 @@ class _ReportQuery(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
     format: ExportFormat = "csv"
+    # Chaves separadas por vírgula; validadas contra o catálogo do relatório no serviço
+    # (`ReportService.resolve_columns`). Limite de tamanho aqui; ausente => todas.
+    columns: str | None = Field(default=None, max_length=COLUMNS_PARAM_MAX)
 
 
 def _iso_date(value: str | None) -> str | None:

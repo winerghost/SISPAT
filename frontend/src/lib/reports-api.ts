@@ -52,6 +52,8 @@ export interface ReportFormState {
   sort: string;
   includeDeleted: boolean;
   filters: Record<string, string>;
+  /** Chaves de colunas marcadas; `undefined` = todas (estado só em memória). */
+  columns?: string[];
 }
 
 export const REPORT_FORMATS: readonly ReportFormat[] = ["csv", "xlsx"];
@@ -70,6 +72,12 @@ export function getReportCatalog(): Promise<ReportCatalog> {
 
 export function initialReportForm(def: ReportDef): ReportFormState {
   return { format: "csv", sort: def.default_sort, includeDeleted: false, filters: {} };
+}
+
+/** Colunas marcadas, na ordem do catálogo; chaves desconhecidas são descartadas. */
+export function selectedColumnKeys(def: ReportDef, form: ReportFormState): string[] {
+  const chosen = form.columns ? new Set(form.columns) : null;
+  return def.columns.filter((c) => !chosen || chosen.has(c.key)).map((c) => c.key);
 }
 
 /** Pares ordenados que um filtro de intervalo forma (`*_from` / `*_to`). */
@@ -119,6 +127,9 @@ export function buildExportParams(def: ReportDef, form: ReportFormState): Record
     if (value) params[filter.name] = value;
   }
   if (def.include_deleted_allowed && form.includeDeleted) params.include_deleted = "true";
+  // `columns` ausente = todas; só vai na query quando é um subconjunto.
+  const keys = selectedColumnKeys(def, form);
+  if (keys.length > 0 && keys.length < def.columns.length) params.columns = keys.join(",");
   return params;
 }
 
@@ -174,6 +185,7 @@ const MAX_COUNT_BYTES = 25 * 1024 * 1024;
 /** Baixa a exportação (Bearer via api-client) e dispara o salvamento do arquivo. */
 export async function downloadReport(def: ReportDef, form: ReportFormState): Promise<ReportDownload> {
   if (!KIND_RE.test(def.id)) throw new ApiError("Relatório inválido.", 404);
+  if (selectedColumnKeys(def, form).length === 0) throw new ApiError("Nenhuma coluna selecionada.", 400, undefined, "invalid_columns");
   const params = buildExportParams(def, form);
   const format = params.format as ReportFormat;
   const { blob, contentType } = await requestFile(`/v1/reports/${encodeURIComponent(def.id)}/export`, {
@@ -211,6 +223,9 @@ export function reportErrorMessage(error: unknown, maxRows?: number): string {
       : "Você não tem permissão para exportar este relatório.";
   }
   if (error.status === 404) return "Relatório, unidade ou inventário não encontrado no seu escopo. Revise os filtros.";
+  if (error.code === "invalid_columns") {
+    return "As colunas escolhidas não foram aceitas para o seu perfil. Revise a seleção (ou use \"Marcar todas\") e tente novamente.";
+  }
   if (error.status === 400) return "Os filtros não foram aceitos. Revise os valores e tente novamente.";
   if (error.status === 401) return "Sua sessão expirou. Entre novamente para exportar.";
   if (error.status === 0) return "Falha de rede ao gerar o arquivo. Verifique sua conexão e tente novamente.";

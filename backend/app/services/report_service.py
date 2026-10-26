@@ -15,6 +15,8 @@ REGRAS
 - AUDITORIA: `AuditLog` (`entity_type="report_export"`, `operation=
   "REPORT_EXPORTED"`) na MESMA transação da leitura, só com tipo, formato,
   contagem, ordenação e NOMES dos filtros usados (nunca valores, nunca conteúdo).
+- Colunas: `columns` (opcional, chaves separadas por vírgula) é validado contra o catálogo
+  do perfil; inválido => 400 `invalid_columns`; o arquivo segue a ordem do catálogo.
 - Timestamps em UTC (ISO-8601).
 """
 from __future__ import annotations
@@ -58,6 +60,18 @@ class ReportError(Exception):
         super().__init__(message or self.message)
         if message:
             self.message = message
+
+
+class InvalidColumnsError(ReportError):
+    """`columns` inválido (vazio, duplicado, desconhecido ou fora do perfil). Nunca ecoa o valor."""
+
+    status_code = 400
+    code = "invalid_columns"
+    message = "Seleção de colunas inválida."
+
+    def __init__(self, message: str | None = None, *, forbidden: bool = False) -> None:
+        super().__init__(message)
+        self.forbidden = forbidden  # coluna existe no catálogo mas o perfil não pode vê-la
 
 
 class ReportNotFoundError(ReportError):
@@ -147,6 +161,34 @@ class ReportService:
             raise ReportNotFoundError()
         return parsed
 
+    # -- seleção de colunas --------------------------------------------------
+
+    def resolve_columns(self, report: Any, raw: str | None, *, include_deleted: bool) -> tuple[Any, ...]:
+        """Colunas finais, SEMPRE na ordem do catálogo. A seleção só restringe, nunca amplia:
+        a allowlist é `visible_columns` do perfil (RH não recebe `internal`). `deleted_at`
+        sem `include_deleted` (ADM) é omitida, como na exportação sem seleção."""
+        allowed = visible_columns(report, can_view_internal=self._can_view_internal)
+        if raw is None:
+            chosen = allowed
+        else:
+            keys = [part.strip() for part in raw.split(",")]
+            if not keys or any(not k for k in keys):
+                raise InvalidColumnsError()
+            if len(set(keys)) != len(keys):
+                raise InvalidColumnsError("Colunas duplicadas na seleção.")
+            known = {c.key for c in report.columns}
+            allowed_keys = {c.key for c in allowed}
+            if any(k not in known for k in keys):
+                raise InvalidColumnsError()
+            if any(k not in allowed_keys for k in keys):
+                raise InvalidColumnsError(forbidden=True)
+            chosen = tuple(c for c in allowed if c.key in set(keys))
+        if not include_deleted:
+            chosen = tuple(c for c in chosen if c.key != "deleted_at")
+        if not chosen:
+            raise InvalidColumnsError()
+        return chosen
+
     # -- exportação ----------------------------------------------------------
 
     def export(self, actor_id: Any, kind: str, query: Any) -> ExportResult:
@@ -154,6 +196,7 @@ class ReportService:
         if report is None:
             raise ReportNotFoundError()
         include_deleted = query.include_deleted == "true" and self._is_adm
+        columns = self.resolve_columns(report, query.columns, include_deleted=include_deleted)
         common = dict(
             sort=query.sort, include_deleted=include_deleted,
             can_view_internal=self._can_view_internal, limit=MAX_EXPORT_ROWS,
@@ -185,9 +228,6 @@ class ReportService:
         if total > MAX_EXPORT_ROWS:
             raise ReportTooLargeError()
 
-        columns = visible_columns(report, can_view_internal=self._can_view_internal)
-        if not include_deleted:
-            columns = tuple(c for c in columns if c.key != "deleted_at")
         header = [c.label for c in columns]
         table = [[row.get(c.key, "") for c in columns] for row in rows]
         if query.format == "xlsx":
@@ -203,6 +243,7 @@ class ReportService:
                 new_values={
                     "report": kind, "format": query.format, "rows": len(rows), "sort": query.sort,
                     "filters": used, "include_deleted": include_deleted,
+                    "columns": [c.key for c in columns],
                 },
                 request_id=self._request_id, result="SUCESSO",
             )

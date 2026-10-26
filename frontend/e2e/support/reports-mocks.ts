@@ -204,7 +204,7 @@ export async function handleReports(args: {
     await err(route, corsHeaders, 404, "not_found");
     return true;
   }
-  const allowed = new Set(["format", "sort", "include_deleted", ...def.filters.map((f) => f.name)]);
+  const allowed = new Set(["format", "sort", "include_deleted", "columns", ...def.filters.map((f) => f.name)]);
   const seen = new Set<string>();
   for (const key of url.searchParams.keys()) {
     if (!allowed.has(key) || seen.has(key)) {
@@ -249,7 +249,19 @@ export async function handleReports(args: {
     return true;
   }
   const rows = q === "vazio" ? 0 : state.reports.rows;
-  const columns = def.columns.filter((c) => state.role !== "RH" || !c.internal);
+  const visible = def.columns.filter((c) => state.role !== "RH" || !c.internal);
+  // `columns` = chaves separadas por vírgula; ausente = todas; desconhecida/repetida => 400.
+  const rawColumns = url.searchParams.get("columns");
+  let columns = visible;
+  if (rawColumns !== null) {
+    const keys = rawColumns.split(",");
+    const known = new Set(visible.map((c) => c.key));
+    if (keys.some((k) => !known.has(k)) || new Set(keys).size !== keys.length) {
+      await err(route, corsHeaders, 400, "invalid_columns");
+      return true;
+    }
+    columns = visible.filter((c) => keys.includes(c.key));
+  }
   const stamp = "20261021T120000Z";
   if (format === "xlsx") {
     await route.fulfill({

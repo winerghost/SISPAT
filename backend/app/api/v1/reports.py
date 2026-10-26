@@ -6,7 +6,7 @@ Ambas: `require_auth -> require_aal2_for_adm -> require_permission(...) -> rate_
 - `GET /reports`: catálogo (permissão `reports.read`); colunas conforme o perfil.
 - `GET /reports/<kind>/export?format=csv|xlsx&...` com `kind` em
   `assets | movements | inventory-items` (permissão `exports.create`). Filtros e
-  ordenação por allowlist (`report_schemas`), escopo de unidade sempre, bens
+  ordenação por allowlist (`report_schemas`), `columns=a,b` opcional (allowlist do catálogo, 400 `invalid_columns`), escopo de unidade sempre, bens
   excluídos fora (`include_deleted=true` só ADM -> senão 403 + evento), no máximo
   `MAX_EXPORT_ROWS` linhas (acima: 413), toda célula passa por `csv_safety`, auditoria
   `REPORT_EXPORTED` na mesma transação. Corpo = arquivo (`attachment`, `no-store`).
@@ -86,6 +86,8 @@ def export_report_endpoint(kind: str):
     try:
         query = parse_query(model, request.args, context=f"reports.export.{kind}")
     except BadRequest as exc:
+        if isinstance(exc.description, str) and "columns" in exc.description.split(":")[-1]:
+            return error_response(400, "invalid_columns", "Seleção de colunas inválida.")
         return validation_error(exc)
     if query.include_deleted == "true" and not is_adm():
         record_security_event(
@@ -100,6 +102,15 @@ def export_report_endpoint(kind: str):
         with get_db_session() as db:
             result = _service(db).export(g.current_user.id, kind, query)
     except ReportError as exc:
+        if getattr(exc, "forbidden", False):
+            record_security_event(
+                EVENT_ACCESS_DENIED,
+                severity=SEVERITY_MEDIUM,
+                actor_user_id=g.current_user.id,
+                target_type="report",
+                details={"context": "reports.export", "reason": "column_not_allowed_for_role",
+                         "report": kind[:32]},
+            )
         return _fail(exc, kind=kind)
     response = Response(result.content, status=200, content_type=result.mimetype)
     response.headers["Content-Disposition"] = f'attachment; filename="{result.filename}"'

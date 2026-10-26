@@ -180,6 +180,11 @@ Nenhum item do menu leva a 404 (status por módulo em `docs/ux/MENU_MODULOS.md`)
   O download usa `requestFile` de `src/lib/api-client.ts`; API em `src/lib/reports-api.ts`;
   testes em `e2e/reports-functional.spec.ts` e `e2e/support/reports-mocks.ts`. A
   exportação ainda não está nos menus de Patrimônios, Movimentações e Inventários.
+  "Colunas do arquivo" é uma seleção real (`features/reports/column-picker.tsx`: fieldset +
+  checkboxes nativos, "Marcar todas"/"Limpar", contador "n de N selecionadas", Exportar
+  desabilitado com aviso em região viva quando 0). Estado só em memória; volta a "todas" ao
+  trocar de relatório. Vai em `columns=<chaves separadas por vírgula>` na ordem do catálogo,
+  omitido quando todas estão marcadas; 400 `invalid_columns` => mensagem própria.
 - **Home (`/`):** sem selo "Fase 1"; traz o atalho `DashboardShortcut`
   (`features/dashboard/dashboard-shortcut.tsx`) para `/dashboard`.
 - **Menu:** itens sem API usam o campo `comingSoon` de `nav-items.ts` e mostram o selo

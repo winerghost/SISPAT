@@ -56,11 +56,21 @@ Sem parâmetros. `200` (`Cache-Control: no-store`):
 `Content-Disposition: attachment; filename="sispat-<kind>-AAAAMMDDTHHMMSSZ.<ext>"`;
 `Cache-Control: no-store`; `X-Content-Type-Options: nosniff`; `X-Report-Rows: <n>`.
 
+**Seleção de colunas** (`columns`, opcional, <=512 caracteres): chaves do catálogo (`columns[].key` de
+`GET /reports`) separadas por vírgula, ex.: `columns=patrimony_number,description,unit_name`.
+Ausente => todas as colunas visíveis ao perfil (retrocompatível). O arquivo (CSV e XLSX) sempre segue a
+ORDEM DO CATÁLOGO, não a da requisição; cabeçalho e linhas ficam alinhados. Lista vazia, token vazio,
+chave duplicada, desconhecida ou fora do perfil (ex.: `notes`/`reason` para RH) => `400 invalid_columns`
+(valor nunca ecoado; coluna vedada ao perfil também gera evento `ACCESS_DENIED`). A seleção só restringe:
+nunca amplia o acesso. `deleted_at` sem `include_deleted=true` (ADM) é omitida. A auditoria
+`REPORT_EXPORTED` registra `columns` (lista de chaves exportadas). Causa do defeito anterior: a rota
+não declarava o parâmetro (a interface só listava as colunas) e o serviço exportava sempre todas.
+
 | kind | filtros | sort (padrão) |
 |---|---|---|
 | `assets` | `q` (<=100), `unit_id`, `owner_unit_id`, `room_id`, `responsible_person_id` (uuid), `located` (SIM/NAO/DESCONHECIDO), `bond_status` (`__none__` = sem vínculo) | `patrimony_number`, `description`, `created_at`, `updated_at`, `bond_status` (+ prefixo `-`); padrão `patrimony_number` |
 | `movements` | `status`, `movement_type`, `origin_unit_id`, `destination_unit_id`, `created_from`, `created_to` (AAAA-MM-DD, UTC) | `created_at`, `status` (+ `-`); padrão `-created_at` |
 | `inventory-items` | `inventory_id`, `unit_id`, `inventory_status`, `result` (ENCONTRADO/NAO_ENCONTRADO/DIVERGENTE), `checked_from`, `checked_to` | `checked_at`, `patrimony_number`, `result` (+ `-`); padrão `-checked_at` |
 
-Erros (`{"error": {"code","message"}}`): `400 validation_error`, `401`, `403 forbidden`/`AAL2_REQUIRED`,
+Erros (`{"error": {"code","message"}}`): `400 validation_error`/`invalid_columns`, `401`, `403 forbidden`/`AAL2_REQUIRED`,
 `404 not_found`, `413 row_limit_exceeded`, `429`.

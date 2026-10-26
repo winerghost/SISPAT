@@ -466,7 +466,7 @@ def test_filtros_de_patrimonio(api):
 
 @pytest.mark.parametrize("param", [
     "role=ADM", "unit_ids=x", "deleted_at=2026-01-01", "deleted_by=x", "created_by=x", "version=9",
-    "limit=999999", "page_size=100000", "columns=notes", "fields=notes", "where=1=1", "include_notes=true",
+    "limit=999999", "page_size=100000", "select=notes", "fields=notes", "where=1=1", "include_notes=true",
     "is_admin=true", "permissions=all",
 ])
 def test_parametros_nao_declarados_400_e_auditados(api, param):
@@ -533,7 +533,8 @@ def test_exportacao_auditada_sem_valores_de_filtro_nem_conteudo(api):
     assert (log.entity_type, log.entity_id, log.result) == ("report_export", "assets", "SUCESSO")
     assert log.actor_user_id == api.users["ua"]
     assert log.new_values == {"report": "assets", "format": "xlsx", "rows": 1, "sort": "-description",
-                              "filters": ["q"], "include_deleted": False}
+                              "filters": ["q"], "include_deleted": False,
+                              "columns": [c.key for c in REPORTS["assets"].columns if c.key != "deleted_at"]}
     assert "termo-secreto" not in str(log.new_values) and "SENHA" not in str(log.new_values)
 
 

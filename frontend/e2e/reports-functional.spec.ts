@@ -50,6 +50,16 @@ async function pickReport(page: Page, id: string) {
   await expect(page.locator(`#rel-card-${id}`)).toBeChecked();
 }
 
+const columnsGroup = (page: Page) => page.getByRole("group", { name: "Colunas do arquivo" });
+const col = (page: Page, name: string) => columnsGroup(page).getByRole("checkbox", { name, exact: true });
+/** Alterna pelo rótulo (o input nativo é sr-only; o rótulo é o alvo de clique). */
+async function setCol(page: Page, name: string, on: boolean) {
+  if ((await col(page, name).isChecked()) !== on) await columnsGroup(page).locator("label", { hasText: name }).first().click();
+  if (on) await expect(col(page, name)).toBeChecked();
+  else await expect(col(page, name)).not.toBeChecked();
+}
+const columnsOf = (call: string) => new URL(call.replace("GET ", ""), "http://x").searchParams.get("columns");
+const filters = (page: Page) => page.getByRole("group", { name: "Filtros" });
 const form = (page: Page) => page.getByTestId("report-form");
 const outcome = (page: Page) => page.getByTestId("report-outcome");
 const exportButton = (page: Page, format = "CSV") => page.getByRole("button", { name: new RegExp(`^(Exportar|Gerando) ${format}`) });
@@ -62,11 +72,11 @@ test.describe("catálogo e formulário", () => {
     await expect(group.getByRole("radio")).toHaveCount(3);
     await expect(group.getByRole("radio", { name: /Patrimônios/ })).toBeChecked();
     for (const label of ["Busca (número ou descrição)", "Unidade", "Unidade proprietária", "Localizado", "Vínculo"]) {
-      await expect(form(page).getByLabel(label, { exact: true })).toBeVisible();
+      await expect(filters(page).getByLabel(label, { exact: true })).toBeVisible();
     }
     await expect(form(page).getByLabel("Ordenar por")).toHaveValue("patrimony_number");
     await expect(page.getByRole("switch")).toHaveCount(0);
-    await expect(page.getByRole("list", { name: "Colunas incluídas no arquivo" }).getByText("Observações")).toBeVisible();
+    await expect(columnsGroup(page).getByRole("checkbox", { name: "Observações" })).toBeChecked();
     // Só leitura de catálogo e de unidades; nenhuma exportação sem clique.
     expect(reportCalls(state)).toEqual(["GET /api/v1/reports"]);
     expect(state.calls.some((c) => c.url.includes("/v1/units/accessible"))).toBe(true);
@@ -80,20 +90,21 @@ test.describe("catálogo e formulário", () => {
 
   test("RH: colunas sem Observações e sem switch", async ({ page }) => {
     await open(page, { role: "RH" });
-    const columns = page.getByRole("list", { name: "Colunas incluídas no arquivo" });
-    await expect(columns.getByText("Nº patrimonial")).toBeVisible();
-    await expect(columns.getByText("Observações")).toHaveCount(0);
+    const columns = columnsGroup(page);
+    await expect(columns.getByRole("checkbox", { name: "Nº patrimonial" })).toBeChecked();
+    await expect(columns.getByRole("checkbox", { name: "Observações" })).toHaveCount(0);
+    await expect(page.getByTestId("column-count")).toHaveText("6 de 6 selecionadas");
     await expect(page.getByRole("switch")).toHaveCount(0);
   });
 
   test("trocar de relatório recria os filtros (datas, tipo, inventário)", async ({ page }) => {
     const state = await open(page, { role: "ADM" });
     await pickReport(page, "movements");
-    await expect(form(page).getByLabel("Solicitada a partir de")).toHaveAttribute("type", "date");
-    await expect(form(page).getByLabel("Tipo de movimentação").locator("option")).toHaveCount(4);
+    await expect(filters(page).getByLabel("Solicitada a partir de")).toHaveAttribute("type", "date");
+    await expect(filters(page).getByLabel("Tipo de movimentação").locator("option")).toHaveCount(4);
     await expect(form(page).getByLabel("Ordenar por")).toHaveValue("-created_at");
     await pickReport(page, "inventory-items");
-    const inventory = form(page).getByLabel("Inventário", { exact: true });
+    const inventory = filters(page).getByLabel("Inventário", { exact: true });
     await expect(inventory.locator("option")).not.toHaveCount(1);
     expect(state.calls.some((c) => c.url.startsWith("/api/v1/inventories"))).toBe(true);
   });
@@ -102,12 +113,12 @@ test.describe("catálogo e formulário", () => {
     await open(page, { role: "RH" });
     await pickReport(page, "inventory-items");
     await expect(form(page).getByText(/Lista de inventários indisponível/)).toBeVisible();
-    await expect(form(page).getByLabel("Inventário", { exact: true })).toBeDisabled();
+    await expect(filters(page).getByLabel("Inventário", { exact: true })).toBeDisabled();
   });
 
   test("unidades do escopo alimentam o seletor", async ({ page }) => {
     await open(page);
-    const unit = form(page).getByLabel("Unidade", { exact: true });
+    const unit = filters(page).getByLabel("Unidade", { exact: true });
     await expect(unit.locator("option")).toHaveCount(5);
     await expect(unit.locator("option").nth(1)).toContainText("—");
   });
@@ -130,8 +141,8 @@ test.describe("exportação", () => {
 
   test("filtros preenchidos e XLSX seguem para a query; vazios são omitidos", async ({ page }) => {
     const state = await open(page);
-    await form(page).getByLabel("Busca (número ou descrição)").fill("  cadeira   azul ");
-    await form(page).getByLabel("Localizado").selectOption("SIM");
+    await filters(page).getByLabel("Busca (número ou descrição)").fill("  cadeira   azul ");
+    await filters(page).getByLabel("Localizado").selectOption("SIM");
     await form(page).getByLabel("Ordenar por").selectOption("-created_at");
     await page.locator("label[for=rel-formato-xlsx]").click();
     await expect(exportButton(page, "XLSX")).toBeVisible();
@@ -151,7 +162,7 @@ test.describe("exportação", () => {
 
   test("unidade escolhida vai como unit_id e ADM envia include_deleted", async ({ page }) => {
     const state = await open(page, { role: "ADM" });
-    const unit = form(page).getByLabel("Unidade", { exact: true });
+    const unit = filters(page).getByLabel("Unidade", { exact: true });
     const value = await unit.locator("option").nth(1).getAttribute("value");
     await unit.selectOption(value!);
     await page.getByRole("switch", { name: "Incluir registros excluídos" }).check();
@@ -171,18 +182,127 @@ test.describe("exportação", () => {
     const busy = page.getByRole("button", { name: "Gerando CSV…" });
     await expect(busy).toHaveAttribute("aria-busy", "true");
     await expect(busy).toBeDisabled();
-    await expect(form(page).getByLabel("Busca (número ou descrição)")).toBeDisabled();
+    await expect(filters(page).getByLabel("Busca (número ou descrição)")).toBeDisabled();
     await downloadPromise;
     await expect(exportButton(page)).not.toHaveAttribute("aria-busy", "true");
   });
 
   test("resultado vazio: arquivo só com cabeçalho e mensagem própria", async ({ page }) => {
     await open(page);
-    await form(page).getByLabel("Busca (número ou descrição)").fill("vazio");
+    await filters(page).getByLabel("Busca (número ou descrição)").fill("vazio");
     const downloadPromise = page.waitForEvent("download");
     await exportButton(page).click();
     await downloadPromise;
     await expect(outcome(page)).toContainText("Nenhum registro encontrado para estes filtros");
+  });
+});
+
+test.describe("seleção de colunas", () => {
+  test("todas marcadas por padrão, contador e ordem do catálogo; exportar tudo omite 'columns'", async ({ page }) => {
+    const state = await open(page);
+    await expect(columnsGroup(page).getByRole("checkbox")).toHaveCount(7);
+    await expect(columnsGroup(page).getByRole("checkbox").first()).toBeChecked();
+    await expect(page.getByTestId("column-count")).toHaveText("7 de 7 selecionadas");
+    await expect(columnsGroup(page).getByRole("button", { name: "Marcar todas" })).toBeDisabled();
+    const labels = await columnsGroup(page).locator("label").allInnerTexts();
+    expect(labels.map((l) => l.trim())).toEqual([
+      "Nº patrimonial",
+      "Descrição",
+      "Vínculo",
+      "Unidade (código)",
+      "Responsável",
+      "Criado em (UTC)",
+      "Observações",
+    ]);
+    const downloadPromise = page.waitForEvent("download");
+    await exportButton(page).click();
+    await downloadPromise;
+    expect(columnsOf(exportCalls(state)[0]!)).toBeNull();
+  });
+
+  test("poucas colunas (CSV): query ordenada pelo catálogo", async ({ page }) => {
+    const state = await open(page);
+    await columnsGroup(page).getByRole("button", { name: "Limpar" }).click();
+    await setCol(page, "Observações", true);
+    await setCol(page, "Nº patrimonial", true);
+    await expect(page.getByTestId("column-count")).toHaveText("2 de 7 selecionadas");
+    const downloadPromise = page.waitForEvent("download");
+    await exportButton(page).click();
+    const download = await downloadPromise;
+    expect(columnsOf(exportCalls(state)[0]!)).toBe("patrimony_number,notes");
+    expect(download.suggestedFilename()).toMatch(/\.csv$/);
+    await expect(outcome(page)).toContainText("3 registro(s)");
+  });
+
+  test("várias colunas e mudança de seleção antes de exportar; XLSX leva 'columns'", async ({ page }) => {
+    const state = await open(page);
+    await setCol(page, "Descrição", false);
+    await setCol(page, "Responsável", false);
+    await setCol(page, "Observações", false);
+    await setCol(page, "Responsável", true);
+    await expect(page.getByTestId("column-count")).toHaveText("5 de 7 selecionadas");
+    await page.locator("label[for=rel-formato-xlsx]").click();
+    const downloadPromise = page.waitForEvent("download");
+    await exportButton(page, "XLSX").click();
+    expect((await downloadPromise).suggestedFilename()).toMatch(/\.xlsx$/);
+    expect(columnsOf(exportCalls(state)[0]!)).toBe("patrimony_number,bond_status,unit_code,responsible,created_at");
+    await columnsGroup(page).getByRole("button", { name: "Marcar todas" }).click();
+    const again = page.waitForEvent("download");
+    await exportButton(page, "XLSX").click();
+    await again;
+    expect(columnsOf(exportCalls(state)[1]!)).toBeNull();
+  });
+
+  test("0 colunas: Exportar desabilitado, aviso em região viva, sem chamada", async ({ page }) => {
+    const state = await open(page);
+    await columnsGroup(page).getByRole("button", { name: "Limpar" }).click();
+    await expect(exportButton(page)).toBeDisabled();
+    await expect(page.getByTestId("column-warning")).toHaveText("Selecione ao menos uma coluna para exportar.");
+    await expect(page.locator("[aria-live=polite]:has([data-testid=column-warning])")).toHaveCount(1);
+    await setCol(page, "Descrição", true);
+    await expect(exportButton(page)).toBeEnabled();
+    await expect(page.getByTestId("column-warning")).toHaveCount(0);
+    expect(exportCalls(state)).toEqual([]);
+  });
+
+  test("trocar de relatório e voltar restaura 'todas'; teclado alterna a coluna", async ({ page }) => {
+    await open(page);
+    await col(page, "Descrição").focus();
+    await page.keyboard.press("Space");
+    await expect(col(page, "Descrição")).not.toBeChecked();
+    await pickReport(page, "movements");
+    await expect(columnsGroup(page).getByRole("checkbox")).toHaveCount(5);
+    await expect(page.getByTestId("column-count")).toHaveText("5 de 5 selecionadas");
+    await pickReport(page, "assets");
+    await expect(page.getByTestId("column-count")).toHaveText("7 de 7 selecionadas");
+  });
+
+  test("400 invalid_columns do backend: mensagem clara", async ({ page }) => {
+    const state = await open(page);
+    await setCol(page, "Descrição", false);
+    // Coluna que o catálogo não conhece não é enviável pela UI; simula o backend recusando.
+    await page.route("**/api/v1/reports/assets/export**", (route) =>
+      route.fulfill({
+        status: 400,
+        headers: { "content-type": "application/json", "access-control-allow-origin": "*" },
+        body: JSON.stringify({ error: { code: "invalid_columns", message: "interno" } }),
+      }),
+    );
+    await exportButton(page).click();
+    await expect(outcome(page)).toContainText("colunas escolhidas não foram aceitas");
+    await expect(page.getByText("interno", { exact: true })).toHaveCount(0);
+    expect(exportCalls(state).length).toBeLessThanOrEqual(1);
+  });
+
+  test("320px: seleção de colunas sem overflow e sem violações axe", async ({ page }) => {
+    await page.setViewportSize({ width: 320, height: 800 });
+    await open(page, { role: "ADM" });
+    await columnsGroup(page).getByRole("button", { name: "Limpar" }).click();
+    await expectNoHorizontalOverflow(page);
+    expect(await axeViolations(page)).toEqual([]);
+    await columnsGroup(page).getByRole("button", { name: "Marcar todas" }).click();
+    await expectNoHorizontalOverflow(page);
+    expect(await axeViolations(page)).toEqual([]);
   });
 });
 
@@ -192,10 +312,10 @@ test.describe("filtros dos relatórios", () => {
     await pickReport(page, "movements");
     await expect(form(page).getByRole("button", { name: "Limpar filtros" })).toHaveCount(0);
 
-    await form(page).getByLabel("Tipo de movimentação").selectOption({ index: 1 });
-    await form(page).getByLabel("Solicitada a partir de").fill("2026-05-01");
-    await form(page).getByLabel("Solicitada até").fill("2026-05-31");
-    await form(page).getByLabel("Situação", { exact: true }).selectOption("PENDENTE");
+    await filters(page).getByLabel("Tipo de movimentação").selectOption({ index: 1 });
+    await filters(page).getByLabel("Solicitada a partir de").fill("2026-05-01");
+    await filters(page).getByLabel("Solicitada até").fill("2026-05-31");
+    await filters(page).getByLabel("Situação", { exact: true }).selectOption("PENDENTE");
     const downloadPromise = page.waitForEvent("download");
     await exportButton(page).click();
     await downloadPromise;
@@ -206,8 +326,8 @@ test.describe("filtros dos relatórios", () => {
     expect(params.get("created_to")).toBe("2026-05-31");
 
     await form(page).getByRole("button", { name: "Limpar filtros" }).click();
-    await expect(form(page).getByLabel("Solicitada a partir de")).toHaveValue("");
-    await expect(form(page).getByLabel("Tipo de movimentação")).toHaveValue("");
+    await expect(filters(page).getByLabel("Solicitada a partir de")).toHaveValue("");
+    await expect(filters(page).getByLabel("Tipo de movimentação")).toHaveValue("");
     await expect(form(page).getByRole("button", { name: "Limpar filtros" })).toHaveCount(0);
     const again = page.waitForEvent("download");
     await exportButton(page).click();
@@ -218,7 +338,7 @@ test.describe("filtros dos relatórios", () => {
 
   test("'Limpar filtros' também remove mensagens de validação", async ({ page }) => {
     const state = await open(page);
-    await form(page).getByLabel("Sala (identificador)").fill("nao-e-uuid");
+    await filters(page).getByLabel("Sala (identificador)").fill("nao-e-uuid");
     await exportButton(page).click();
     await expect(form(page).getByText("Informe um identificador (UUID) válido.")).toBeVisible();
     await form(page).getByRole("button", { name: "Limpar filtros" }).click();
@@ -229,7 +349,7 @@ test.describe("filtros dos relatórios", () => {
   test("lista de inventários do filtro usa page_size válido (50/100/200)", async ({ page }) => {
     const state = await open(page, { role: "ADM" });
     await pickReport(page, "inventory-items");
-    await expect(form(page).getByLabel("Inventário", { exact: true }).locator("option")).not.toHaveCount(1);
+    await expect(filters(page).getByLabel("Inventário", { exact: true }).locator("option")).not.toHaveCount(1);
     const lookups = state.calls.filter((c) => c.method === "GET" && c.url.startsWith("/api/v1/inventories"));
     expect(lookups.length).toBeGreaterThan(0);
     for (const call of lookups) {
@@ -242,17 +362,17 @@ test.describe("validação de UX e erros", () => {
   test("intervalo de datas invertido bloqueia a exportação, sem chamar a API", async ({ page }) => {
     const state = await open(page);
     await pickReport(page, "movements");
-    await form(page).getByLabel("Solicitada a partir de").fill("2026-05-10");
-    await form(page).getByLabel("Solicitada até").fill("2026-05-01");
+    await filters(page).getByLabel("Solicitada a partir de").fill("2026-05-10");
+    await filters(page).getByLabel("Solicitada até").fill("2026-05-01");
     await exportButton(page).click();
     await expect(form(page).getByText("A data final não pode ser anterior à inicial.")).toBeVisible();
-    await expect(form(page).getByLabel("Solicitada até")).toBeFocused();
+    await expect(filters(page).getByLabel("Solicitada até")).toBeFocused();
     expect(exportCalls(state)).toEqual([]);
   });
 
   test("UUID inválido em sala é recusado no cliente", async ({ page }) => {
     const state = await open(page);
-    await form(page).getByLabel("Sala (identificador)").fill("nao-e-uuid");
+    await filters(page).getByLabel("Sala (identificador)").fill("nao-e-uuid");
     await exportButton(page).click();
     await expect(form(page).getByText("Informe um identificador (UUID) válido.")).toBeVisible();
     expect(exportCalls(state)).toEqual([]);
@@ -260,7 +380,7 @@ test.describe("validação de UX e erros", () => {
 
   test("413: pede para refinar os filtros", async ({ page }) => {
     await open(page);
-    await form(page).getByLabel("Busca (número ou descrição)").fill("limite");
+    await filters(page).getByLabel("Busca (número ou descrição)").fill("limite");
     await exportButton(page).click();
     await expect(outcome(page)).toContainText("Refine os filtros");
     await expect(outcome(page)).toContainText("10.000");

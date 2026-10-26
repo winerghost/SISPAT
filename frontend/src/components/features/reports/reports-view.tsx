@@ -21,6 +21,7 @@ import {
   getReportCatalog,
   initialReportForm,
   reportErrorMessage,
+  selectedColumnKeys,
   validateReportFilters,
   type ReportDef,
   type ReportFormat,
@@ -28,6 +29,7 @@ import {
 } from "@/lib/reports-api";
 import { cn } from "@/lib/utils";
 import { fieldId, ReportFilterField, type LookupSource } from "./report-filters";
+import { ColumnPicker } from "./column-picker";
 import { sortLabel } from "./report-labels";
 
 // =============================================================================
@@ -36,7 +38,7 @@ import { sortLabel } from "./report-labels";
 // de `GET /api/v1/reports/<kind>/export` (fetch autenticado -> Blob -> link
 // temporário). Apresentação apenas: perfil, escopo de unidade, limite de linhas,
 // proteção contra injeção de fórmulas e auditoria são do backend. As colunas
-// listadas são só informativas. Nenhuma mensagem do backend é exibida.
+// marcadas vão em `columns` (ausente = todas; o backend valida). Nenhuma mensagem do backend é exibida.
 // =============================================================================
 
 const retry = (count: number, error: unknown) =>
@@ -118,6 +120,8 @@ function ReportsPanel({ reports, maxRows, formats }: { reports: ReportDef[]; max
     setOutcome(null);
   }
 
+  const selectedColumns = selectedColumnKeys(def, form);
+  const noColumns = selectedColumns.length === 0;
   const hasFilters = Object.values(form.filters).some((value) => value.trim() !== "");
 
   function clearFilters() {
@@ -127,13 +131,15 @@ function ReportsPanel({ reports, maxRows, formats }: { reports: ReportDef[]; max
 
   function selectReport(id: string) {
     setSelectedId(id);
+    // A seleção de colunas volta a "todas" ao trocar de relatório.
+    setForms((current) => (current[id] ? { ...current, [id]: { ...current[id], columns: undefined } } : current));
     setErrors({});
     setOutcome(null);
   }
 
   async function onSubmit(event: FormEvent) {
     event.preventDefault();
-    if (busy) return;
+    if (busy || noColumns) return;
     const found = validateReportFilters(def, form.filters);
     setErrors(found);
     if (Object.keys(found).length > 0) {
@@ -295,27 +301,17 @@ function ReportsPanel({ reports, maxRows, formats }: { reports: ReportDef[]; max
             />
           ) : null}
 
-          <section aria-labelledby="rel-colunas" className="flex flex-col gap-2">
-            <h3 id="rel-colunas" className="text-eyebrow text-pale-stone">
-              Colunas do arquivo
-            </h3>
-            <ul className="flex flex-wrap gap-1.5" aria-label="Colunas incluídas no arquivo">
-              {def.columns.map((column) => (
-                <li key={column.key}>
-                  <Badge variant="default" className="max-w-full break-words normal-case">
-                    {column.label}
-                  </Badge>
-                </li>
-              ))}
-            </ul>
-            <p className="text-caption text-warm-granite">
-              Lista informativa: as colunas seguem o seu perfil e não podem ser alteradas aqui. Datas e horas saem em UTC.
-            </p>
-          </section>
+          <ColumnPicker
+            reportId={def.id}
+            columns={def.columns}
+            selected={selectedColumns}
+            disabled={busy}
+            onChange={(columns) => patch({ columns })}
+          />
 
           <div className="flex flex-col gap-3">
             <div className="flex flex-wrap items-center gap-3">
-              <Button type="submit" variant="light" loading={busy}>
+              <Button type="submit" variant="light" loading={busy} disabled={noColumns} aria-describedby={noColumns ? `rel-${def.id}-colunas-aviso` : undefined}>
                 <Download aria-hidden="true" />
                 {busy ? `Gerando ${formatLabel}…` : `Exportar ${formatLabel}`}
               </Button>
