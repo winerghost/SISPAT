@@ -327,7 +327,8 @@ def test_confirm_adm_com_permissao_sucesso_200(client):
     assert body["sync_job_id"] == str(sync_job_id)
     assert body["created"] == 1 and body["status"] == "CONCLUIDO" and body["degraded"] is False
     mock_service.confirm_preview.assert_called_once_with(
-        preview_id=preview_id, confirmed_by_user_id=user.id, selected_item_ids=[item_id]
+        preview_id=preview_id, confirmed_by_user_id=user.id, selected_item_ids=[item_id],
+        select_all_eligible=False, excluded_item_ids=[],
     )
 
 
@@ -433,3 +434,47 @@ def test_items_query_invalida_ou_desconhecida_400(client, query):
         response = client.get(_items_url(uuid.uuid4()) + query, headers=_auth_headers(_make_token()))
     assert response.status_code == 400
     mock_service.list_preview_items.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Reconciliação (somente leitura)
+# ---------------------------------------------------------------------------
+
+
+def _reconciliation_url(preview_id: uuid.UUID) -> str:
+    return f"/api/v1/imports/google-sheets/{preview_id}/reconciliation"
+
+
+def test_reconciliation_sem_token_retorna_401(client):
+    assert client.get(_reconciliation_url(uuid.uuid4())).status_code == 401
+
+
+def test_reconciliation_sem_papel_adm_retorna_403(client):
+    with _patch_authenticated({"USER"}, {"imports.execute"}):
+        r = client.get(_reconciliation_url(uuid.uuid4()), headers=_auth_headers(_make_token()))
+    assert r.status_code == 403
+
+
+def test_reconciliation_adm_retorna_relatorio_validado(client):
+    pid = uuid.uuid4()
+    service = MagicMock()
+    service.reconciliation_report.return_value = {
+        "preview_id": str(pid), "total_itens": 2, "localizados": 1, "nao_importados": 1,
+        "por_motivo": {"novo_pendente": 1}, "total": 1, "page": 1, "page_size": 50, "pages": 1,
+        "items": [{"item_id": str(uuid.uuid4()), "row": 3, "patrimony_number": "0001",
+                   "classification": "NOVO", "reason_code": "novo_pendente"}],
+    }
+    p1, p2, p3 = _patch_db_and_service(service)
+    with p1 as sess, p2, p3, patch("app.api.v1.imports._bens_preview_exists", return_value=True), \
+            _patch_authenticated({"ADM"}, {"imports.execute"}):
+        r = client.get(_reconciliation_url(pid) + "?page_size=50", headers=_auth_headers(_make_token()))
+    assert r.status_code == 200
+    assert r.get_json()["items"][0]["patrimony_number"] == "0001"
+
+
+def test_reconciliation_query_desconhecida_retorna_400(client):
+    with _patch_authenticated({"ADM"}, {"imports.execute"}):
+        r = client.get(
+            _reconciliation_url(uuid.uuid4()) + "?foo=1", headers=_auth_headers(_make_token())
+        )
+    assert r.status_code == 400

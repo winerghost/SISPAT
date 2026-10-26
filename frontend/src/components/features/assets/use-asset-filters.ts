@@ -6,7 +6,7 @@ import { useSearchParams } from "next/navigation";
 import type { AssetSort, LocatedStatus } from "@/lib/assets-api";
 import { SEARCH_DEBOUNCE_MS } from "@/components/features/catalog/catalog-labels";
 import { GLOBAL_SEARCH_PARAM, normalizeGlobalSearch } from "@/components/layout/header";
-import { usePagination } from "@/lib/pagination";
+import { parsePage, usePagination } from "@/lib/pagination";
 
 // =============================================================================
 // Estado de busca/filtros/ordenação/paginação da lista de bens. A busca tem
@@ -18,10 +18,13 @@ import { usePagination } from "@/lib/pagination";
 
 export type LocatedFilter = "" | LocatedStatus;
 
+const DEFAULT_SORT: AssetSort = "patrimony_number";
+
 export function useAssetFilters() {
   // Busca global do cabeçalho: `?busca=` (normalizado: trim, espaços colapsados, ≤100).
   // O valor inicial vem da URL (também no SSR, sem divergir da hidratação).
-  const urlSearch = normalizeGlobalSearch(useSearchParams().get(GLOBAL_SEARCH_PARAM) ?? "");
+  const searchParams = useSearchParams();
+  const urlSearch = normalizeGlobalSearch(searchParams.get(GLOBAL_SEARCH_PARAM) ?? "");
   const [search, setSearch] = useState(urlSearch);
   const [q, setQ] = useState(urlSearch);
   const [unitId, setUnitId] = useState("");
@@ -31,8 +34,9 @@ export function useAssetFilters() {
   /** "" = todos; `BOND_STATUS_NONE` = sem vínculo; demais = valor vindo do backend. */
   const [bondStatus, setBondStatus] = useState("");
   const [includeDeleted, setIncludeDeleted] = useState(false);
-  const [sort, setSort] = useState<AssetSort>("patrimony_number");
-  const pg = usePagination();
+  const [sort, setSort] = useState<AssetSort>(DEFAULT_SORT);
+  // `?page=` é inválido→1 (parsePage); página além da última é ajustada por useClampPage.
+  const pg = usePagination({ initialPage: parsePage(searchParams.get("page")) });
   const { resetPage } = pg;
   // Só volta à página 1 quando o termo (já aparado) realmente muda: digitar um
   // espaço no fim não deve descartar a página em que o usuário está.
@@ -83,6 +87,8 @@ export function useAssetFilters() {
     setPersonId("");
     setLocated("");
     setBondStatus("");
+    setIncludeDeleted(false);
+    setSort(DEFAULT_SORT);
     resetPage();
   }
 
@@ -106,7 +112,18 @@ export function useAssetFilters() {
     chooseIncludeDeleted: resetOn(setIncludeDeleted),
     chooseSort: resetOn(setSort),
     clear,
-    /** "Incluir excluídos" é uma visão, não um filtro de refino: fica fora de `filtered`. */
-    filtered: !!q || !!unitId || !!roomId || !!personId || !!located || !!bondStatus,
+    /**
+     * Qualquer desvio do padrão (busca — inclusive a global `?busca=` —, filtros,
+     * "Incluir excluídos" e ordenação) conta: é o que "Limpar filtros" desfaz.
+     */
+    filtered:
+      !!q ||
+      !!unitId ||
+      !!roomId ||
+      !!personId ||
+      !!located ||
+      !!bondStatus ||
+      includeDeleted ||
+      sort !== DEFAULT_SORT,
   };
 }

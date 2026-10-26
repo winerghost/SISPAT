@@ -968,6 +968,18 @@ export const SCREENS: ScreenDef[] = [
     },
   },
   {
+    id: "importacao-reconciliacao",
+    title: "Importação de bens — reconciliação (ADM, motivos e itens)",
+    path: "/administracao/importacao/google-sheets",
+    session: { role: "ADM" },
+    prepare: async (page) => {
+      await generatePreview(page);
+      await page.getByRole("button", { name: "Carregar reconciliação" }).click();
+      await expect(page.getByRole("table", { name: "Itens não importados" })).toBeVisible();
+      await page.getByRole("heading", { level: 1 }).scrollIntoViewIfNeeded();
+    },
+  },
+  {
     id: "cadastros-vazio",
     title: "Importação de cadastros — estado inicial (abas)",
     path: CADASTROS_PATH,
@@ -1214,6 +1226,15 @@ export const SCREENS: ScreenDef[] = [
       await expect(page.getByRole("table", { name: "Patrimônios" })).toBeVisible();
       await page.getByLabel("Buscar por número patrimonial ou descrição").fill("nada-corresponde");
       await expect(page.getByText("Nenhum bem encontrado para os filtros atuais.")).toBeVisible();
+    },
+  },
+  {
+    id: "patrimonios-sem-escopo",
+    title: "Patrimônios — usuário sem unidades no escopo",
+    path: "/patrimonios",
+    session: { role: "USER", noUnitScope: true },
+    prepare: async (page) => {
+      await expect(page.getByText("Você não tem unidades no seu escopo de acesso.")).toBeVisible();
     },
   },
   {

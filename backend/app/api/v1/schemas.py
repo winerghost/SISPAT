@@ -122,6 +122,24 @@ class ConfirmImportRequest(_StrictModel):
 
     preview_id: uuid.UUID
     selected_item_ids: list[uuid.UUID] = Field(max_length=10000)
+    # Seleção no SERVIDOR: confirma todos os NOVO/EXISTENTE da prévia (menos
+    # `excluded_item_ids`), independentemente das páginas que a tela carregou.
+    # Sem isso a tela só enviava os ids das páginas já visitadas (50 por vez).
+    select_all_eligible: bool = False
+    excluded_item_ids: list[uuid.UUID] = Field(default_factory=list, max_length=10000)
+
+
+class ReconciliationQuery(_StrictModel):
+    """Query de `GET /imports/google-sheets/<id>/reconciliation`."""
+
+    reason: str | None = Field(default=None, max_length=40)
+    page: int = Field(default=1, ge=1, le=100_000)
+    page_size: PageSize = DEFAULT_PAGE_SIZE
+
+    @field_validator("reason", mode="after")
+    @classmethod
+    def _blank_reason_to_none(cls, value: str | None) -> str | None:
+        return value or None
 
 
 class AIFeaturesUpdate(_StrictModel):

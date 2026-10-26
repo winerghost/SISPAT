@@ -623,9 +623,9 @@ test.describe("bens — resultado da confirmação", () => {
       "Pessoa responsável não encontrada: 1",
     );
     await expect(page.locator("[data-sonner-toast][data-type=success]")).toBeVisible();
-    // Corpo enviado: só preview_id e selected_item_ids (nada privilegiado).
+    // Corpo enviado: só preview_id, select_all_eligible e excluded_item_ids (nada privilegiado).
     const confirm = calls(state, "POST", "/v1/imports/google-sheets/confirm");
-    expect(Object.keys(confirm[0]!.body as object).sort()).toEqual(["preview_id", "selected_item_ids"]);
+    expect(Object.keys(confirm[0]!.body as object).sort()).toEqual(["excluded_item_ids", "preview_id", "select_all_eligible"]);
     expect(await axeViolations(page)).toEqual([]);
   });
 

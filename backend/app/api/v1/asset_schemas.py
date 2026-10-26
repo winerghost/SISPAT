@@ -168,6 +168,8 @@ class AssetListQuery(_Query):
     @field_validator("q")
     @classmethod
     def _q(cls, value: str | None) -> str | None:
+        if value is not None and any(ord(ch) < 32 and not ch.isspace() for ch in value):
+            raise ValueError("q com caracteres de controle")  # NUL derruba o PostgreSQL
         return None if value is None else (collapse_spaces(value) or None)
 
     @field_validator("bond_status")

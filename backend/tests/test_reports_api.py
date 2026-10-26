@@ -464,6 +464,25 @@ def test_filtros_de_patrimonio(api):
     assert export(api, "assets", "?located=TALVEZ").status_code == 400
 
 
+def test_busca_q_da_exportacao_tem_paridade_com_a_tela_e_respeita_escopo(api):
+    """Mesma `asset_search_clause` de /assets: chave alfanumérica, tokens, responsável/sala;
+    bem de unidade alheia nunca aparece; fórmula no número continua neutralizada."""
+    person = api.w.person(api.ua, "José da Silva")
+    room = api.w.room(api.ua, "Sala Jurídico")
+    add_asset(api, api.ua, "AGU123", description="Mesa")
+    add_asset(api, api.ua, "P1", description="Notebook", responsible_person_id=person, room_id=room)
+    add_asset(api, api.ub, "AGU-999", description="Mesa alheia", source_record_id="X")
+
+    def nums(term):
+        return [r[0] for r in csv_rows(export(api, "assets", f"?q={term}"))[1:]]
+
+    assert nums("AGU-123") == ["AGU123"]  # chave alfanumérica (busca antiga não casava)
+    assert nums("jose%20silva") == ["P1"]  # tokens + sem acento + nome do responsável
+    assert nums("juridico") == ["P1"]  # nome da sala
+    assert nums("AGU999") == [] and nums("alheia") == []  # escopo de unidade preservado
+    assert nums("%25") == []  # curinga literal
+
+
 @pytest.mark.parametrize("param", [
     "role=ADM", "unit_ids=x", "deleted_at=2026-01-01", "deleted_by=x", "created_by=x", "version=9",
     "limit=999999", "page_size=100000", "select=notes", "fields=notes", "where=1=1", "include_notes=true",

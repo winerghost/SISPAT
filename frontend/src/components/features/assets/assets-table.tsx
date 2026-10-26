@@ -1,6 +1,6 @@
 "use client";
 
-import { Archive, Check, CircleHelp, Package, X } from "lucide-react";
+import { Archive, Check, CircleHelp, Loader2, Package, X } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -83,13 +83,35 @@ export function DeletedBadge({ surface = "dark" }: { surface?: "dark" | "light" 
   );
 }
 
+/**
+ * "loading": resposta ainda é placeholder (não afirmar "vazio" antes da hora);
+ * "no-scope": o backend não lista nenhuma unidade acessível; "filtered": há
+ * filtros/busca ativos; "none": escopo com unidades, mas sem bens.
+ */
+export type AssetsEmptyKind = "loading" | "no-scope" | "filtered" | "none";
+
+const EMPTY_COPY: Record<Exclude<AssetsEmptyKind, "loading">, { title: string; description: string }> = {
+  "no-scope": {
+    title: "Você não tem unidades no seu escopo de acesso.",
+    description: "O acesso às unidades é concedido por um administrador. Procure-o para liberar as unidades necessárias.",
+  },
+  filtered: {
+    title: "Nenhum bem encontrado para os filtros atuais.",
+    description: "Ajuste a busca ou limpe os filtros.",
+  },
+  none: {
+    title: "Nenhum bem no seu escopo.",
+    description: "Os bens vêm da importação e do cadastro; ainda não há bens nas unidades do seu escopo.",
+  },
+};
+
 export function AssetsTable({
   assets,
   sort,
   onSortChange,
   pageKey,
   busy,
-  filtered,
+  emptyKind,
   onOpen,
 }: {
   assets: AssetRecord[];
@@ -97,7 +119,8 @@ export function AssetsTable({
   onSortChange: (sort: AssetSort) => void;
   pageKey: string | number;
   busy: boolean;
-  filtered: boolean;
+  /** Por que a lista está vazia (só usado com `assets` vazio). */
+  emptyKind: AssetsEmptyKind;
   onOpen: (asset: AssetRecord) => void;
 }) {
   return (
@@ -131,16 +154,22 @@ export function AssetsTable({
       </TableHeader>
       <AnimatedTableBody key={pageKey}>
         {assets.length === 0 ? (
-          <TableEmpty
-            colSpan={9}
-            icon={Package}
-            title={filtered ? "Nenhum bem encontrado para os filtros atuais." : "Nenhum bem no seu escopo."}
-            description={
-              filtered
-                ? "Ajuste a busca ou limpe os filtros."
-                : "Os bens vêm da importação e do cadastro; o acesso às unidades é concedido por um administrador."
-            }
-          />
+          emptyKind === "loading" ? (
+            <tr>
+              <td colSpan={9} className="p-0">
+                <div
+                  role="status"
+                  aria-live="polite"
+                  className="flex items-center justify-center gap-2 px-4 py-8 text-body-sm text-warm-granite"
+                >
+                  <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" aria-hidden="true" />
+                  Carregando bens…
+                </div>
+              </td>
+            </tr>
+          ) : (
+            <TableEmpty colSpan={9} icon={Package} {...EMPTY_COPY[emptyKind]} />
+          )
         ) : (
           assets.map((asset, index) => (
             <AnimatedTableRow key={asset.id} index={index}>

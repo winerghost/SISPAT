@@ -90,6 +90,8 @@ EXPECTED_POLICY: dict[tuple[str, str], tuple[str, str | None]] = {
     ("/api/v1/imports/google-sheets/confirm", "POST"): (ADMIN, "imports.execute"),
     ("/api/v1/imports/google-sheets/<uuid:preview_id>/pending", "GET"): (ADMIN, "imports.execute"),
     ("/api/v1/imports/google-sheets/<uuid:preview_id>/pending", "HEAD"): (ADMIN, "imports.execute"),
+    ("/api/v1/imports/google-sheets/<uuid:preview_id>/reconciliation", "GET"): (ADMIN, "imports.execute"),
+    ("/api/v1/imports/google-sheets/<uuid:preview_id>/reconciliation", "HEAD"): (ADMIN, "imports.execute"),
     # --- Importação dos cadastros: ao menos UMA de units.update/rooms.manage/
     # responsible.manage no decorator; a específica do kind é checada na view.
     ("/api/v1/catalog-imports/<kind>/preview", "POST"): (ADMIN, CATALOG_ANY),

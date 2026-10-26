@@ -62,13 +62,18 @@ export interface CatalogImportMockOptions {
    */
   assetsDegraded?: boolean;
   assetsUnknownStatus?: boolean;
+  /** Status forçado em `GET /imports/google-sheets/<id>/reconciliation`. */
+  reconciliationStatus?: number;
+  /** Linhas extras (motivo duplicado_na_origem) na reconciliação — testa paginação 50/100/200. */
+  reconciliationBulk?: number;
 }
 
-export interface CatalogImportMockState extends Required<Omit<CatalogImportMockOptions, "previewStatus" | "itemsStatus" | "confirmStatus" | "pendingStatus">> {
+export interface CatalogImportMockState extends Required<Omit<CatalogImportMockOptions, "previewStatus" | "itemsStatus" | "confirmStatus" | "pendingStatus" | "reconciliationStatus">> {
   previewStatus: number | null;
   itemsStatus: number | null;
   confirmStatus: number | null;
   pendingStatus: number | null;
+  reconciliationStatus: number | null;
   previews: Record<string, PreviewMock>;
 }
 
@@ -83,6 +88,8 @@ export function defaultCatalogImport(opts: CatalogImportMockOptions = {}): Catal
     itemsStatus: opts.itemsStatus ?? null,
     confirmStatus: opts.confirmStatus ?? null,
     pendingStatus: opts.pendingStatus ?? null,
+    reconciliationStatus: opts.reconciliationStatus ?? null,
+    reconciliationBulk: opts.reconciliationBulk ?? 0,
     failures: opts.failures ?? false,
     allFail: opts.allFail ?? false,
     cleanReport: opts.cleanReport ?? false,
@@ -354,12 +361,33 @@ const SORTS = new Set(["label", "classification", "source_id"]);
 const STATUSES = new Set(["NOVO", "EXISTENTE", "DUPLICADO", "INVALIDO", "CONFLITANTE"]);
 const ROUTE_RE = /^\/v1\/catalog-imports\/([^/]+)\/(preview|items|confirm|report)$/;
 const PENDING_RE = /^\/v1\/imports\/google-sheets\/([^/]+)\/pending$/;
+const RECONCILIATION_RE = /^\/v1\/imports\/google-sheets\/([^/]+)\/reconciliation$/;
+const RECONCILIATION_PARAMS = new Set(["reason", "page", "page_size"]);
+
+/** Itens SINTÉTICOS não importados (sem descrição/PII). */
+function reconciliationRows(bulk: number) {
+  const rows = [
+    { row: 5, patrimony_number: "000126", classification: "DUPLICADO", reason_code: "duplicado_na_origem" },
+    { row: 6, patrimony_number: "", classification: "INVALIDO", reason_code: "unidade_sem_alias" },
+    { row: 7, patrimony_number: "000128", classification: "CONFLITANTE", reason_code: "patrimonio_conflitante" },
+  ];
+  for (let i = 0; i < bulk; i += 1) {
+    rows.push({
+      row: 100 + i,
+      patrimony_number: `DUP-${String(i).padStart(4, "0")}`,
+      classification: "DUPLICADO",
+      reason_code: "duplicado_na_origem",
+    });
+  }
+  return rows;
+}
 
 /** Trata `/v1/catalog-imports/*` e `/v1/imports/google-sheets/<id>/pending`. `true` = tratada. */
 export async function handleCatalogImports(ctx: CatalogImportRequestContext): Promise<boolean> {
   const pending = ctx.path.match(PENDING_RE);
+  const reconciliation = ctx.path.match(RECONCILIATION_RE);
   const match = ctx.path.match(ROUTE_RE);
-  if (!match && !pending) return false;
+  if (!match && !pending && !reconciliation) return false;
   const { state, method, respond } = ctx;
   const err = async (status: number, code: string, message = "erro sintético") => {
     await respond(status, { error: { code, message } });
@@ -369,6 +397,35 @@ export async function handleCatalogImports(ctx: CatalogImportRequestContext): Pr
   // Mesma pilha do backend: ADM + AAL2 (USER/RH => 403; ADM aal1 => AAL2_REQUIRED).
   if (state.role !== "ADM") return err(403, "FORBIDDEN", "Acesso negado.");
   if (state.aal !== "aal2") return err(403, "AAL2_REQUIRED", "MFA obrigatório");
+
+  if (reconciliation) {
+    if (method !== "GET") return false;
+    if (state.reconciliationStatus) {
+      return err(state.reconciliationStatus, state.reconciliationStatus === 404 ? "not_found" : "INTERNAL", "SISPAT_BACKEND_MSG");
+    }
+    const keys = [...ctx.searchParams.keys()];
+    const page = Number(ctx.searchParams.get("page") ?? 1);
+    const pageSize = Number(ctx.searchParams.get("page_size") ?? 50);
+    if (keys.some((k) => !RECONCILIATION_PARAMS.has(k)) || ![50, 100, 200].includes(pageSize) || !(page >= 1)) {
+      return err(400, "validation_error");
+    }
+    const all = reconciliationRows(state.reconciliationBulk);
+    const porMotivo: Record<string, number> = {};
+    for (const r of all) porMotivo[r.reason_code] = (porMotivo[r.reason_code] ?? 0) + 1;
+    const reason = ctx.searchParams.get("reason");
+    const filtered = reason ? all.filter((r) => r.reason_code === reason) : all;
+    await respond(200, {
+      total_itens: 5 + all.length,
+      localizados: 5,
+      nao_importados: all.length,
+      por_motivo: porMotivo,
+      items: filtered.slice((page - 1) * pageSize, page * pageSize),
+      total: filtered.length,
+      page,
+      page_size: pageSize,
+    });
+    return true;
+  }
 
   if (pending) {
     if (method !== "GET") return false;

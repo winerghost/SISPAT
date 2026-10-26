@@ -16,6 +16,8 @@ import { PreviewSummaryCards } from "@/components/features/imports/preview-summa
 import { PreviewReviewAlert } from "@/components/features/imports/preview-review-alert";
 import { PreviewItemsTable, type SelectionSummary } from "@/components/features/imports/preview-items-table";
 import { ConfirmImportDialog } from "@/components/features/imports/confirm-import-dialog";
+import { ReconciliationPanel } from "@/components/features/imports/reconciliation-panel";
+import { useLookupAccess } from "@/components/features/lookup/use-lookup";
 import { PendingCountsPanel } from "@/components/features/imports/pending-counts-panel";
 import { CatalogImportResult } from "@/components/features/imports/catalog-import-result";
 import {
@@ -29,6 +31,7 @@ import { rateLimitMessage } from "@/lib/api-errors";
 import {
   confirmGoogleSheetsImport,
   createGoogleSheetsPreview,
+  IMPORT_MAX_ITEM_IDS,
   type ImportConfirmResponse,
   type ImportPreviewResponse,
 } from "@/lib/imports-api";
@@ -54,11 +57,13 @@ import {
 //   da entrada). Sucesso (toast + resumo) só no onSuccess da confirmação.
 // =============================================================================
 
-const EMPTY_SELECTION: SelectionSummary = { selectedIds: [], novoCount: 0, existenteCount: 0 };
+const EMPTY_SELECTION: SelectionSummary = { excludedIds: [], excludedNovo: 0, excludedExistente: 0 };
 
 type LastAction = "preview" | "confirm" | null;
 
 export default function ImportacaoGoogleSheetsPage() {
+  // UX apenas: o backend nega a reconciliação a quem não é ADM.
+  const { isAdmin } = useLookupAccess();
   const [preview, setPreview] = useState<ImportPreviewResponse | null>(null);
   const [selection, setSelection] = useState<SelectionSummary>(EMPTY_SELECTION);
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -121,7 +126,13 @@ export default function ImportacaoGoogleSheetsPage() {
     setSelection(summary);
   }, []);
 
-  const canConfirm = !!preview && !isExpired && selection.selectedIds.length > 0;
+  // Elegíveis = totais da prévia (backend); desmarcados = linhas vistas e desmarcadas.
+  const novoCount = Math.max((preview?.summary.novo ?? 0) - selection.excludedNovo, 0);
+  const existenteCount = Math.max((preview?.summary.existente ?? 0) - selection.excludedExistente, 0);
+  const eligibleTotal = (preview?.summary.novo ?? 0) + (preview?.summary.existente ?? 0);
+  const excludedCount = selection.excludedIds.length;
+  const tooManyExcluded = excludedCount > IMPORT_MAX_ITEM_IDS;
+  const canConfirm = !!preview && !isExpired && novoCount + existenteCount > 0 && !tooManyExcluded;
 
   function handlePreview() {
     // Sem duplo disparo: ignora cliques enquanto há leitura em andamento.
@@ -133,7 +144,11 @@ export default function ImportacaoGoogleSheetsPage() {
   function handleConfirm() {
     if (!preview) return;
     setLastAction("confirm");
-    confirmMutation.mutate({ preview_id: preview.preview_id, selected_item_ids: selection.selectedIds });
+    confirmMutation.mutate({
+      preview_id: preview.preview_id,
+      select_all_eligible: true,
+      excluded_item_ids: selection.excludedIds,
+    });
   }
 
   const previewError = previewMutation.isError ? previewErrorMessage(previewMutation.error) : null;
@@ -178,6 +193,19 @@ export default function ImportacaoGoogleSheetsPage() {
             Confirmar Importação
           </Button>
 
+          {preview && !isExpired && (
+            <span role="status" className="text-caption text-pale-stone" data-testid="selection-summary">
+              {novoCount + existenteCount} de {eligibleTotal} elegível(is) selecionado(s)
+              {excludedCount > 0 ? `; ${excludedCount} desmarcado(s)` : ""}.
+            </span>
+          )}
+
+          {tooManyExcluded && (
+            <span role="alert" className="text-caption text-signal-orange">
+              Há mais de {IMPORT_MAX_ITEM_IDS} itens desmarcados; reduza as exclusões para confirmar.
+            </span>
+          )}
+
           {preview && isExpired && (
             <span role="status" className="text-caption text-signal-orange">
               Esta prévia expirou. Gere uma nova pré-visualização para continuar.
@@ -214,6 +242,7 @@ export default function ImportacaoGoogleSheetsPage() {
           <SlideIn key={`preview-${preview.preview_id}`} distance="sm" className="flex flex-col gap-8">
             <PreviewSummaryCards summary={preview.summary} />
             <PreviewReviewAlert summary={preview.summary} />
+            {isAdmin ? <ReconciliationPanel previewId={preview.preview_id} /> : null}
             {preview.pending_counts ? (
               <PendingCountsPanel previewId={preview.preview_id} counts={preview.pending_counts} />
             ) : null}
@@ -241,8 +270,9 @@ export default function ImportacaoGoogleSheetsPage() {
       <ConfirmImportDialog
         open={confirmOpen}
         onOpenChange={setConfirmOpen}
-        novoCount={selection.novoCount}
-        existenteCount={selection.existenteCount}
+        novoCount={novoCount}
+        existenteCount={existenteCount}
+        excludedCount={excludedCount}
         isSubmitting={confirmMutation.isPending}
         onConfirm={handleConfirm}
       />

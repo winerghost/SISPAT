@@ -150,3 +150,28 @@ permissão → rate_limit`). Código: `api/v1/catalog_imports.py`, schemas
 - Resposta degradada (B-3, `app/api/v1/import_confirm_common.py`): a validação do corpo roda DEPOIS do commit do serviço. Se falhar, a rota responde **200** com `degraded=true` e só contadores mínimos válidos (`status`, `created`, `updated`, `ignorados`, `inalterados`, `falhas_total`; `falhas=[]`, `nao_gravados` zerado), nunca 500 falso (os dados já estão gravados e a prévia consumida). O log registra só o tipo do erro e os nomes de campo. `degraded` é `false` nas respostas normais.
 - Confirmação de **bens** (`POST /api/v1/imports/google-sheets/confirm`, schema `AssetImportConfirmResponse`, `app/api/v1/import_confirm_schemas.py`): mesmo contrato (`sync_job_id`, `status`, `created`, `updated`, `ignorados`, `inalterados`, `nao_gravados`, `falhas_total`, `falhas` <= 100, `degraded`), mais `pendencias_vinculo` (código -> quantidade, só dos bens CRIADOS, resolução autoritativa da confirmação: `sala_nao_encontrada`, `pessoa_nao_encontrada`, `unidade_pertencente_nao_encontrada`...). Falha de bens: `item_id`, `row`, `patrimony_number` (TEXTO) e `reason` fixo (sem descrição). `por_motivo` de bens: código de pendência que bloqueou (`unidade_sem_alias`...), `duplicado_na_origem`, `patrimonio_conflitante` ou `dados_invalidos`. `inalterados`: EXISTENTE cuja planilha não difere do bem; nesse caso nada é gravado e `version` NÃO é incrementada (reimportar a mesma planilha é no-op). Todos rejeitados: HTTP 200 com `status=FALHOU` e a prévia é consumida (nova prévia). A auditoria `CONFIRM_IMPORT` guarda `inalterados` e `job_status`. Escopo (`imports.execute` global), idempotência (409) e advisory lock por patrimônio não mudaram.
 - `GET /api/v1/imports/google-sheets/preview/<id>/items` só serve prévias de bens; prévia de cadastro ou inexistente -> 404 idêntico.
+
+
+## Importação de bens: confirmação em lotes e reconciliação (2026-10-26)
+
+- Causa do "só 40-50 por vez": o backend aceitava até 10.000 ids, mas a tela de prévia
+  (`frontend/src/components/features/imports/preview-items-table.tsx`, cache `itemsCacheRef`)
+  só enviava os ids das PÁGINAS já visitadas (50 por página), e cada confirmação consumia a
+  prévia (`CONFIRMADA`); sobravam NOVO a cada nova prévia (1069 -> 1019 -> 973...).
+- `POST /imports/google-sheets/confirm` aceita agora `select_all_eligible` (bool) e
+  `excluded_item_ids` (ids a deixar de fora; a exclusão sempre vence). Com
+  `select_all_eligible=true` o SERVIDOR seleciona todos os NOVO/EXISTENTE da prévia.
+- `confirm_preview` processa em lotes de `CONFIRM_BATCH_SIZE` (100) com commit por lote
+  (savepoint por item, advisory lock por patrimônio, `version`, `RawImportRecord`, 1 `AuditLog`).
+  A prévia vira `PROCESSANDO` (commit) antes do 1º lote: confirmação concorrente recebe 409.
+  Erro inesperado: rollback do lote, prévia/SyncJob `FALHOU`, auditoria; o já commitado fica
+  (idempotente: nova prévia o classifica como EXISTENTE/inalterado). Timeout gunicorn 180 s.
+- `GET /imports/google-sheets/<preview_id>/reconciliation?reason=&page=&page_size=` (ADM, AAL2,
+  `imports.execute`, somente leitura): item é "localizado" se há bem ativo com o patrimônio;
+  senão aparece com `reason_code` (`novo_pendente`, `duplicado_na_origem`,
+  `patrimonio_conflitante`, `dados_invalidos`, `unidade_sem_alias`...). Resposta
+  `ReconciliationReportResponse` (extra=forbid): `total_itens`, `localizados`, `nao_importados`,
+  `por_motivo`, paginação 50/100/200 e itens (`item_id`, `row`, `patrimony_number`,
+  `classification`, `reason_code`). Sem descrição/pessoa. 404 uniforme.
+- Pendência de frontend (fora do escopo backend): a tela deve enviar `select_all_eligible=true`
+  (+ `excluded_item_ids` das desmarcações) e oferecer a tela do relatório.

@@ -429,7 +429,8 @@ def test_confirm_preview_sucesso_cria_e_atualiza_e_persiste_tudo() -> None:
     assert preview.status == "CONFIRMADA"
     assert preview.confirmed_by == confirmed_by
     assert asset_200.version == 6  # incrementado pelo controle otimista
-    db.commit.assert_called_once()
+    # claim (PROCESSANDO) + commit final; nunca zero.
+    assert db.commit.call_count == 2
 
 
 def test_confirm_preview_novo_sem_unidade_resolvivel_vira_falha() -> None:

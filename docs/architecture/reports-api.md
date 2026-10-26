@@ -13,7 +13,7 @@ Código: rotas `backend/app/api/v1/reports.py`, schemas `report_schemas.py`; ser
   => a MESMA `404 not_found` (+ evento `UNIT_SCOPE_DENIED`). `kind` desconhecido => mesma 404.
 - Parâmetro não declarado => `400` (+ `MASS_ASSIGNMENT_REJECTED`; nomes privilegiados como `role`,
   `deleted_at`, `unit_ids` => `PRIVILEGE_ESCALATION_ATTEMPT`). Repetido/valor inválido => 400.
-  Filtros e `sort` são allowlists; nada de SQL vindo do cliente; `q` usa LIKE escapado.
+  Filtros e `sort` são allowlists; nada de SQL vindo do cliente; `q` usa LIKE escapado e, nos relatórios de patrimônios, a MESMA `asset_search_clause` da tela `/assets` (tokens AND; número, chave alfanumérica do número, descrição, `source_record_id`, nome do responsável e da sala via EXISTS correlacionado só a `assets`), garantindo paridade tela x exportação; o escopo de unidade continua aplicado antes e a neutralização de fórmulas (`csv_safety`) é inalterada.
 - Bens com `deleted_at` ficam fora (também nas movimentações e itens de inventário).
   `include_deleted=true` é só ADM (os demais: `403` + `ACCESS_DENIED`); acrescenta a coluna
   "Excluído em (UTC)" nos patrimônios.

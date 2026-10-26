@@ -111,10 +111,10 @@ import logging
 import time
 import uuid
 from datetime import date, datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Sequence
 from uuid import uuid4
 
-from sqlalchemy import or_
+from sqlalchemy import or_, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.exc import StaleDataError
@@ -187,6 +187,8 @@ _SELECTABLE_CLASSIFICATIONS = ("NOVO", "EXISTENTE")
 # Falhas detalhadas devolvidas na resposta (o total vai em `falhas_total`);
 # a lista completa fica nos `RawImportRecord` REJEITADO do SyncJob.
 MAX_LISTED_FAILURES = 100
+# Itens por lote (commit) em `confirm_preview`; 1069 itens = ~11 commits.
+CONFIRM_BATCH_SIZE = 100
 _ERROR_PREFIX = "erro:"
 
 
@@ -779,6 +781,98 @@ class ImportService:
         return counts
 
     # ------------------------------------------------------------------
+    # reconciliation_report (somente leitura)
+    # ------------------------------------------------------------------
+
+    def reconciliation_report(
+        self,
+        preview_id: uuid.UUID,
+        reason: str | None = None,
+        page: int = 1,
+        page_size: int = DEFAULT_PAGE_SIZE,
+    ) -> dict[str, Any]:
+        """Compara os itens da prévia com `assets` e lista o que NÃO está no banco.
+
+        Um item é "localizado" quando existe bem ATIVO com o mesmo número
+        patrimonial normalizado (inclui DUPLICADO cuja 1ª ocorrência foi
+        importada). Os demais entram na lista com `reason_code`:
+        `novo_pendente` (NOVO ainda não gravado), `duplicado_na_origem`,
+        `patrimonio_conflitante`, `dados_invalidos` ou o código de pendência
+        de vínculo que bloqueou (`unidade_sem_alias`...). Só leitura; só números
+        patrimoniais (TEXTO), linha e códigos — nunca descrição/pessoa.
+        """
+        if self._db.query(ImportPreview).filter(ImportPreview.id == preview_id).first() is None:
+            raise PreviewNotFoundError(f"pré-visualização {preview_id} não encontrada")
+        items = (
+            self._db.query(ImportPreviewItem)
+            .filter(ImportPreviewItem.preview_id == preview_id)
+            .order_by(ImportPreviewItem.created_at.asc(), ImportPreviewItem.id.asc())
+            .all()
+        )
+        keys = sorted(
+            {normalize_patrimony_number(i.patrimony_number) for i in items if i.patrimony_number}
+        )
+        found: set[str] = set()
+        norm_col = normalized_column(Asset.patrimony_number)
+        for start in range(0, len(keys), _PREFETCH_CHUNK):
+            chunk = keys[start : start + _PREFETCH_CHUNK]
+            found.update(
+                self._db.execute(
+                    select(norm_col).where(norm_col.in_(chunk), Asset.deleted_at.is_(None))
+                ).scalars()
+            )
+
+        pending: list[dict[str, Any]] = []
+        by_reason: dict[str, int] = {}
+        for item in items:
+            if item.patrimony_number and normalize_patrimony_number(item.patrimony_number) in found:
+                continue
+            code = self._reconciliation_reason(item)
+            by_reason[code] = by_reason.get(code, 0) + 1
+            pending.append(
+                {
+                    "item_id": str(item.id),
+                    "row": _source_row_number_of(item),
+                    "patrimony_number": item.patrimony_number,
+                    "classification": item.classification,
+                    "reason_code": code,
+                }
+            )
+
+        wanted = (reason or "").strip().lower()
+        filtered = [p for p in pending if not wanted or p["reason_code"] == wanted]
+        safe_page = min(max(page, 1), MAX_PAGE)
+        size = coerce_page_size(page_size)
+        start = (safe_page - 1) * size
+        return {
+            "preview_id": str(preview_id),
+            "total_itens": len(items),
+            "localizados": len(items) - len(pending),
+            "nao_importados": len(pending),
+            "por_motivo": by_reason,
+            "total": len(filtered),
+            "page": safe_page,
+            "page_size": size,
+            "pages": page_count(len(filtered), size),
+            "items": filtered[start : start + size],
+        }
+
+    @staticmethod
+    def _reconciliation_reason(item: ImportPreviewItem) -> str:
+        if item.classification == "NOVO":
+            return "novo_pendente"
+        if item.classification == "EXISTENTE":
+            return "existente_nao_localizado"  # bem removido após a prévia
+        blocking = ((item.normalized_values or {}).get(_LINKS_KEY) or {}).get("blocking")
+        if blocking in PENDING_CODES:
+            return str(blocking)
+        if item.classification == "DUPLICADO":
+            return "duplicado_na_origem"
+        if item.classification == "CONFLITANTE":
+            return "patrimonio_conflitante"
+        return "dados_invalidos"
+
+    # ------------------------------------------------------------------
     # list_preview_items (suporte à tela de revisão / paginação da API)
     # ------------------------------------------------------------------
 
@@ -861,8 +955,20 @@ class ImportService:
         preview_id: uuid.UUID,
         confirmed_by_user_id: uuid.UUID,
         selected_item_ids: list[uuid.UUID],
+        select_all_eligible: bool = False,
+        excluded_item_ids: Sequence[uuid.UUID] = (),
     ) -> dict[str, Any]:
         """Confirma (aplica em `assets`) os itens selecionados de uma prévia.
+
+        Seleção: `selected_item_ids` (ids enviados pelo cliente) OU, com
+        `select_all_eligible=True`, TODOS os NOVO/EXISTENTE da prévia menos
+        `excluded_item_ids` (a seleção é feita no servidor: a tela só conhece
+        as páginas que carregou). Processamento em lotes internos de
+        `CONFIRM_BATCH_SIZE` itens, cada lote com commit próprio (progresso
+        durável, locks curtos, sem estourar timeout); a prévia é "reivindicada"
+        (`PROCESSANDO`) antes do 1º lote, o que bloqueia confirmações
+        concorrentes (409) e mantém a idempotência por item (NOVO que já existe
+        vira falha, EXISTENTE só atualiza se `version` bate).
 
         Passos (ver docstring do módulo para a gestão de transação e as
         decisões de design por trás de cada regra):
@@ -957,6 +1063,14 @@ class ImportService:
         items_by_id = {item.id: item for item in items}
 
         selected_ids_set = set(selected_item_ids)
+        if select_all_eligible:
+            excluded = set(excluded_item_ids)
+            selected_ids_set |= {
+                item.id
+                for item in items
+                if item.classification in _SELECTABLE_CLASSIFICATIONS
+            }
+            selected_ids_set -= excluded  # a exclusão explícita sempre vence
         eligible_items = [
             item
             for item_id, item in items_by_id.items()
@@ -987,7 +1101,102 @@ class ImportService:
         )
         self._db.add(sync_job)
 
-        for item in eligible_items:
+        # Reivindica a prévia (PROCESSANDO) e grava o SyncJob ANTES dos lotes:
+        # confirmações concorrentes passam a receber 409 e o progresso fica
+        # rastreável mesmo se o processo cair no meio.
+        preview.status = "PROCESSANDO"
+        self._db.add(preview)
+        self._db.commit()
+        sync_job_id = sync_job.id
+
+        try:
+            (created, updated, inalterados, pendencias_vinculo, falhas) = self._apply_items(
+                eligible_items, sync_job, now, confirmed_by_user_id
+            )
+        except Exception:
+            self._db.rollback()
+            self._abort_confirmation(preview_id, sync_job_id, confirmed_by_user_id)
+            raise
+
+        sync_job.records_created = created
+        sync_job.records_updated = updated
+        sync_job.records_failed = len(falhas)
+        sync_job.finished_at = datetime.now(timezone.utc)
+        if falhas and not (created or updated):
+            sync_job.status = "FALHOU"
+        elif falhas:
+            sync_job.status = "PARCIAL"
+        else:
+            sync_job.status = "CONCLUIDO"
+        if falhas:
+            sync_job.error_summary = (
+                f"{len(falhas)} item(ns) não importado(s); ver RawImportRecord REJEITADO "
+                f"associado a este SyncJob para detalhes por item."
+            )
+        self._db.add(sync_job)
+
+        preview.status = "CONFIRMADA"
+        preview.confirmed_at = datetime.now(timezone.utc)
+        preview.confirmed_by = confirmed_by_user_id
+        self._db.add(preview)
+
+        audit_result = "FALHA" if sync_job.status == "FALHOU" else "SUCESSO"
+        self._db.add(
+            AuditLog(
+                id=uuid4(),
+                actor_user_id=confirmed_by_user_id,
+                entity_type="import",
+                entity_id=str(preview.id),
+                operation="CONFIRM_IMPORT",
+                previous_values={"status": "CONCLUIDA"},
+                new_values={
+                    "status": "CONFIRMADA",
+                    "sync_job_id": str(sync_job.id),
+                    "created": created,
+                    "updated": updated,
+                    "ignorados": ignorados,
+                    "inalterados": inalterados,
+                    "falhas": len(falhas),
+                    "job_status": sync_job.status,
+                },
+                result=audit_result,
+            )
+        )
+
+        # Commit único de toda a execução (itens aplicados, SyncJob,
+        # RawImportRecords, AuditLog e a transição da prévia para
+        # CONFIRMADA) — ver docstring do módulo.
+        self._db.commit()
+
+        return {
+            "sync_job_id": sync_job.id,
+            "status": sync_job.status,
+            "created": created,
+            "updated": updated,
+            "ignorados": ignorados,
+            "inalterados": inalterados,
+            "nao_gravados": nao_gravados,
+            "pendencias_vinculo": pendencias_vinculo,
+            "falhas_total": len(falhas),
+            # Lista completa só no RawImportRecord; a resposta traz no máximo N.
+            "falhas": falhas[:MAX_LISTED_FAILURES],
+        }
+
+    def _apply_items(
+        self,
+        eligible_items: list[ImportPreviewItem],
+        sync_job: SyncJob,
+        now: datetime,
+        confirmed_by_user_id: uuid.UUID,
+    ) -> tuple[int, int, int, dict[str, int], list[dict[str, Any]]]:
+        """Aplica os itens em lotes de `CONFIRM_BATCH_SIZE`, com commit por lote."""
+        created = 0
+        updated = 0
+        inalterados = 0
+        pendencias_vinculo: dict[str, int] = {code: 0 for code in PENDING_CODES}
+        falhas: list[dict[str, Any]] = []
+
+        for position, item in enumerate(eligible_items, start=1):
             failure_reason: str | None = None
 
             if item.patrimony_number is None:
@@ -1067,69 +1276,46 @@ class ImportService:
                 )
             )
 
-        sync_job.records_created = created
-        sync_job.records_updated = updated
-        sync_job.records_failed = len(falhas)
-        sync_job.finished_at = datetime.now(timezone.utc)
-        if falhas and not (created or updated):
-            sync_job.status = "FALHOU"
-        elif falhas:
-            sync_job.status = "PARCIAL"
-        else:
-            sync_job.status = "CONCLUIDO"
-        if falhas:
-            sync_job.error_summary = (
-                f"{len(falhas)} item(ns) não importado(s); ver RawImportRecord REJEITADO "
-                f"associado a este SyncJob para detalhes por item."
+            if position % CONFIRM_BATCH_SIZE == 0:
+                # Fecha o lote: progresso durável e locks de patrimônio liberados.
+                self._db.commit()
+
+        return created, updated, inalterados, pendencias_vinculo, falhas
+
+    def _abort_confirmation(
+        self, preview_id: uuid.UUID, sync_job_id: uuid.UUID, actor_user_id: uuid.UUID
+    ) -> None:
+        """Erro inesperado no meio dos lotes: marca prévia e SyncJob como FALHOU.
+
+        O que já foi commitado por lote permanece (cada item é idempotente: uma
+        nova prévia classificará os já gravados como EXISTENTE). Sem detalhes
+        internos nos registros.
+        """
+        try:
+            preview = self._db.query(ImportPreview).filter(ImportPreview.id == preview_id).first()
+            job = self._db.query(SyncJob).filter(SyncJob.id == sync_job_id).first()
+            if preview is not None:
+                preview.status = "FALHOU"
+            if job is not None:
+                job.status = "FALHOU"
+                job.finished_at = datetime.now(timezone.utc)
+                job.error_summary = "erro inesperado durante a confirmação em lotes"
+            self._db.add(
+                AuditLog(
+                    id=uuid4(),
+                    actor_user_id=actor_user_id,
+                    entity_type="import",
+                    entity_id=str(preview_id),
+                    operation="CONFIRM_IMPORT",
+                    previous_values={"status": "PROCESSANDO"},
+                    new_values={"status": "FALHOU", "sync_job_id": str(sync_job_id)},
+                    result="FALHA",
+                )
             )
-        self._db.add(sync_job)
-
-        preview.status = "CONFIRMADA"
-        preview.confirmed_at = datetime.now(timezone.utc)
-        preview.confirmed_by = confirmed_by_user_id
-        self._db.add(preview)
-
-        audit_result = "FALHA" if sync_job.status == "FALHOU" else "SUCESSO"
-        self._db.add(
-            AuditLog(
-                id=uuid4(),
-                actor_user_id=confirmed_by_user_id,
-                entity_type="import",
-                entity_id=str(preview.id),
-                operation="CONFIRM_IMPORT",
-                previous_values={"status": "CONCLUIDA"},
-                new_values={
-                    "status": "CONFIRMADA",
-                    "sync_job_id": str(sync_job.id),
-                    "created": created,
-                    "updated": updated,
-                    "ignorados": ignorados,
-                    "inalterados": inalterados,
-                    "falhas": len(falhas),
-                    "job_status": sync_job.status,
-                },
-                result=audit_result,
-            )
-        )
-
-        # Commit único de toda a execução (itens aplicados, SyncJob,
-        # RawImportRecords, AuditLog e a transição da prévia para
-        # CONFIRMADA) — ver docstring do módulo.
-        self._db.commit()
-
-        return {
-            "sync_job_id": sync_job.id,
-            "status": sync_job.status,
-            "created": created,
-            "updated": updated,
-            "ignorados": ignorados,
-            "inalterados": inalterados,
-            "nao_gravados": nao_gravados,
-            "pendencias_vinculo": pendencias_vinculo,
-            "falhas_total": len(falhas),
-            # Lista completa só no RawImportRecord; a resposta traz no máximo N.
-            "falhas": falhas[:MAX_LISTED_FAILURES],
-        }
+            self._db.commit()
+        except SQLAlchemyError:
+            self._db.rollback()
+            logger.error("import_service: não foi possível registrar a falha da confirmação")
 
     @staticmethod
     def _unwritten_summary(

@@ -44,7 +44,7 @@ import uuid
 from datetime import date, datetime, timezone
 from typing import Any
 
-from sqlalchemy import false, func, or_, select
+from sqlalchemy import and_, exists, false, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, defer
 from sqlalchemy.orm.exc import StaleDataError
@@ -55,7 +55,13 @@ from app.models.audit import AuditLog
 from app.models.people import ResponsiblePerson
 from app.models.units import Location, Room, Unit
 from app.services.pagination import page_count
-from app.security.text_search import contains_ci
+from app.security.text_search import (
+    alnum_key,
+    contains_ci,
+    contains_ci_db,
+    key_contains,
+    search_tokens,
+)
 from app.services.import_normalizer import normalize_bond_status
 from app.services.patrimony_lock import (
     acquire_patrimony_lock,
@@ -202,6 +208,37 @@ def _like(column_expr: Any, term: str) -> Any:
     return contains_ci(column_expr, term)
 
 
+def asset_search_clause(term: str) -> Any:
+    """Busca de `/assets?q=`: tokens (AND); cada token casa (OR) em:
+
+    número patrimonial e descrição (ILIKE sem acento/caixa, curingas escapados),
+    chave alfanumérica do número (`sispat_alnum_key`, só se o token tem dígito:
+    `AGU-123`/`12.345`/`AB 123` casam `AGU123`/`12345`/`AB-123`), `source_record_id`
+    e nome do responsável/da sala via EXISTS (sem JOIN; só ligações do próprio bem,
+    já restrito ao escopo pelo chamador; FK nula nunca casa).
+    """
+    tokens = search_tokens(term)
+    if not tokens:
+        return None
+    clauses = []
+    for token in tokens:
+        options = [
+            contains_ci_db(Asset.patrimony_number, token),
+            contains_ci_db(func.coalesce(Asset.description, ""), token),
+            contains_ci_db(func.coalesce(Asset.source_record_id, ""), token),
+            # correlate(Asset): consultas com JOIN em Room/ResponsiblePerson (relatórios)
+            # não podem "auto-correlacionar" a tabela do EXISTS para fora.
+            exists().where(ResponsiblePerson.id == Asset.responsible_person_id,
+                           contains_ci_db(ResponsiblePerson.name, token)).correlate(Asset),
+            exists().where(Room.id == Asset.room_id,
+                           contains_ci_db(Room.name, token)).correlate(Asset),
+        ]
+        if any(ch.isdigit() for ch in token) and alnum_key(token):
+            options.append(key_contains(Asset.patrimony_number, token))
+        clauses.append(or_(*options))
+    return and_(*clauses)
+
+
 def asset_scope_clause(actor_id: Any, db: Session) -> Any:
     """Escopo canônico de bens: `unit_id` OU `owner_unit_id` acessíveis.
 
@@ -233,6 +270,12 @@ def asset_filter_clauses(query: Any) -> list[Any]:
     Lê, por nome, os atributos opcionais de `query` (`None` = sem filtro):
     `unit_id`, `owner_unit_id`, `room_id`, `responsible_person_id`, `located`
     (igualdade) e `bond_status`. Não aplica escopo nem `deleted_at`.
+
+    DECISÃO documentada: o filtro `unit_id` é a unidade ALOCADORA (`Asset.unit_id`);
+    bens só "pertencentes" à unidade (`owner_unit_id`) são filtrados por
+    `owner_unit_id`. O ESCOPO de acesso (outro predicado) continua unit OU owner.
+    Mantido assim para não mudar os gráficos do dashboard (agrupam por unit_id).
+    Ordenação por `patrimony_number` é LEXICOGRÁFICA (texto): "10" < "9".
     """
     clauses = [
         getattr(Asset, field) == getattr(query, field)
@@ -436,11 +479,9 @@ class AssetService:
         scoped = self._base_query().filter(self._scope(actor_id))
         if not (query.include_deleted == "true" and self._is_adm):
             scoped = scoped.filter(Asset.deleted_at.is_(None))
-        if query.q:
-            scoped = scoped.filter(
-                or_(_like(Asset.patrimony_number, query.q),
-                    _like(func.coalesce(Asset.description, ""), query.q))
-            )
+        search = asset_search_clause(query.q) if query.q else None
+        if search is not None:
+            scoped = scoped.filter(search)
         scoped = scoped.filter(*asset_filter_clauses(query))
         total = scoped.with_entities(func.count(Asset.id)).order_by(None).scalar()
         rows = (

@@ -44,7 +44,7 @@ const TONE: Record<CatalogOutcome, { border: string; text: string }> = {
   nothing: { border: "border-ash-stroke", text: "text-pale-stone" },
 };
 
-function reasonLabel(code: string): string {
+export function reasonLabel(code: string): string {
   return UNWRITTEN_REASON_LABEL[code] ?? pendingLabel(code);
 }
 

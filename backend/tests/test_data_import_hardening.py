@@ -341,7 +341,7 @@ def test_falha_de_banco_em_um_item_desfaz_so_o_savepoint_e_segue() -> None:
     savepoints[0].commit.assert_called_once()
     savepoints[1].rollback.assert_called_once()
     assert preview.status == "CONFIRMADA"
-    db.commit.assert_called_once()
+    assert db.commit.call_count == 2  # claim PROCESSANDO + commit final
 
 
 def test_existente_sem_versao_de_referencia_falha_fechado() -> None:
@@ -415,4 +415,4 @@ def test_stale_data_error_do_version_id_col_vira_falha_de_concorrencia() -> None
     assert "concorrência" in result["falhas"][0]["reason"]
     savepoint.rollback.assert_called_once()
     assert preview.status == "CONFIRMADA"
-    db.commit.assert_called_once()
+    assert db.commit.call_count == 2  # claim PROCESSANDO + commit final

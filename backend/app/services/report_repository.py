@@ -27,8 +27,9 @@ from app.models.assets import Asset, AssetMovement
 from app.models.inventory import Inventory, InventoryItem
 from app.models.people import ResponsiblePerson
 from app.models.units import Location, Room, Unit
-from app.security.text_search import contains_ci
-from app.services.asset_service import asset_filter_clauses, asset_scope_clause
+from app.services.asset_service import (
+    asset_filter_clauses, asset_scope_clause, asset_search_clause,
+)
 from app.services.import_normalizer import normalize_bond_status
 from app.services.inventory_service import item_result_expr
 from app.services.local_dates import local_day_end_exclusive_utc, local_day_start_utc
@@ -109,11 +110,11 @@ def fetch_assets(
     where: list[Any] = [asset_scope_clause(actor_id, db), *asset_filter_clauses(flt)]
     if not include_deleted:
         where.append(Asset.deleted_at.is_(None))
-    if flt.q:
-        where.append(or_(
-            contains_ci(Asset.patrimony_number, flt.q),
-            contains_ci(func.coalesce(Asset.description, ""), flt.q),
-        ))
+    # Mesma busca da tela /assets (paridade tela x exportação); só adiciona
+    # restrição AND ao escopo de unidade já aplicado acima.
+    search = asset_search_clause(flt.q) if flt.q else None
+    if search is not None:
+        where.append(search)
     total = int(db.execute(select(func.count(Asset.id)).where(*where)).scalar_one())
     if total > limit:
         return total, []

@@ -11,6 +11,7 @@ from __future__ import annotations
 import unicodedata
 from typing import Any
 
+from sqlalchemy import func, literal
 from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.sql.expression import FunctionElement
 from sqlalchemy.types import String
@@ -43,8 +44,64 @@ def contains_ci(column_expr: Any, term: str) -> Any:
     return sispat_unaccent(column_expr).ilike(pattern, escape=LIKE_ESCAPE_CHAR)
 
 
+ALNUM_KEY_FUNCTION = "sispat_alnum_key"
+MAX_SEARCH_TOKENS = 8
+
+
+def alnum_key(value: str | None) -> str | None:
+    """Chave alfanumérica: sem acento, minúsculas, só letras/dígitos (sem
+    pontuação, espaços, NBSP). Espelha `public.sispat_alnum_key` (migração 0016)."""
+    if value is None:
+        return None
+    return "".join(ch for ch in strip_accents(value).lower() if ch.isalnum())
+
+
+class sispat_alnum_key(FunctionElement):  # noqa: N801 - nome = função SQL
+    type = String()
+    name = ALNUM_KEY_FUNCTION
+    inherit_cache = True
+
+
+@compiles(sispat_alnum_key)
+def _compile_alnum_key(element: Any, compiler: Any, **kw: Any) -> str:
+    return f"{ALNUM_KEY_FUNCTION}({compiler.process(element.clauses, **kw)})"
+
+
+def search_tokens(term: str) -> list[str]:
+    """Divide o termo em tokens por qualquer espaço Unicode (inclui NBSP).
+
+    Tokens só de pontuação são descartados, exceto se TODOS forem assim (então
+    ficam como estão, p.ex. `%` buscado literalmente). Limite: `MAX_SEARCH_TOKENS`.
+    """
+    # Controles (inclui NUL, que o PostgreSQL recusa em texto) viram separador.
+    tokens = "".join(" " if ch.isprintable() is False and not ch.isspace() else ch for ch in term).split()
+    useful = [t for t in tokens if any(ch.isalnum() for ch in t)]
+    return (useful or tokens)[:MAX_SEARCH_TOKENS]
+
+
+def contains_ci_db(column_expr: Any, token: str) -> Any:
+    """Como `contains_ci`, mas o termo passa pelo MESMO `sispat_unaccent` da
+    coluna e o escape de `\\`, `%` e `_` é feito no banco (bind único)."""
+    escaped = func.replace(
+        func.replace(
+            func.replace(sispat_unaccent(literal(token, String())), LIKE_ESCAPE_CHAR,
+                         LIKE_ESCAPE_CHAR * 2),
+            "%", f"{LIKE_ESCAPE_CHAR}%"),
+        "_", f"{LIKE_ESCAPE_CHAR}_")
+    pattern = literal("%", String()).concat(escaped).concat(literal("%", String()))
+    return sispat_unaccent(column_expr).ilike(pattern, escape=LIKE_ESCAPE_CHAR)
+
+
+def key_contains(column_expr: Any, token: str) -> Any:
+    """`sispat_alnum_key(coluna)` contém a chave do token (índice trigram 0016)."""
+    pattern = literal("%", String()).concat(sispat_alnum_key(literal(token, String()))).concat(
+        literal("%", String()))
+    return sispat_alnum_key(column_expr).like(pattern)
+
+
 def register_sqlite_functions(dbapi_connection: Any) -> None:
-    """Registra `sispat_unaccent` numa conexão sqlite3 (uso em testes)."""
+    """Registra `sispat_unaccent`/`sispat_alnum_key` numa conexão sqlite3 (testes)."""
     dbapi_connection.create_function(
         UNACCENT_FUNCTION, 1, lambda v: None if v is None else strip_accents(v), deterministic=True
     )
+    dbapi_connection.create_function(ALNUM_KEY_FUNCTION, 1, alnum_key, deterministic=True)

@@ -44,8 +44,8 @@ from typing import Any
 from flask import Blueprint, abort, g, jsonify, request
 
 from app.api.v1.import_confirm_common import safe_confirm_payload
-from app.api.v1.import_confirm_schemas import AssetImportConfirmResponse
-from app.api.v1.schemas import ConfirmImportRequest, ImportItemsQuery, get_json_body, parse_body, parse_query
+from app.api.v1.import_confirm_schemas import AssetImportConfirmResponse, ReconciliationReportResponse
+from app.api.v1.schemas import ConfirmImportRequest, ImportItemsQuery, ReconciliationQuery, get_json_body, parse_body, parse_query
 from app.api.v1.user_admin_http import admin_rate_limit_key, reject_any_body
 from app.auth.supabase_auth import require_auth
 from app.authorization.rbac import require_aal2, require_permission, require_role
@@ -229,6 +229,30 @@ def pending_report_endpoint(preview_id: uuid.UUID):
     return jsonify({"preview_id": str(preview_id), "pending_counts": counts}), 200
 
 
+@imports_bp.route("/google-sheets/<uuid:preview_id>/reconciliation", methods=["GET"])
+@require_auth
+@require_role("ADM")
+@require_aal2
+@require_permission("imports.execute")
+@rate_limit(admin_rate_limit_key, limit=_ITEMS_LIMIT_PER_HOUR, window_seconds=_WINDOW_SECONDS)
+def reconciliation_report_endpoint(preview_id: uuid.UUID):
+    """`GET /api/v1/imports/google-sheets/<preview_id>/reconciliation`.
+
+    Relatório de reconciliação (somente leitura): compara os itens da prévia
+    com `assets` e lista, paginado (`page`, `page_size` 50/100/200, `reason`),
+    os que NÃO viraram bem, com número patrimonial e `reason_code`. 404
+    uniforme para prévia inexistente ou de outro tipo (cadastros).
+    """
+    query = parse_query(ReconciliationQuery, request.args, context="imports.reconciliation")
+    with get_db_session() as db:
+        if not _bens_preview_exists(db, preview_id):
+            abort(404)
+        result = ImportService(db, GoogleSheetsClient()).reconciliation_report(
+            preview_id, reason=query.reason, page=query.page, page_size=query.page_size
+        )
+    return jsonify(ReconciliationReportResponse.model_validate(result).model_dump()), 200
+
+
 @imports_bp.route("/google-sheets/confirm", methods=["POST"])
 @require_auth
 @require_role("ADM")
@@ -263,6 +287,8 @@ def confirm_preview_endpoint():
                 preview_id=preview_id,
                 confirmed_by_user_id=user.id,
                 selected_item_ids=selected_item_ids,
+                select_all_eligible=body_in.select_all_eligible,
+                excluded_item_ids=list(body_in.excluded_item_ids),
             )
             # O serviço já deu commit: falha ao validar a resposta NÃO pode virar
             # 500 (B-3) -> 200 degradado com contadores mínimos válidos.

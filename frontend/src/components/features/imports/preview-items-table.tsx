@@ -40,16 +40,14 @@ import { CLASSIFICATION_META } from "./classification";
 // classificação disparam novas requisições `GET /items`; a paginação usa
 // `page`/`page_size`/`total` retornados pela API (nunca client-side).
 //
-// Seleção: a API não expõe um endpoint de "selecionar/desselecionar item"
-// nem um "selecionar todos" — cada página de itens já vem com um campo
-// `selected` (default do backend). Este componente mantém:
+// Seleção: o padrão é "todos os elegíveis" (NOVO/EXISTENTE). Cada página vem
+// com `selected` (default do backend). Este componente mantém:
 //   - `itemsCacheRef`: todo item já visto (qualquer página/filtro/busca),
-//     para que a contagem de selecionados sobreviva à troca de página.
+//     para que a contagem de desmarcados sobreviva à troca de página.
 //   - `overrides`: toggles explícitos do usuário sobre o default do backend.
-// O resumo de seleção (ids elegíveis selecionados + contagens por
-// classificação) é repassado ao componente pai via `onSelectionSummaryChange`
-// a cada mudança, para habilitar o botão "Confirmar Importação" e alimentar
-// o diálogo de confirmação.
+// O resumo (ids elegíveis DESMARCADOS + contagens por classificação) vai ao pai
+// via `onSelectionSummaryChange`; a confirmação envia `select_all_eligible=true`
+// + `excluded_item_ids`, nunca a lista de ids das páginas abertas.
 //
 // Linhas DUPLICADO/INVALIDO/CONFLITANTE nunca são selecionáveis (checkbox
 // desabilitado) — apenas NOVO/EXISTENTE podem ser marcadas.
@@ -89,10 +87,11 @@ function ineligibleReason(item: ImportPreviewItem): string {
   }
 }
 
+/** Linhas elegíveis desmarcadas (a seleção é "todos os elegíveis menos estas"). */
 export interface SelectionSummary {
-  selectedIds: string[];
-  novoCount: number;
-  existenteCount: number;
+  excludedIds: string[];
+  excludedNovo: number;
+  excludedExistente: number;
 }
 
 interface PreviewItemsTableProps {
@@ -171,18 +170,21 @@ export function PreviewItemsTable({ previewId, onSelectionSummaryChange }: Previ
   }
 
   useEffect(() => {
-    const selectedIds: string[] = [];
-    let novoCount = 0;
-    let existenteCount = 0;
+    // Modo "todos os elegíveis": só as linhas DESMARCADAS (vistas nesta sessão)
+    // viajam ao backend; o resto da prévia (inclusive páginas nunca abertas)
+    // continua selecionado pelo padrão.
+    const excludedIds: string[] = [];
+    let excludedNovo = 0;
+    let excludedExistente = 0;
     for (const item of itemsCacheRef.current.values()) {
       if (!isEligible(item.classification)) continue;
       const selected = overrides.get(item.id) ?? item.selected;
-      if (!selected) continue;
-      selectedIds.push(item.id);
-      if (item.classification === "NOVO") novoCount += 1;
-      else existenteCount += 1;
+      if (selected) continue;
+      excludedIds.push(item.id);
+      if (item.classification === "NOVO") excludedNovo += 1;
+      else excludedExistente += 1;
     }
-    onSelectionSummaryChange({ selectedIds, novoCount, existenteCount });
+    onSelectionSummaryChange({ excludedIds, excludedNovo, excludedExistente });
     // `data` entra nas dependências para recalcular quando uma nova página é
     // incorporada ao cache acumulado (itemsCacheRef não dispara re-render por si).
     // eslint-disable-next-line react-hooks/exhaustive-deps

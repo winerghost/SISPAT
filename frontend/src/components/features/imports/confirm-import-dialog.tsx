@@ -24,6 +24,8 @@ interface ConfirmImportDialogProps {
   onOpenChange: (open: boolean) => void;
   novoCount: number;
   existenteCount: number;
+  /** Elegíveis desmarcados pelo usuário (enviados como exclusões). */
+  excludedCount?: number;
   isSubmitting: boolean;
   onConfirm: () => void;
 }
@@ -33,6 +35,7 @@ export function ConfirmImportDialog({
   onOpenChange,
   novoCount,
   existenteCount,
+  excludedCount = 0,
   isSubmitting,
   onConfirm,
 }: ConfirmImportDialogProps) {
@@ -59,6 +62,12 @@ export function ConfirmImportDialog({
             <dd className="text-heading text-[28px] text-obsidian-canvas">{existenteCount}</dd>
           </div>
         </dl>
+
+        <p className="text-body-sm text-graphite-mid" data-testid="confirm-excluded">
+          {excludedCount > 0
+            ? `${excludedCount} item(ns) elegível(is) desmarcado(s) não será(ão) importado(s).`
+            : "Todos os itens elegíveis (Novo e Existente) serão importados."}
+        </p>
 
         {totalAfetado === 0 && (
           <p className="text-body-sm text-graphite-mid">

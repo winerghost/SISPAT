@@ -252,7 +252,11 @@ def cli(engine, seed):
         finally:
             db.close()
 
-    with patch("app.cli.get_db_session", _session):
+    # A CLI usa o relógio real (`utcnow`) e o cenário é relativo a NOW fixo: sem congelar o
+    # relógio, o resultado dependia da data de execução (falha a partir de 2026-10-2x).
+    with patch("app.cli.get_db_session", _session), patch(
+        "app.services.import_preview_purge.utcnow", return_value=NOW
+    ):
         yield create_app().test_cli_runner()
 
 

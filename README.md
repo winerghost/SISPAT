@@ -444,3 +444,13 @@ A IA é **consultiva e somente leitura**: nunca altera dados nem executa ações
 ### Contrato de paginação (todas as listagens da API v1)
 
 `page` ≥ 1 (padrão 1) e `page_size` SOMENTE 50, 100 ou 200 (padrão 50); qualquer outro valor (25, 0, 500...) => 400. Resposta: `{total, page, page_size, pages, <itens>}` (`pages` = ceil(total/page_size), 0 se vazio). Definição única em `backend/app/services/pagination.py`; ordenação sempre com desempate por `id`. A busca (`q`/`search`) é sem caixa e sem acento (`app/security/text_search.py`: `sispat_unaccent(coluna) ILIKE :padrão`, escape de `%`/`_`). Exige a migração `0014_unaccent_search` (espelho `backend/migrations/sql/0017_unaccent_search.sql`; extensão no schema `extensions` e wrapper `SECURITY INVOKER` com `search_path = extensions, pg_catalog` e chamada qualificada `extensions.unaccent`), NÃO aplicada em produção: aplicar ANTES do deploy do backend.
+
+### Busca de bens (`GET /api/v1/assets?q=`)
+
+O termo é dividido em tokens (qualquer espaço, inclusive NBSP; máx. 8; tokens só de pontuação são ignorados, exceto se todos forem). Todos os tokens devem casar (AND, qualquer ordem); cada token casa (OR) em número patrimonial, descrição, `source_record_id`, nome do responsável e nome da sala (estes dois via `EXISTS`, sem JOIN, só para bens já no escopo do usuário; vínculos nulos nunca casam). Sem caixa e sem acento nos DOIS lados (`sispat_unaccent` aplicado também ao termo, no banco), com `%`, `_` e `\` literais. Tokens com dígito também casam pela chave alfanumérica do número (`sispat_alnum_key`: minúsculas, sem acento/pontuação/espaços/NBSP): `AGU-123`, `12.345`, `AB 123` encontram `AGU123`, `12345`, `AB-123`. Índice trigram funcional `ix_assets_patrimony_key_trgm` na migração 0016 (espelho `backend/migrations/sql/0019_asset_search_key.sql`, PENDENTE DE APLICAÇÃO; aplicar antes do deploy do backend). O filtro `unit_id` é a unidade alocadora (`Asset.unit_id`; `owner_unit_id` tem filtro próprio), enquanto o escopo de acesso é unit OU owner. A ordenação por `patrimony_number` é lexicográfica (texto): `"10"` vem antes de `"9"`. Testes: `backend/tests/test_assets_search.py`.
+
+### Importação de bens: lotes e reconciliação
+`POST /imports/google-sheets/confirm` aceita `select_all_eligible` e `excluded_item_ids`
+(seleção no servidor) e grava em lotes de 100; `GET /imports/google-sheets/<id>/reconciliation`
+(ADM, AAL2, só leitura) lista os itens da prévia que não viraram bem, com motivo. Ver
+`docs/architecture/cadastros-apoio-api.md`.

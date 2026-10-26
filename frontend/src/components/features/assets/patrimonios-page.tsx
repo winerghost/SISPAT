@@ -13,7 +13,7 @@ import { noClientRetry, useAccessibleUnits, useLookupAccess } from "@/components
 import { AssetDetailSheet } from "./asset-detail-sheet";
 import { assetsQueryKey, AssetFormDialog } from "./asset-form-dialog";
 import { ASSET_LOOKUPS_ERROR_MESSAGE, assetListErrorMessage } from "./asset-labels";
-import { AssetsTable } from "./assets-table";
+import { AssetsTable, type AssetsEmptyKind } from "./assets-table";
 import { AssetsToolbar } from "./assets-toolbar";
 import { useAssetFilters } from "./use-asset-filters";
 import { useClampPage } from "./use-clamp-page";
@@ -74,7 +74,19 @@ export function PatrimoniosPage() {
 
   useClampPage(filters.pg, assets.data?.total, !assets.isPlaceholderData);
 
-  const lookupsFailed = units.isError || rooms.isError || people.isError;
+  // Vazio: nunca afirmar "nenhum bem" com dado provisório; distingue sem unidades
+  // (escopo do backend em `units/accessible`), filtros sem resultado e escopo sem bens.
+  // Página vazia com total > 0 = página além da última, sendo ajustada por useClampPage.
+  const emptyKind: AssetsEmptyKind =
+    assets.isPlaceholderData || (assets.data && assets.data.total > 0 && assets.data.assets.length === 0)
+    ? "loading"
+    : units.data && units.data.units.length === 0
+      ? "no-scope"
+      : filters.filtered
+        ? "filtered"
+        : "none";
+
+  const lookupsFailed =units.isError || rooms.isError || people.isError;
 
   return (
     <div className="flex flex-col gap-8 p-4 sm:p-6 lg:p-8">
@@ -131,7 +143,7 @@ export function PatrimoniosPage() {
             busy={assets.isFetching && !assets.isPending}
             sort={filters.sort}
             onSortChange={filters.chooseSort}
-            filtered={filters.filtered}
+            emptyKind={emptyKind}
             onOpen={(asset) => {
               setSelected(asset);
               setDetailOpen(true);

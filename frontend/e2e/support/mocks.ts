@@ -146,6 +146,8 @@ export interface MockOptions {
   catalogImport?: CatalogImportMockOptions;
   /** `GET /v1/units/accessible` responde com este status de erro (ex.: 403, 404, 500). */
   accessibleUnitsStatus?: number;
+  /** Usuário sem unidades no escopo (`/units/accessible` vazio; nenhum bem visível). */
+  noUnitScope?: boolean;
   /** `GET /v1/rooms` e `GET /v1/responsible-people` respondem com este status de erro (telas de consulta). */
   lookupListStatus?: number;
   /** `GET /v1/assets` responde com este status de erro (ex.: 403, 404, 500); testes também podem mudar `state.forceListStatus`. */
@@ -1167,6 +1169,8 @@ export async function installMocks(page: Page, opts: MockOptions = {}): Promise<
     reauthVerified: false,
     calls: [],
   };
+  // Usuário sem nenhuma unidade acessível: /units/accessible vazio e nenhum bem no escopo.
+  if (opts.noUnitScope) state.unitDetails = {};
 
   // 1) Bloqueio de rede externa (registrado primeiro = menor prioridade).
   await page.route(
@@ -1631,7 +1635,14 @@ export async function installMocks(page: Page, opts: MockOptions = {}): Promise<
     }
 
     if (path === "/v1/imports/google-sheets/confirm" && method === "POST") {
-      const ids = (body as { selected_item_ids?: string[] }).selected_item_ids ?? [];
+      // Contrato: `select_all_eligible` + `excluded_item_ids` (exclusão vence) ou `selected_item_ids`.
+      const req = body as { selected_item_ids?: string[]; select_all_eligible?: boolean; excluded_item_ids?: string[] };
+      const excluded = new Set(req.excluded_item_ids ?? []);
+      const ids = req.select_all_eligible
+        ? PREVIEW_ITEMS.filter(
+            (i) => (i.classification === "NOVO" || i.classification === "EXISTENTE") && !excluded.has(i.id),
+          ).map((i) => i.id)
+        : (req.selected_item_ids ?? []);
       return json(route, 200, assetConfirmResponse(state.catalogImport, ids, PREVIEW_ITEMS));
     }
 

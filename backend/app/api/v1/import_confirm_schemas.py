@@ -41,3 +41,28 @@ class AssetImportConfirmResponse(_StrictModel):
     falhas_total: Count
     falhas: list[AssetImportFailureOut] = Field(max_length=100)
     degraded: bool = False
+
+
+class ReconciliationItemOut(_StrictModel):
+    """Item da prévia sem bem ativo correspondente (só número, linha e códigos)."""
+
+    item_id: str = Field(max_length=64)
+    row: int | None = Field(default=None, ge=0, le=10_000_000)
+    patrimony_number: str | None = Field(default=None, max_length=200)
+    classification: str = Field(max_length=20)
+    reason_code: str = Field(max_length=60)
+
+
+class ReconciliationReportResponse(_StrictModel):
+    """Corpo de `GET /imports/google-sheets/<id>/reconciliation` (somente leitura)."""
+
+    preview_id: str = Field(max_length=64)
+    total_itens: Count
+    localizados: Count
+    nao_importados: Count
+    por_motivo: CountMap = Field(default_factory=dict)
+    total: Count
+    page: int = Field(ge=1, le=100_000)
+    page_size: int = Field(ge=1, le=200)
+    pages: Count
+    items: list[ReconciliationItemOut] = Field(max_length=200)

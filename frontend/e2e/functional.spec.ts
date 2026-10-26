@@ -285,8 +285,11 @@ test.describe("importação Google Sheets", () => {
     await expect(dialog.getByText("Serão atualizados (Existente)").locator("..")).toContainText("2");
     const confirm = page.waitForRequest((r) => r.url().endsWith("/confirm") && r.method() === "POST");
     await dialog.getByRole("button", { name: "Confirmar", exact: true }).click();
-    const body = (await confirm).postDataJSON() as { selected_item_ids: string[] };
-    expect(body.selected_item_ids).toHaveLength(4);
+    // Modo "todos os elegíveis": só a linha desmarcada viaja como exclusão (sem lista de ids).
+    const body = (await confirm).postDataJSON() as Record<string, unknown>;
+    expect(body.select_all_eligible).toBe(true);
+    expect(body.excluded_item_ids).toEqual(["10000000-0000-4000-8000-000000000001"]);
+    expect(body).not.toHaveProperty("selected_item_ids");
     await expect(page.getByTestId("catalog-import-result")).toHaveAttribute("data-outcome", "success");
   });
 
