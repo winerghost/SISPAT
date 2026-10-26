@@ -21,6 +21,8 @@ import { apiClient, ApiError } from "@/lib/api-client";
 const BASE_PATH = "/v1/imports/google-sheets";
 /** Timeout do cliente para a prévia: acima do teto do backend (~120 s). */
 const PREVIEW_TIMEOUT_MS = 150_000;
+/** Confirmação em lotes: acima do timeout do gunicorn (180 s). */
+const CONFIRM_TIMEOUT_MS = 200_000;
 
 export type ImportItemClassification =
   | "NOVO"
@@ -186,7 +188,9 @@ export function getGoogleSheetsPreviewItems(
 export function confirmGoogleSheetsImport(
   payload: ImportConfirmRequest,
 ): Promise<ImportConfirmResponse> {
-  return apiClient.post<ImportConfirmResponse>(`${BASE_PATH}/confirm`, payload);
+  return apiClient.post<ImportConfirmResponse>(`${BASE_PATH}/confirm`, payload, {
+    timeoutMs: CONFIRM_TIMEOUT_MS,
+  });
 }
 
 /** `GET /api/v1/imports/google-sheets/{preview_id}/pending` — contadores de pendências de vínculo. */

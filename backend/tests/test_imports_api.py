@@ -332,6 +332,34 @@ def test_confirm_adm_com_permissao_sucesso_200(client):
     )
 
 
+def test_confirm_corpo_da_tela_sem_selected_item_ids_retorna_200(client):
+    """Regressao: a tela envia so select_all_eligible + excluded_item_ids."""
+    token = _make_token()
+    preview_id = uuid.uuid4()
+    excluded = uuid.uuid4()
+    mock_service = MagicMock()
+    mock_service.confirm_preview.return_value = {
+        "sync_job_id": uuid.uuid4(), "status": "CONCLUIDO", "created": 1, "updated": 0,
+        "ignorados": 0, "inalterados": 0,
+        "nao_gravados": {"total": 0, "por_classificacao": {}, "por_motivo": {}, "nao_selecionados": 0},
+        "pendencias_vinculo": {}, "falhas_total": 0, "falhas": [],
+    }
+    patches = _patch_db_and_service(mock_service)
+    with _patch_authenticated(role_codes={"ADM"}, permission_codes={"imports.execute"}) as user:
+        with patches[0], patches[1], patches[2]:
+            response = client.post(
+                CONFIRM_URL,
+                json={"preview_id": str(preview_id), "select_all_eligible": True,
+                      "excluded_item_ids": [str(excluded)]},
+                headers=_auth_headers(token),
+            )
+    assert response.status_code == 200
+    mock_service.confirm_preview.assert_called_once_with(
+        preview_id=preview_id, confirmed_by_user_id=user.id, selected_item_ids=[],
+        select_all_eligible=True, excluded_item_ids=[excluded],
+    )
+
+
 def test_confirm_preview_inexistente_retorna_404(client):
     token = _make_token()
     mock_service = MagicMock()

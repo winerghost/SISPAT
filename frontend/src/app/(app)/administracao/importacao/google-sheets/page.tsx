@@ -353,6 +353,12 @@ function confirmErrorMessage(error: unknown): string {
     if (error.status === 409) {
       return "Esta prévia expirou. Gere uma nova pré-visualização.";
     }
+    if (error.status === 0 || error.status === 504 || error.status === 524) {
+      return "A confirmação demorou e pode ter sido concluída. Confira a reconciliação antes de tentar de novo.";
+    }
+    if (error.status === 400) {
+      return "A confirmação foi recusada por dados inválidos. Gere uma nova pré-visualização.";
+    }
     if (error.status === 502) {
       return "Falha ao comunicar com o Google Sheets durante a confirmação. Tente novamente.";
     }

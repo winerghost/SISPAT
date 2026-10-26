@@ -121,7 +121,7 @@ class ConfirmImportRequest(_StrictModel):
     """Corpo de `POST /api/v1/imports/google-sheets/confirm`."""
 
     preview_id: uuid.UUID
-    selected_item_ids: list[uuid.UUID] = Field(max_length=10000)
+    selected_item_ids: list[uuid.UUID] = Field(default_factory=list, max_length=10000)
     # Seleção no SERVIDOR: confirma todos os NOVO/EXISTENTE da prévia (menos
     # `excluded_item_ids`), independentemente das páginas que a tela carregou.
     # Sem isso a tela só enviava os ids das páginas já visitadas (50 por vez).
