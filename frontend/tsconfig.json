@@ -47,9 +47,10 @@
     ".next-qa-prod/types/**/*.ts",
     ".next-qa/types/**/*.ts",
     ".next-qa2/types/**/*.ts",
+    ".next-qa2d/types/**/*.ts",
     ".next/types/**/*.ts",
     "next-env.d.ts",
-    ".next-qa2d/types/**/*.ts"
+    ".next-ua/types/**/*.ts"
   ],
   "exclude": [
     "node_modules"

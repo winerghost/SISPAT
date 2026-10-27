@@ -2,6 +2,7 @@ import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
 
 import { installMocks, seedSession, waitForHydration, type MockOptions, type MockState } from "./support/mocks";
+import { waitForAnimations } from "./support/screens";
 import { defaultUnitAccess } from "./support/unit-access-mocks";
 
 
@@ -238,6 +239,8 @@ test.describe("responsivo e acessibilidade", () => {
       await open(page);
       await expect(page.getByRole("table", { name: TABLE })).toBeVisible();
       await expectNoHorizontalOverflow(page);
+      // A entrada escalonada das linhas (fade) termina antes do axe medir contraste.
+      await waitForAnimations(page);
       expect(await axeViolations(page)).toEqual([]);
     });
   }

@@ -9,6 +9,7 @@ import {
   type MockOptions,
   type MockState,
 } from "./support/mocks";
+import { waitForAnimations } from "./support/screens";
 import {
   auditUrlQuery,
   dayEndUtc,
@@ -360,11 +361,13 @@ test.describe("responsivo e acessibilidade", () => {
       await open(page);
       await expect(page.getByRole("table", { name: TABLE })).toBeVisible();
       await expectNoHorizontalOverflow(page);
+      await waitForAnimations(page);
       expect(await axeViolations(page)).toEqual([]);
 
       await page.getByRole("button", { name: /^Ver detalhes do registro USER_ROLE_CHANGED/ }).first().click();
       await expect(page.getByTestId("audit-detail")).toBeVisible();
       await expectNoHorizontalOverflow(page);
+      await waitForAnimations(page);
       expect(await axeViolations(page)).toEqual([]);
     });
   }

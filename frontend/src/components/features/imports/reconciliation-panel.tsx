@@ -163,7 +163,7 @@ export function ReconciliationPanel({ previewId }: { previewId: string }) {
               </div>
             ) : null}
 
-            <Table busy={report.isFetching} aria-label="Itens não importados">
+            <Table busy={report.isFetching} aria-label="Itens não importados" regionLabel="Itens não importados (rolável)">
               <TableHeader>
                 <TableRow className="hover:bg-transparent focus-within:bg-transparent">
                   <TableHead>Linha</TableHead>

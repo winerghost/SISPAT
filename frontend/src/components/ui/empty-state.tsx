@@ -23,6 +23,12 @@ export interface EmptyStateProps {
   /** "panel" (padrão): com borda; "plain": sem borda (ex.: dentro de tabela). */
   variant?: "panel" | "plain";
   className?: string;
+  /**
+   * Entrada por fade (padrão). Desligue onde o texto precisa estar com contraste
+   * pleno desde o primeiro quadro (ex.: dentro de tabelas, recarregadas a cada
+   * filtro) — durante o fade o contraste efetivo cai (WCAG 1.4.3).
+   */
+  animated?: boolean;
 }
 
 export function EmptyState({
@@ -32,9 +38,11 @@ export function EmptyState({
   action,
   variant = "panel",
   className,
+  animated = true,
 }: EmptyStateProps) {
   return (
     <FadeIn
+      disabled={!animated}
       className={cn(
         "flex flex-col items-center gap-2 px-4 py-8 text-center",
         variant === "panel" && "rounded-cards border border-dashed border-ash-stroke",

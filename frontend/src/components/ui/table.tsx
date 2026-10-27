@@ -173,7 +173,7 @@ function TableEmpty({ colSpan, ...props }: EmptyStateProps & { colSpan: number }
   return (
     <tr>
       <td colSpan={colSpan} className="p-0">
-        <EmptyState variant="plain" {...props} />
+        <EmptyState variant="plain" animated={false} {...props} />
       </td>
     </tr>
   );
