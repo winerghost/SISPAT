@@ -12,6 +12,7 @@ import json
 import uuid
 from unittest.mock import MagicMock
 
+from app.services.asset_classification import apply_equipment_classification
 from app.services.import_service import (
     _VERSION_AT_PREVIEW_KEY,
     MAX_LISTED_FAILURES,
@@ -93,6 +94,10 @@ def test_existente_sem_diferenca_conta_inalterado_e_nao_incrementa_version() -> 
     asset.source_system = "google_sheets"
     asset.source_record_id = item.source_record_id
     asset.asset_category = "MOBILIARIO"  # já classificado: a regra não age
+    # Família/categoria (motor `classify_equipment`) já materializada: sem ela
+    # o sync RECLASSIFICA o bem e o item conta como atualizado (ver
+    # tests/test_asset_classification_equipment_sync.py).
+    apply_equipment_classification(asset, asset.description)
     result = _confirm(preview, [item], [[asset]], [item])
     assert result["status"] == "CONCLUIDO"
     assert result["created"] == 0 and result["updated"] == 0 and result["inalterados"] == 1

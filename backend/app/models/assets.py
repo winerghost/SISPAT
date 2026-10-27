@@ -105,6 +105,58 @@ class Asset(TimestampMixin, Base):
             postgresql_where=text("deleted_at IS NULL AND asset_category IS NOT NULL"),
             sqlite_where=text("deleted_at IS NULL AND asset_category IS NOT NULL"),
         ),
+        # Classificação família/categoria (migração 0018_equipment_classification).
+        # Vocabulário fechado em `app.services.asset_classification` (20
+        # categorias em 3 famílias); NULL = "não informado", nunca fictício.
+        CheckConstraint(
+            "equipment_family IS NULL OR equipment_family IN "
+            "('TI','MOBILIARIO','OUTROS')",
+            name="ck_assets_equipment_family",
+        ),
+        # Cada categoria pertence a exatamente uma família.
+        CheckConstraint(
+            "equipment_category IS NULL OR ("
+            "(equipment_family = 'TI' AND equipment_category IN "
+            "('COMPUTADOR','NOTEBOOK','MONITOR','IMPRESSORA','NOBREAK','ESTABILIZADOR','DOCKING','REDE','OUTRO_TI'))"
+            " OR (equipment_family = 'MOBILIARIO' AND equipment_category IN "
+            "('MESA','ARMARIO','GAVETEIRO','ESTACAO_TRABALHO','CADEIRA','POLTRONA','SOFA','ESTANTE','OUTRO_MOB'))"
+            " OR (equipment_family = 'OUTROS' AND equipment_category IN "
+            "('EQUIPAMENTO','OUTROS')))",
+            name="ck_assets_equipment_category",
+        ),
+        CheckConstraint(
+            "classification_confidence IS NULL OR classification_confidence IN "
+            "('ALTA','BAIXA')",
+            name="ck_assets_classification_confidence",
+        ),
+        # Override do ADM: qualquer das 20 categorias, independente da família
+        # (a família efetiva é derivada da categoria no serviço).
+        CheckConstraint(
+            "category_override IS NULL OR category_override IN "
+            "('COMPUTADOR','NOTEBOOK','MONITOR','IMPRESSORA','NOBREAK','ESTABILIZADOR','DOCKING','REDE','OUTRO_TI',"
+            "'MESA','ARMARIO','GAVETEIRO','ESTACAO_TRABALHO','CADEIRA','POLTRONA','SOFA','ESTANTE','OUTRO_MOB',"
+            "'EQUIPAMENTO','OUTROS')",
+            name="ck_assets_category_override",
+        ),
+        CheckConstraint(
+            "classification_rule IS NULL OR (char_length(classification_rule) BETWEEN 1 AND 64"
+            " AND classification_rule = trim(classification_rule))",
+            name="ck_assets_classification_rule_len",
+        ),
+        CheckConstraint(
+            "classification_rules_version IS NULL OR"
+            " (char_length(classification_rules_version) BETWEEN 1 AND 16"
+            " AND classification_rules_version = trim(classification_rules_version))",
+            name="ck_assets_classification_rules_version_len",
+        ),
+        Index(
+            "ix_assets_equipment_active",
+            "equipment_family",
+            "equipment_category",
+            "unit_id",
+            postgresql_where=text("deleted_at IS NULL AND equipment_category IS NOT NULL"),
+            sqlite_where=text("deleted_at IS NULL AND equipment_category IS NOT NULL"),
+        ),
         # SEC-AST-01: o índice único parcial `uq_assets_patrimony_number_active`
         # (lower(btrim(patrimony_number)) WHERE deleted_at IS NULL) existe só na
         # migração 0009_uniq_idx_assets_movements. NÃO é declarado aqui
@@ -128,6 +180,18 @@ class Asset(TimestampMixin, Base):
     asset_category: Mapped[str | None] = mapped_column(Text, nullable=True)
     tech_type: Mapped[str | None] = mapped_column(Text, nullable=True)
     operational_status: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Motor de classificação família/categoria (`classify_equipment`):
+    # determinístico e reproduzível. `classification_rule` e
+    # `classification_rules_version` registram QUAL regra decidiu e com qual
+    # versão do conjunto de regras (auditabilidade da reclassificação).
+    equipment_family: Mapped[str | None] = mapped_column(Text, nullable=True)
+    equipment_category: Mapped[str | None] = mapped_column(Text, nullable=True)
+    classification_confidence: Mapped[str | None] = mapped_column(Text, nullable=True)
+    classification_rule: Mapped[str | None] = mapped_column(Text, nullable=True)
+    classification_rules_version: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Override manual do ADM: quando preenchido PREVALECE sobre a regra, e o
+    # motor (importação e backfill) nunca escreve nem sobrescreve esta coluna.
+    category_override: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     unit_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("units.id", ondelete="RESTRICT"), nullable=False

@@ -132,7 +132,7 @@ def test_db_alembic_revision_chain_is_linear() -> None:
     down_targets = [d for d in revisions.values() if d is not None]
     assert len(down_targets) == len(set(down_targets)), "ramificação (branch) de revisões"
     heads = set(revisions) - set(down_targets)
-    assert heads == {"0016_asset_search_key"}, heads
+    assert heads == {"0018_equipment_classification"}, heads
 
 
 def test_db_alembic_revision_ids_cabem_em_alembic_version() -> None:
@@ -210,12 +210,14 @@ def hardening() -> ModuleType:
 
 def test_db_hardening_covers_every_model_table_with_rls(hardening) -> None:
     # Tabelas criadas depois da 0004 têm RLS habilitado na própria migração
-    # que as cria (0005: NEW_TABLES); ver testes da 0005 abaixo.
+    # que as cria (0005/0007/0017: NEW_TABLES); ver os testes dessas migrações
+    # (0017: backend/tests/test_dashboard_panels_db.py).
     settings_mig = _load_module(SETTINGS_PY)
     covered = (
         set(hardening.APP_TABLES)
         | set(settings_mig.NEW_TABLES)
         | set(_load_module(ALIASES_PY).NEW_TABLES)
+        | set(_load_module(VERSIONS_DIR / "0017_dashboard_panel_prefs.py").NEW_TABLES)
     )
     model_tables = set(Base.metadata.tables)
     assert model_tables <= covered, model_tables - covered

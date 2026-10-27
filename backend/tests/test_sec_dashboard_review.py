@@ -285,10 +285,15 @@ def test_servico_de_tecnologia_sem_sql_textual():
 def test_rotas_novas_sem_unit_id_vindo_do_cliente():
     src = (ROOT / "backend/app/api/v1/dashboard.py").read_text(encoding="utf-8")
     assert "request.args.get" not in src and "request.json" not in src
-    # + 6 painéis de Tecnologia (`reports.read`) e a exportação (`exports.create`)
-    assert src.count('\n@require_permission("reports.read")') == len(ENDPOINTS) + 6
+    # + 6 painéis de Tecnologia (`reports.read`), a exportação
+    # (`exports.create`) e as 2 rotas de "Personalizar painéis"
+    # (`GET /dashboard/panels` e `PUT /dashboard/preferences`, `reports.read`).
+    panel_routes = 2
+    assert src.count('\n@require_permission("reports.read")') == (
+        len(ENDPOINTS) + 6 + panel_routes
+    )
     assert src.count('\n@require_permission("exports.create")') == 1
-    assert src.count("\n@require_aal2_for_adm") == len(ENDPOINTS) + 7
+    assert src.count("\n@require_aal2_for_adm") == len(ENDPOINTS) + 7 + panel_routes
     assert src.count("\n@require_auth") == src.count("\n@dashboard_bp.route")
 
 

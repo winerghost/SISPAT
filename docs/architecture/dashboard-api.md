@@ -166,3 +166,125 @@ Painéis de layout novos (`dashboard_layout`): `tech_summary`, `tech_category`,
 `tech_units`, `tech_status`, `tech_no_owner`, `tech_age` (ao fim da ordem padrão; 15 ids no
 total). O CHECK de tamanho de `dashboard_layout` (1024 bytes) comporta o pior caso (cerca de
 600 bytes): não foi alterado.
+
+## Personalizar painéis (`GET /dashboard/panels`, `PUT /dashboard/preferences`)
+
+Substitui integralmente a personalização antiga de 15 ids em
+`user_preferences.dashboard_layout` (que permanece aceita em
+`PATCH /api/v1/me/preferences` só durante a transição; ver abaixo).
+
+**Catálogo e permissões vivem no BACKEND** (`app.services.dashboard_panels_service`):
+12 painéis, com rótulo, descrição, grupo, tamanhos admitidos (`P`/`M`/`G`),
+tamanho padrão e sinalização de exportação. O frontend nunca decide o que um
+perfil pode ver: ele pede o catálogo e desenha o que vier.
+
+| Id | Painel | Perfis | Tamanhos | Padrão |
+|---|---|---|---|---|
+| `kpi_workstations` | Postos de trabalho (Computadores, Notebooks, Monitores) | ADM/USER/RH | P M G | G |
+| `kpi_infrastructure` | Infraestrutura de TI (Impressoras, Nobreaks, Estabilizadores, Docking) | ADM/USER/RH | P M G | G |
+| `kpi_furniture` | Mobiliário (Gaveteiros, Armários, Mesas, Estações) | ADM/USER/RH | P M G | G |
+| `equipment_by_unit_table` | Equipamentos de TI por unidade (exportação) | ADM/USER/RH | M G | G |
+| `furniture_by_unit_table` | Mobiliário por unidade (exportação) | ADM/USER/RH | M G | G |
+| `equipment_by_unit_chart` | Equipamentos por unidade (barras agrupadas) | ADM/USER/RH | P M G | G |
+| `category_distribution` | Distribuição percentual por família/categoria | ADM/USER/RH | P M G | M |
+| `notebooks_without_docking` | Notebooks sem docking station, por unidade | ADM/USER | P M G | M |
+| `workstation_ratio` | Monitores por computador/notebook | ADM/USER | P M G | P |
+| `unclassified_review` | Pendentes de revisão (OUTROS + BAIXA) | ADM | M G | M |
+| `classification_overrides` | Últimas correções manuais de categoria | ADM | M G | M |
+| `sync_status` | Última sincronização do Sheets e divergências | ADM | P M G | P |
+
+Total por perfil: **ADM 12, USER 9, RH 7**. Papel desconhecido/ausente -> nenhum
+painel (negar por padrão).
+
+### `GET /api/v1/dashboard/panels`
+
+`require_auth -> require_aal2_for_adm -> require_permission("reports.read") ->
+rate_limit` (`LIST_LIMIT`, 1200/h por usuário), `Cache-Control: no-store`,
+qualquer parâmetro de consulta -> 400. Devolve SÓ os painéis do perfil do JWT,
+o layout padrão do perfil e as preferências efetivas (sem criar linha):
+
+```json
+{
+  "panels": [
+    {"id": "kpi_workstations", "label": "Postos de trabalho",
+     "description": "Cartões de Computadores, Notebooks e Monitores.",
+     "group": "indicadores", "sizes": ["P","M","G"],
+     "default_size": "G", "exportable": false}
+  ],
+  "sizes": ["P", "M", "G"],
+  "default_layout": [{"id": "kpi_workstations", "visible": true, "size": "G"}],
+  "preferences": {
+    "panels": [{"id": "kpi_workstations", "visible": true, "size": "G"}],
+    "version": 0
+  }
+}
+```
+
+`preferences.panels` é SEMPRE a lista completa e ordenada dos painéis do
+perfil (ordem do array = ordem de exibição). `version = 0` significa "sem
+linha salva" (o primeiro `PUT` usa `version: 0`). O campo `roles` do catálogo
+nunca é exposto.
+
+### `PUT /api/v1/dashboard/preferences`
+
+Mesmos decorators, limite de 60 gravações/h por usuário,
+`Cache-Control: no-store`. Corpo `extra="forbid"`; `user_id` NUNCA vem do
+cliente (o alvo é sempre o usuário do JWT; tentativa -> 400 + evento
+`PRIVILEGE_ESCALATION_ATTEMPT`). Exatamente UM de `panels` ou
+`restore_default: true`:
+
+```json
+{"version": 3,
+ "panels": [{"id": "category_distribution", "visible": true, "size": "G"},
+            {"id": "kpi_workstations", "visible": false, "size": "P"}]}
+```
+
+```json
+{"version": 3, "restore_default": true}
+```
+
+Regras de `panels`: 1 a 12 itens, sem repetição; `id` da allowlist do catálogo
+(ids antigos como `kpis`/`tech_units` -> 400); `visible` booleano estrito;
+`size` na allowlist global **e** nos tamanhos admitidos do painel; ao menos um
+item visível. Painéis omitidos entram ao fim, visíveis, no tamanho padrão.
+
+Respostas: `200` com `{"panels": [...], "version": n}` (lista efetiva
+completa); `400 validation_error`; `403 panel_forbidden` quando um id do
+catálogo não é permitido ao perfil — rejeitado por inteiro (nada é gravado) e
+registrado em `audit_logs` (`DASHBOARD_PANEL_FORBIDDEN`, `result = FALHA`,
+`new_values = {rejected_panels, roles}`) na MESMA transação;
+`409 version_conflict` no controle otimista.
+
+Auditoria de sucesso: `DASHBOARD_PREFERENCES_UPDATED` (`entity_type =
+user_dashboard_preferences`) com `previous_values`/`new_values` contendo só
+ids, visibilidade, tamanho e versão — nunca dado pessoal.
+
+### Persistência e dado legado
+
+Tabela `user_dashboard_preferences` (migração `0017_dashboard_panel_prefs` +
+espelho `sql/0020`): `panels jsonb` (array ORDENADO de
+`{"id","visible","size"}`; `[]` = layout padrão do perfil), `version`
+(controle otimista) e `created_at`/`updated_at` em timestamptz (UTC). RLS
+habilitado sem políticas (deny-all) e sem grants para `anon`/`authenticated`.
+
+Qualquer conteúdo inválido no banco (id fora do catálogo, id antigo, tamanho
+inválido, painel que o perfil perdeu, tipo errado, todos invisíveis) é
+ignorado e cai no padrão do perfil — **nunca** gera erro.
+
+Migração das escolhas antigas (`user_preferences.dashboard_layout`), feita
+pela migração e também em tempo de leitura enquanto não houver linha nova:
+
+| Id antigo | Id novo |
+|---|---|
+| `kpis` | `kpi_workstations` |
+| `tech_summary` | `kpi_infrastructure` |
+| `tech_units` | `equipment_by_unit_table` |
+| `units` | `equipment_by_unit_chart` |
+| `tech_category` | `category_distribution` |
+
+Os outros dez (`status`, `monthly`, `location`, `bond`, `pending`, `rooms`,
+`inventory`, `tech_status`, `tech_no_owner`, `tech_age`) são DESCARTADOS em
+silêncio. A linha de `user_preferences` NÃO é apagada e `dashboard_layout`
+continua aceito em `PATCH /api/v1/me/preferences` (junto com densidade,
+escala e `dashboard_charts`) durante a transição — a tela nova deve usar
+apenas as rotas acima.

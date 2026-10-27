@@ -327,3 +327,29 @@ com autorização explícita (aplicar o espelho `sql/0018` e depois `alembic sta
 0015_asset_tech_classification`). Sem a migração aplicada, os seis blocos mostram erro
 isolado ("Tentar novamente"); o restante do dashboard segue normal. Depois de aplicada,
 rodar `flask classify-assets` (dry-run) e, se aprovado, `flask classify-assets --apply`.
+
+## Catálogo novo de painéis (2026-10-27) — substitui os 15 ids antigos
+
+O que o usuário personaliza passa a ser um catálogo de **12 painéis** definido
+no BACKEND, com permissão por perfil (ADM 12, USER 9, RH 7) e **tamanho por
+painel** (`P`, `M`, `G`), além de visibilidade e ordem. A tela deve:
+
+1. chamar `GET /api/v1/dashboard/panels` e desenhar SÓ o que vier (nunca
+   decidir perfil no cliente, nunca manter uma lista de ids no frontend);
+2. usar `panels[].label`/`description` como rótulo e ajuda, `panels[].sizes`
+   para oferecer só os tamanhos admitidos daquele painel e
+   `preferences.panels` (lista completa e ordenada) como estado inicial;
+3. salvar com `PUT /api/v1/dashboard/preferences` enviando a lista completa
+   (`version` do `GET`; `409` = recarregar) e oferecer "Restaurar padrão"
+   com `{"version": n, "restore_default": true}`.
+
+Painéis exclusivos de ADM (`unclassified_review`, `classification_overrides`,
+`sync_status`) e de ADM/USER (`notebooks_without_docking`,
+`workstation_ratio`) simplesmente não aparecem no catálogo de quem não pode
+vê-los; enviá-los devolve `403 panel_forbidden` e gera registro em
+`audit_logs`. O contrato exato (JSON de ida e volta, códigos de erro, mapa de
+migração das escolhas antigas) está em `docs/architecture/dashboard-api.md`.
+
+A personalização antiga (`user_preferences.dashboard_layout`, ordem +
+ocultos de 15 ids) continua aceita em `PATCH /api/v1/me/preferences` apenas
+durante a transição e é traduzida automaticamente para o catálogo novo.

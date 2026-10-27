@@ -28,7 +28,11 @@ from app.models.sync import RawImportRecord, SyncConflict, SyncJob  # noqa: F401
 from app.models.misc import ExportJob, SavedFilter  # noqa: F401,E402
 from app.models.imports import ImportPreview, ImportPreviewItem  # noqa: F401,E402
 from app.models.invites import Invite, InviteUnit  # noqa: F401,E402
-from app.models.settings import AISettings, UserPreferences  # noqa: F401,E402
+from app.models.settings import (  # noqa: F401,E402
+    AISettings,
+    UserDashboardPreferences,
+    UserPreferences,
+)
 
 __all__ = [
     "Base",
@@ -59,4 +63,5 @@ __all__ = [
     "InviteUnit",
     "AISettings",
     "UserPreferences",
+    "UserDashboardPreferences",
 ]

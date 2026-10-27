@@ -191,6 +191,32 @@ vhost).
   corrigido; SEC-VF-02 pendente; `certifi` 2026.10.19 aplicado em 2026-10-21).
 - **Importação de Bens:** só depois do deploy desta versão.
 
+### Catálogo de painéis do dashboard por perfil (2026-10-27)
+
+- **Catálogo novo de 12 painéis** (`app/services/dashboard_panels_service.py`),
+  com permissão por perfil **no backend** (ADM 12, USER 9, RH 7), rótulo,
+  tamanhos admitidos `P`/`M`/`G` e tamanho padrão. Substitui a allowlist
+  antiga de 15 ids de `user_preferences.dashboard_layout`.
+- Rotas: `GET /api/v1/dashboard/panels` (catálogo do perfil + layout padrão +
+  preferências salvas, `no-store`) e `PUT /api/v1/dashboard/preferences`
+  (visibilidade, ordem, tamanho, `restore_default`; `extra="forbid"`,
+  controle otimista -> 409; painel proibido ao perfil -> 403 auditado).
+  Contrato completo: `docs/architecture/dashboard-api.md`.
+- Tabela `user_dashboard_preferences` (migração `0017_dashboard_panel_prefs`,
+  espelho `backend/migrations/sql/0020_dashboard_panel_prefs.sql`): **DDL
+  aplicado à mão no Supabase em 2026-10-27, com autorização explícita** (RLS
+  sem políticas, sem grants para `anon`/`authenticated`, 0 linhas). Carimbo já
+  feito: o `alembic_version` está em `0018_equipment_classification`, que
+  sucede esta revisão na cadeia linear — não rodar `alembic upgrade` sobre
+  ela.
+- As escolhas antigas são traduzidas (`kpis`->`kpi_workstations`,
+  `units`->`equipment_by_unit_chart`, `tech_summary`->`kpi_infrastructure`,
+  `tech_category`->`category_distribution`, `tech_units`->
+  `equipment_by_unit_table`); os outros dez ids são descartados. A linha de
+  `user_preferences` não é apagada e `PATCH /api/v1/me/preferences` continua
+  aceitando `dashboard_layout` durante a transição.
+- Rebuild: backend (frontend só quando a tela nova consumir as rotas).
+
 ### Painéis de Tecnologia no dashboard (2026-10-22)
 
 - Seis painéis novos (`/dashboard/tecnologia/*`: indicadores, categoria, por unidade,

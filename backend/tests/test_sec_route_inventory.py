@@ -119,6 +119,11 @@ EXPECTED_POLICY: dict[tuple[str, str], tuple[str, str | None]] = {
     ("/api/v1/ai/ask", "POST"): (AAL2, "ai.use"),
     ("/api/v1/dashboard/alerts", "GET"): (AUTH, None),
     ("/api/v1/dashboard/alerts", "HEAD"): (AUTH, None),
+    # "Personalizar painéis": catálogo filtrado por perfil e preferências do
+    # PRÓPRIO usuário (user_id sempre do JWT).
+    ("/api/v1/dashboard/panels", "GET"): (READ, "reports.read"),
+    ("/api/v1/dashboard/panels", "HEAD"): (READ, "reports.read"),
+    ("/api/v1/dashboard/preferences", "PUT"): (READ, "reports.read"),
     ("/api/v1/dashboard/resumo", "GET"): (READ, "reports.read"),
     ("/api/v1/dashboard/resumo", "HEAD"): (READ, "reports.read"),
     ("/api/v1/dashboard/por-unidade", "GET"): (READ, "reports.read"),

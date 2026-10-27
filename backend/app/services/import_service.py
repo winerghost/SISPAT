@@ -125,7 +125,12 @@ from app.models.assets import Asset
 from app.models.audit import AuditLog
 from app.models.imports import ImportPreview, ImportPreviewItem
 from app.security.text_search import contains_ci
-from app.services.asset_classification import apply_if_unclassified, classify_description
+from app.services.asset_classification import (
+    apply_equipment_classification,
+    apply_if_unclassified,
+    classify_description,
+    would_reclassify,
+)
 from app.services.pagination import DEFAULT_PAGE_SIZE, coerce_page_size, page_count
 from app.models.sync import RawImportRecord, SyncJob
 from app.services.patrimony_lock import (
@@ -464,6 +469,8 @@ class ImportService:
                 version=1,
             )
             apply_if_unclassified(asset, asset.description)  # só preenche; regra fechada
+            # Família/categoria: motor determinístico (sempre, no bem novo).
+            apply_equipment_classification(asset, asset.description)
             self._db.add(asset)
             self._db.flush()
             item.matched_asset_id = asset.id
@@ -510,6 +517,9 @@ class ImportService:
                 and asset.source_record_id == item.source_record_id
                 and (source_updated is None or _same_instant(source_updated, asset.source_updated_at))
                 and not would_classify(asset, new_description)
+                # Reclassificação família/categoria pendente (nova descrição ou
+                # nova versão das regras) também significa "mudou".
+                and not would_reclassify(asset, new_description)
             )
             if unchanged:
                 return None, 0, 0
@@ -517,8 +527,12 @@ class ImportService:
                 asset.description = item.description
             if bond is not None and bond != asset.bond_status:
                 asset.bond_status = bond
-            # Classificação: só quando ainda nula (nunca sobrescreve a existente).
+            # Classificação (vocabulário legado): só quando ainda nula (nunca
+            # sobrescreve a existente, inclusive a manual).
             apply_if_unclassified(asset, asset.description)
+            # Família/categoria: o sync RECLASSIFICA pela descrição atual, mas
+            # `category_override` do ADM sempre prevalece (nunca é escrito).
+            apply_equipment_classification(asset, asset.description)
             asset.source_system = "google_sheets"
             asset.source_record_id = item.source_record_id
             asset.source_updated_at = source_updated or now

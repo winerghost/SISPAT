@@ -6,6 +6,9 @@ Uso na VPS (container do backend):
     docker compose exec backend flask classify-assets            # dry-run (padrão)
     docker compose exec backend flask classify-assets --apply    # grava (autorização!)
     docker compose exec backend flask classify-assets --list-unclassified  # só leitura
+    docker compose exec backend flask classify-equipment          # dry-run (padrão)
+    docker compose exec backend flask classify-equipment --apply  # grava (autorização!)
+    docker compose exec backend flask classify-equipment --list-low-confidence  # só leitura
 
 Nenhum comando imprime dados de bens/pessoas, segredos ou a URL do banco.
 """
@@ -20,6 +23,8 @@ from app.database.session import get_db_session
 from app.services.asset_classification_backfill import (
     LIST_LIMIT_MAX,
     classify_existing_assets,
+    classify_existing_equipment,
+    list_low_confidence_equipment,
     list_unclassified_assets,
 )
 from app.services.import_preview_purge import (
@@ -111,6 +116,68 @@ def classify_assets_command(apply_changes: bool, list_unclassified: bool) -> Non
         click.echo("Dry-run: nada foi gravado. Use --apply para gravar.")
 
 
+@click.command("classify-equipment")
+@click.option(
+    "--apply",
+    "apply_changes",
+    is_flag=True,
+    default=False,
+    help="Grava a classificação família/categoria. Sem esta opção é dry-run "
+    "(só conta; nada é gravado).",
+)
+@click.option(
+    "--list-low-confidence",
+    "list_low_confidence",
+    is_flag=True,
+    default=False,
+    help="SOMENTE LEITURA: lista id e descrição (truncada) dos bens cuja "
+    "classificação ficou com confiança BAIXA. Incompatível com --apply.",
+)
+def classify_equipment_command(apply_changes: bool, list_low_confidence: bool) -> None:
+    """Classifica bens ativos por família/categoria (dry-run por padrão).
+
+    Respeita `category_override` (override do ADM prevalece e nunca é
+    escrito); bem sem descrição continua não classificado. Idempotente:
+    reexecutar com --apply não altera nada. Requer as colunas da migração
+    0018_equipment_classification (DDL aplicado no Supabase em 2026-10-27);
+    gravar (--apply) exige autorização explícita do usuário.
+    """
+    if list_low_confidence and apply_changes:
+        raise click.UsageError("--list-low-confidence é somente leitura e não combina com --apply.")
+    if list_low_confidence:
+        try:
+            with get_db_session() as db:
+                items = list_low_confidence_equipment(db)
+        except Exception as exc:  # transação já desfeita por get_db_session
+            logger.error("classify-equipment falhou: %s", type(exc).__name__)
+            raise click.ClickException(f"Falha ao listar bens ({type(exc).__name__}).") from None
+        for asset_id, description in items:
+            click.echo(f"{asset_id}\t{description}")
+        suffix = f" (limite de {LIST_LIMIT_MAX})" if len(items) >= LIST_LIMIT_MAX else ""
+        click.echo(f"Confiança BAIXA: {len(items)}{suffix}. Somente leitura: nada foi gravado.")
+        return
+    try:
+        with get_db_session() as db:
+            report = classify_existing_equipment(db, apply=apply_changes)
+    except Exception as exc:  # transação já desfeita por get_db_session
+        logger.error("classify-equipment falhou: %s", type(exc).__name__)
+        raise click.ClickException(f"Falha ao classificar bens ({type(exc).__name__}).") from None
+    verb = "seriam reclassificados" if report.dry_run else "reclassificados"
+    click.echo(
+        f"Bens candidatos: {report.candidates}; {verb}: {report.updated}; "
+        f"já atualizados: {report.unchanged}; confiança BAIXA: {report.low_confidence}; "
+        f"com override do ADM (intocados): {report.skipped_overridden}; "
+        f"sem descrição: {report.skipped_no_description}."
+    )
+    for name, count in sorted(report.by_family.items()):
+        click.echo(f"  {name}: {count}")
+    for name, count in sorted(report.by_category.items()):
+        click.echo(f"  cat/{name}: {count}")
+    if report.dry_run:
+        click.echo("Dry-run: nada foi gravado. Use --apply para gravar.")
+
+
 def register_cli(app: Flask) -> None:
     app.cli.add_command(purge_import_previews_command)
     app.cli.add_command(classify_assets_command)
+    app.cli.add_command(classify_equipment_command)

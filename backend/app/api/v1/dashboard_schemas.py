@@ -19,9 +19,23 @@ import uuid
 from datetime import date
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictBool,
+    StrictInt,
+    field_validator,
+    model_validator,
+)
 
 from app.api.v1.asset_schemas import LocatedStatus, clean_bond_status_filter
+from app.services.dashboard_panels_service import (
+    MAX_PANELS,
+    PANEL_IDS,
+    PANEL_SIZES,
+    PANELS_BY_ID,
+)
 from app.services.import_normalizer import BOND_STATUS_MAX
 
 MESES_MIN, MESES_MAX, MESES_DEFAULT = 1, 24, 6
@@ -39,6 +53,16 @@ InventarioFiltro = Literal["conferido", "nao_conferido", "encontrado", "nao_enco
 
 class _Query(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+
+class _StrictBody(BaseModel):
+    """Corpo de requisição: campo desconhecido -> 400 auditado (`parse_body`).
+
+    Sem `str_strip_whitespace`: um ID de painel com espaço (" kpi_...") deve
+    ser rejeitado, não normalizado (mesma política das allowlists `Literal`).
+    """
+
+    model_config = ConfigDict(extra="forbid")
 
 
 class DashboardNoQuery(_Query):
@@ -281,3 +305,80 @@ class InventarioOut(_Out):
 class TipoItem(_Out):
     value: str = Field(pattern=r"^(?:[A-Z0-9]{1,40}|NAO_CLASSIFICADO)$")
     count: StrictInt = Field(ge=1)
+
+
+# ---------------------------------------------------------------------------
+# "Personalizar painéis" — corpo de `PUT /api/v1/dashboard/preferences`
+#
+# O CATÁLOGO de painéis, os tamanhos admitidos por painel e as permissões por
+# perfil vivem em `app.services.dashboard_panels_service` (backend). Aqui só
+# a validação de FORMA (`extra="forbid"`, allowlists, limites): a permissão
+# por perfil é checada no serviço, que rejeita E audita.
+# ---------------------------------------------------------------------------
+
+
+class DashboardPanelPreference(_StrictBody):
+    """Um painel na lista enviada pelo cliente: id, visibilidade e tamanho."""
+
+    id: str = Field(min_length=1, max_length=64)
+    visible: StrictBool
+    size: str = Field(min_length=1, max_length=1)
+
+    @field_validator("id", mode="after")
+    @classmethod
+    def _id_in_catalog(cls, value: str) -> str:
+        if value not in PANEL_IDS:
+            raise ValueError("painel desconhecido")
+        return value
+
+    @field_validator("size", mode="after")
+    @classmethod
+    def _size_in_allowlist(cls, value: str) -> str:
+        if value not in PANEL_SIZES:
+            raise ValueError("tamanho inválido")
+        return value
+
+    @model_validator(mode="after")
+    def _size_allowed_for_panel(self) -> "DashboardPanelPreference":
+        panel = PANELS_BY_ID.get(self.id)
+        if panel is not None and self.size not in panel.sizes:
+            raise ValueError("tamanho não admitido para este painel")
+        return self
+
+
+class DashboardPreferencesRequest(_StrictBody):
+    """Corpo de `PUT /api/v1/dashboard/preferences`.
+
+    `version` obrigatório (0 = criar a primeira linha). Exatamente um de
+    `panels` (lista ordenada, sem repetição, até `MAX_PANELS` itens, com ao
+    menos um visível) ou `restore_default: true`. `user_id` e qualquer outro
+    campo nunca vêm do cliente (400 + evento em `parse_body`).
+    """
+
+    version: StrictInt = Field(ge=0, le=2_147_483_647)
+    panels: list[DashboardPanelPreference] | None = Field(default=None, max_length=MAX_PANELS)
+    restore_default: StrictBool | None = None
+
+    @field_validator("panels", mode="after")
+    @classmethod
+    def _no_duplicates(
+        cls, value: list[DashboardPanelPreference] | None
+    ) -> list[DashboardPanelPreference] | None:
+        if value is not None:
+            ids = [item.id for item in value]
+            if len(set(ids)) != len(ids):
+                raise ValueError("painel repetido")
+            if not value:
+                raise ValueError("informe ao menos um painel")
+            if not any(item.visible for item in value):
+                raise ValueError("ao menos um painel deve ficar visível")
+        return value
+
+    @model_validator(mode="after")
+    def _exactly_one_action(self) -> "DashboardPreferencesRequest":
+        restore = self.restore_default is True
+        if restore == (self.panels is not None):
+            raise ValueError("informe panels OU restore_default")
+        if self.restore_default is False:
+            raise ValueError("restore_default só aceita true")
+        return self

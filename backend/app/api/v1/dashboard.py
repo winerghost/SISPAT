@@ -27,6 +27,14 @@ Limite: `DASHBOARD_READ_LIMIT` por usuário/hora e POR ROTA (a chave do
 o dashboard usa o mesmo teto das listagens (`LIST_LIMIT`, 1200/h = 20/min). As
 consultas são agregadas, limitadas (top N) e sem PII.
 
+"Personalizar painéis" (catálogo e preferências de painel do PRÓPRIO usuário):
+`GET /dashboard/panels` devolve SÓ os painéis permitidos ao perfil do JWT
+(catálogo, permissões por perfil e tamanhos admitidos vivem no BACKEND, em
+`app.services.dashboard_panels_service`) e `PUT /dashboard/preferences` grava
+visibilidade, ordem e tamanho (`extra="forbid"`, controle otimista -> 409,
+painel proibido ao perfil -> 403 auditado). Mesmos decorators das leituras
+acima; `user_id` NUNCA vem do cliente.
+
 Nenhum dado pessoal é devolvido (só contagens e rótulos), inclusive para RH.
 Acessos sem autenticação são negados/auditados por `require_auth`.
 """
@@ -41,6 +49,8 @@ from app.api.v1.catalog_http import LIST_LIMIT, WINDOW, require_aal2_for_adm
 from app.api.v1.dashboard_schemas import (
     AquisicoesQuery,
     DashboardFilters,
+    DashboardNoQuery,
+    DashboardPreferencesRequest,
     InventarioOut,
     LocalizacaoUnidadeItem,
     PendenciasOut,
@@ -58,7 +68,7 @@ from app.api.v1.dashboard_schemas import (
     TipoItem,
     TechCountItem,
 )
-from app.api.v1.schemas import parse_query
+from app.api.v1.schemas import get_json_body, parse_body, parse_query
 from app.api.v1.user_admin_http import admin_rate_limit_key, error_response, validation_error
 from app.auth.supabase_auth import require_auth
 from app.authorization.rbac import require_permission
@@ -66,6 +76,11 @@ from app.authorization.security_events import get_request_id
 from app.database.session import get_db_session
 from app.security.rate_limit import rate_limit
 from app.services import dashboard_service, dashboard_tech_service
+from app.services.dashboard_panels_service import (
+    DashboardPanelsService,
+    PanelForbiddenError,
+    PanelPreferencesVersionConflictError,
+)
 from app.services.report_service import ReportError
 from app.services.alerts import evaluate_alerts
 
@@ -75,6 +90,7 @@ _ALERTS_LIMIT = 120
 TECH_EXPORT_LIMIT = 30  # exportações por usuário/hora (mesmo teto de /reports)
 _WINDOW_SECONDS = 3600
 DASHBOARD_READ_LIMIT = LIST_LIMIT
+PANELS_WRITE_LIMIT = 60  # gravações de "Personalizar painéis" por usuário/hora
 
 
 def _no_store(payload: Any):
@@ -308,3 +324,65 @@ def export_tech():
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Report-Rows"] = str(result.rows)
     return response
+
+
+# ---------------------------------------------------------------------------
+# "Personalizar painéis" (catálogo + preferências do PRÓPRIO usuário)
+#
+# `GET /dashboard/panels` devolve SÓ os painéis permitidos ao perfil do JWT
+# (catálogo e permissões no BACKEND; o frontend nunca decide), com rótulo,
+# tamanhos admitidos, o layout padrão do perfil e as preferências salvas.
+# `PUT /dashboard/preferences` grava visibilidade, ordem e tamanho. O alvo é
+# sempre o usuário do JWT: `user_id` NUNCA vem do cliente.
+# Contrato: docs/architecture/dashboard-api.md.
+# ---------------------------------------------------------------------------
+
+
+def _current_roles() -> set[str]:
+    return set(getattr(g, "current_user_roles", set()))
+
+
+@dashboard_bp.route("/dashboard/panels", methods=["GET"])
+@require_auth
+@require_aal2_for_adm
+@require_permission("reports.read")
+@rate_limit(admin_rate_limit_key, limit=DASHBOARD_READ_LIMIT, window_seconds=WINDOW)
+def get_panels():
+    try:
+        parse_query(DashboardNoQuery, request.args, context="dashboard.panels")
+    except BadRequest as exc:
+        return validation_error(exc)
+    with get_db_session() as db:
+        payload = DashboardPanelsService(db).view(g.current_user.id, _current_roles())
+    return _no_store(payload)
+
+
+@dashboard_bp.route("/dashboard/preferences", methods=["PUT"])
+@require_auth
+@require_aal2_for_adm
+@require_permission("reports.read")
+@rate_limit(admin_rate_limit_key, limit=PANELS_WRITE_LIMIT, window_seconds=WINDOW)
+def put_panel_preferences():
+    try:
+        changes = parse_body(
+            DashboardPreferencesRequest, get_json_body(), context="dashboard.preferences.update"
+        )
+    except BadRequest as exc:
+        return validation_error(exc)
+    user_id = g.current_user.id
+    roles = _current_roles()
+    forbidden: PanelForbiddenError | None = None
+    try:
+        with get_db_session() as db:
+            service = DashboardPanelsService(db, request_id=get_request_id())
+            try:
+                payload = service.update(user_id, roles, changes)
+            except PanelForbiddenError as exc:
+                # Rejeitado E auditado: o `with` COMITA o registro de auditoria
+                # (`DASHBOARD_PANEL_FORBIDDEN`) antes de responder 403.
+                forbidden = exc
+    except PanelPreferencesVersionConflictError as exc:
+        return error_response(exc.status_code, exc.code, exc.message)
+    if forbidden is not None:
+        return error_response(forbidden.status_code, forbidden.code, forbidden.message)
+    return _no_store(payload)

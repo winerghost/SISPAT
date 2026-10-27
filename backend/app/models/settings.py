@@ -1,6 +1,7 @@
 """Modelos de configuração: IA (linha única) e preferências de aparência por usuário.
 
-Tabelas: ai_settings, user_preferences (migração 0005_settings_ai_users).
+Tabelas: ai_settings, user_preferences (migração 0005_settings_ai_users) e
+user_dashboard_preferences (migração 0017_dashboard_panel_prefs).
 
 `ai_settings` NUNCA guarda chaves de API — elas vivem apenas em variáveis de
 ambiente do backend (ver `app.config.settings`). `features` é um objeto JSON
@@ -125,7 +126,47 @@ class UserPreferences(TimestampMixin, Base):
     )
     # `{"order": [...], "hidden": [...]}` só quando diferente do padrão
     # ({} = layout padrão); IDs de painel da allowlist no schema/serviço.
+    # LEGADO: substituído por `user_dashboard_preferences` (0017); mantido
+    # para a migração/tradução das escolhas antigas.
     dashboard_layout: Mapped[dict[str, Any]] = mapped_column(
         JSONB, nullable=False, server_default=text("'{}'")
+    )
+    version: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("1"))
+
+
+class UserDashboardPreferences(TimestampMixin, Base):
+    """Painéis do dashboard escolhidos por um usuário (0017_dashboard_panel_prefs).
+
+    `panels` é um ARRAY JSONB ORDENADO (a ordem do array é a ordem de
+    exibição) de objetos `{"id", "visible", "size"}`; `[]` significa "layout
+    padrão do perfil". O catálogo de IDs, as permissões por perfil e os
+    tamanhos admitidos (P/M/G) vivem só no backend
+    (`app.services.dashboard_panels_service`): o conteúdo é validado lá e no
+    schema Pydantic, nunca pelo cliente. `version` dá controle otimista e
+    `updated_at` é timestamptz (UTC).
+    """
+
+    __tablename__ = "user_dashboard_preferences"
+    __table_args__ = (
+        CheckConstraint(
+            "jsonb_typeof(panels) = 'array'",
+            name="ck_user_dashboard_preferences_panels_array",
+        ),
+        CheckConstraint(
+            "jsonb_array_length(panels) <= 32",
+            name="ck_user_dashboard_preferences_panels_count",
+        ),
+        CheckConstraint(
+            "octet_length(panels::text) <= 2048",
+            name="ck_user_dashboard_preferences_panels_size",
+        ),
+        CheckConstraint("version >= 1", name="ck_user_dashboard_preferences_version"),
+    )
+
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    panels: Mapped[list[Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'")
     )
     version: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("1"))
