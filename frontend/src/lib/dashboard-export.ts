@@ -40,6 +40,12 @@ export async function downloadTechExport(
   // Defesa: um 200 que não seja o arquivo esperado (ex.: página de proxy) não é salvo.
   if (!contentType.startsWith(TECH_EXPORT_MIME[format])) throw new ApiError("Resposta inesperada.", 502);
   const fileName = techExportFileName(format);
+  saveBlob(blob, fileName);
+  return fileName;
+}
+
+/** Entrega o Blob como download local (link temporário; URL revogada em 10 s). */
+export function saveBlob(blob: Blob, fileName: string): void {
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
@@ -50,5 +56,4 @@ export async function downloadTechExport(
   link.click();
   link.remove();
   window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
-  return fileName;
 }

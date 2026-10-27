@@ -288,3 +288,59 @@ silêncio. A linha de `user_preferences` NÃO é apagada e `dashboard_layout`
 continua aceito em `PATCH /api/v1/me/preferences` (junto com densidade,
 escala e `dashboard_charts`) durante a transição — a tela nova deve usar
 apenas as rotas acima.
+
+## Dados dos 12 painéis, fila de revisão e override (ONDA 2)
+
+Código: `app/api/v1/dashboard_equipment.py` (rotas), `app/services/dashboard_equipment_service.py`
+(painéis), `app/services/dashboard_classification_service.py` (fila, override, exportações).
+Política comum: só bens ativos, escopo de unidade (`asset_scope_clause`/`apply_unit_scope`, ADM sem
+bypass), `Cache-Control: no-store`, só contagens e rótulos (nenhum dado pessoal, nem para RH),
+`extra="forbid"` (400 sem eco). A categoria considerada é a EFETIVA: `category_override` prevalece
+sobre `equipment_category`; a família efetiva é derivada da categoria.
+
+| Método | Rota | Acesso | Resposta |
+|---|---|---|---|
+| GET | `/dashboard/panels/<panel_id>/data` | `require_auth -> require_aal2_for_adm -> reports.read` | `{panel_id, tipo, dados, filtros_aplicados}` |
+| GET | `/dashboard/panels/<panel_id>/export` | idem, `exports.create` | CSV/XLSX (só `equipment_by_unit_table`, `furniture_by_unit_table`) |
+| GET | `/dashboard/classificacao/revisao` | `require_auth -> require_role(ADM) -> require_aal2 -> reports.read` | fila paginada |
+| GET | `/dashboard/classificacao/revisao/export` | idem, `exports.create` | CSV/XLSX da fila |
+| POST | `/assets/<id>/category-override` | `require_auth -> require_role(ADM) -> require_aal2 -> assets.update` | bem (resumo) |
+
+Painel inexistente, malformado OU proibido ao perfil (catálogo `PANEL_CATALOG[...].roles`) => a MESMA
+resposta 404 `not_found` e o mesmo evento `ACCESS_DENIED`.
+
+Query dos painéis: `unit_id` (uuid), `familia` (`TI|MOBILIARIO|OUTROS|NAO_CLASSIFICADO`), `categoria`
+(20 categorias ou `NAO_CLASSIFICADO`). `unit_id` alheio == inexistente (resultado vazio).
+
+`dados` por painel (`tipo`):
+- `kpi_workstations|kpi_infrastructure|kpi_furniture` (`cartoes`): `{itens:[{id,label,value}], total}`
+  (cartões fixos, com zeros).
+- `equipment_by_unit_table|furniture_by_unit_table` (`tabela`): `{colunas:[{id,label}],
+  linhas:[{unidade,total,valores:{cat:n}}], total}`.
+- `equipment_by_unit_chart` (`grafico`): `{familia, familia_label, series, unidades (top 15 + "Outras",
+  soma exata), total}`; `familia` padrão `TI`.
+- `category_distribution` (`distribuicao`): `{total, familias:[{id,label,value,percentual}],
+  categorias:[{id,label,familia,value,percentual}]}`.
+- `notebooks_without_docking` (`ranking`, ADM/USER): `{metodo, notebooks, docking, sem_docking,
+  por_unidade}`. ESTIMATIVA por diferença de contagens (`max(notebooks - docking, 0)`): não há vínculo
+  notebook x docking no banco.
+- `workstation_ratio` (`razao`, ADM/USER): `{computadores, notebooks, monitores,
+  monitores_por_computador, monitores_por_notebook}` (`null` sem divisor).
+- `unclassified_review` (`fila`, ADM): `{total_pendentes, por_unidade}`.
+- `classification_overrides` (`lista`, ADM): `{total, por_categoria, recentes:[{asset_id,
+  patrimony_number, description, categoria_anterior, categoria_nova, em}]}` (da auditoria; sem autor).
+- `sync_status` (`status`, ADM): `{ultima_importacao|null, ultimo_job|null, conflitos_pendentes}`.
+
+Fila de revisão: bens com `equipment_category='OUTROS'`, `classification_confidence='BAIXA'` e sem
+override. Query: `page`, `page_size` (50/100/200), `unit_id`, `sort` (`patrimony_number`,
+`description`, `updated_at`, com `-`). Resposta: `{items:[{id, patrimony_number, description, unit_id,
+unidade, equipment_family, equipment_category, classification_confidence, classification_rule,
+version}], total, page, page_size, pages, categorias:[{id,label,familia,familia_label}]}`.
+
+Override: corpo `{category, version}` (`extra="forbid"`; `category` = uma das 20 categorias). Grava
+`category_override`, define `classification_confidence='ALTA'`, `version+1`, e registra
+`ASSET_CATEGORY_OVERRIDDEN` em `audit_logs` na mesma transação. Erros: 400 (validação / campo extra,
+com evento de segurança), 403 (não ADM / sem AAL2), 404 (alheio, inexistente ou excluído, idênticos),
+409 `version_conflict`. Repetir a mesma categoria é idempotente (sem gravação nem auditoria).
+Exportações: auditadas (`DASHBOARD_EQUIPMENT_EXPORTED`, `DASHBOARD_REVIEW_QUEUE_EXPORTED`), toda
+célula via `csv_safety`.

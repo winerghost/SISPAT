@@ -158,6 +158,16 @@ EXPECTED_POLICY: dict[tuple[str, str], tuple[str, str | None]] = {
     ("/api/v1/dashboard/tecnologia/tempo-registro", "HEAD"): (READ, "reports.read"),
     ("/api/v1/dashboard/tecnologia/export", "GET"): (READ, "exports.create"),
     ("/api/v1/dashboard/tecnologia/export", "HEAD"): (READ, "exports.create"),
+    # --- ONDA 2: dados dos 12 painéis (perfil checado no serviço; painel proibido == 404),
+    # fila de revisão de classificação (só ADM + AAL2) e exportações.
+    ("/api/v1/dashboard/panels/<panel_id>/data", "GET"): (READ, "reports.read"),
+    ("/api/v1/dashboard/panels/<panel_id>/data", "HEAD"): (READ, "reports.read"),
+    ("/api/v1/dashboard/panels/<panel_id>/export", "GET"): (READ, "exports.create"),
+    ("/api/v1/dashboard/panels/<panel_id>/export", "HEAD"): (READ, "exports.create"),
+    ("/api/v1/dashboard/classificacao/revisao", "GET"): (ADMIN, "reports.read"),
+    ("/api/v1/dashboard/classificacao/revisao", "HEAD"): (ADMIN, "reports.read"),
+    ("/api/v1/dashboard/classificacao/revisao/export", "GET"): (ADMIN, "exports.create"),
+    ("/api/v1/dashboard/classificacao/revisao/export", "HEAD"): (ADMIN, "exports.create"),
     ("/api/v1/units", "GET"): (ADMIN, "users.manage"),
     ("/api/v1/units", "HEAD"): (ADMIN, "users.manage"),
     ("/api/v1/users/<uuid:user_id>", "GET"): (ADMIN, "users.manage"),
@@ -210,6 +220,7 @@ EXPECTED_POLICY: dict[tuple[str, str], tuple[str, str | None]] = {
     ("/api/v1/assets/<uuid:asset_id>", "PATCH"): (SHARED_WRITE, "assets.update"),
     ("/api/v1/assets/<uuid:asset_id>/delete", "POST"): (ADMIN, "assets.delete"),
     ("/api/v1/assets/<uuid:asset_id>/restore", "POST"): (ADMIN, "assets.delete"),
+    ("/api/v1/assets/<uuid:asset_id>/category-override", "POST"): (ADMIN, "assets.update"),
     # --- Movimentações: leitura via `assets.read` (não há `movements.read`); solicitar/
     # cancelar compartilhados ADM/USER; aprovar/rejeitar só ADM + AAL2.
     # --- Relatórios/exportações: catálogo (`reports.read`) e arquivo (`exports.create`) ---

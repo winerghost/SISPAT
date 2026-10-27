@@ -386,3 +386,8 @@ def put_panel_preferences():
     if forbidden is not None:
         return error_response(forbidden.status_code, forbidden.code, forbidden.message)
     return _no_store(payload)
+
+
+# Dados dos 12 painéis, fila de revisão e exportações (rotas no mesmo blueprint;
+# importado no FIM para reaproveitar `_no_store`, `_current_roles` e os limites).
+from app.api.v1 import dashboard_equipment  # noqa: E402,F401

@@ -97,8 +97,10 @@ Decisões de design assumidas (documentadas para revisão futura):
       `RESPONSAVEL` (ex.: `Ocioso`) é só `vinculo_situacao`, nunca pessoa. Os
       vínculos são resolvidos na prévia (informativo, em `_links`) e
       RESOLVIDOS DE NOVO na confirmação (autoritativo). Itens EXISTENTE
-      continuam atualizando apenas descrição/origem (não sobrescrevem campos
-      editados manualmente).
+      atualizam descrição/origem e também unidade, unidade pertencente, sala,
+      responsável, localizado e data de registro vindos da planilha;
+      `notes` (editável na UI) nunca é sobrescrito e valor vazio/pendente
+      nunca apaga o atual.
     - Cada linha gera, no máximo, uma consulta a `assets` por classificação
       (pré-visualização) e mais uma na confirmação (revalidação) — não há
       consulta em lote (`IN (...)`) nesta fase. Para volumes grandes de
@@ -411,6 +413,34 @@ class ImportService:
         commit/rollback."""
         acquire_patrimony_lock(self._db, patrimony_number)
 
+    def _existing_link_changes(self, asset: Asset, item: ImportPreviewItem) -> dict[str, Any]:
+        """Campos de `assets` que a planilha altera num bem EXISTENTE.
+
+        A planilha é a fonte da verdade desses campos (unidade, sala,
+        responsável, localizado, data de registro). Valor vazio ou
+        não resolvido (pendência) NUNCA apaga o valor atual — mesma regra da
+        descrição. Só devolve o que difere do bem."""
+        nv = item.normalized_values or {}
+        links = self._resolve_links(nv)
+        candidates: dict[str, Any] = {}
+        if links.blocking is None and links.unit_id is not None:
+            candidates["unit_id"] = links.unit_id
+        candidates["owner_unit_id"] = links.owner_unit_id
+        candidates["room_id"] = links.room_id
+        candidates["responsible_person_id"] = links.responsible_person_id
+        located = nv.get("located_enum")
+        if located in ("SIM", "NAO"):
+            candidates["located"] = located
+        # `notes` fica de fora: é editável na UI e nunca é sobrescrito.
+        registration = _parse_iso_date(nv.get("registration_date"))
+        if registration is not None:
+            candidates["registration_date"] = registration
+        return {
+            attr: value
+            for attr, value in candidates.items()
+            if value is not None and value != getattr(asset, attr)
+        }
+
     def _apply_item(
         self, item: ImportPreviewItem, now: datetime, confirmed_by_user_id: uuid.UUID
     ) -> tuple[str | None, int, int]:
@@ -507,11 +537,13 @@ class ImportService:
                 (item.normalized_values or {}).get("source_updated_at_utc")
             )
             new_description = item.description if item.description else asset.description
+            link_changes = self._existing_link_changes(asset, item)
             # INALTERADO: nada que a planilha traga difere do bem. Não grava nem
             # incrementa `version` (idempotência: reimportar a mesma planilha é
             # no-op) e a resposta conta o item em `inalterados`, não em `updated`.
             unchanged = (
-                new_description == asset.description
+                not link_changes
+                and new_description == asset.description
                 and (bond is None or bond == asset.bond_status)
                 and asset.source_system == _IMPORT_SOURCE
                 and asset.source_record_id == item.source_record_id
@@ -527,6 +559,8 @@ class ImportService:
                 asset.description = item.description
             if bond is not None and bond != asset.bond_status:
                 asset.bond_status = bond
+            for attr, value in link_changes.items():
+                setattr(asset, attr, value)
             # Classificação (vocabulário legado): só quando ainda nula (nunca
             # sobrescreve a existente, inclusive a manual).
             apply_if_unclassified(asset, asset.description)

@@ -939,8 +939,8 @@ def test_db_0015_columns_checks_and_index(tech_migration) -> None:
     assert tech_migration.UPGRADE_STATEMENTS == (
         tech_migration.ADD_COLUMNS_SQL, tech_migration.ADD_CHECKS_SQL, tech_migration.CREATE_INDEX_SQL
     )
-    assert not re.search(r"ADD\s+COLUMN\s+(?!IF\s+NOT\s+EXISTS)", upgrade_sql)
-    assert not re.search(r"(UPDATE|DELETE|INSERT|TRUNCATE|DROP|GRANT)", upgrade_sql, re.IGNORECASE)
+    assert not re.search(r"\bADD\s+COLUMN\s+(?!IF\s+NOT\s+EXISTS)", upgrade_sql)
+    assert not re.search(r"\b(UPDATE|DELETE|INSERT|TRUNCATE|DROP|GRANT)\b", upgrade_sql, re.IGNORECASE)
 
 
 def test_db_0015_downgrade_only_removes_its_objects(tech_migration) -> None:

@@ -4,10 +4,11 @@ import { DashboardHeaderActions, DashboardView } from "@/components/features/das
 import { LoadingSkeleton } from "@/components/ui/loading-skeleton";
 
 // =============================================================================
-// /dashboard — indicadores patrimoniais (todos os perfis). Os números vêm do
-// backend (escopo por perfil/unidade decidido lá); nada é estimado aqui.
-// Filtros na URL (link compartilhável); "Imprimir relatório" leva os mesmos
-// filtros; "Personalizar painéis" salva quais painéis aparecem e a ordem. As partes que leem a URL ficam em <Suspense> (useSearchParams).
+// /dashboard — painéis do catálogo do backend (todos os perfis). Quais painéis,
+// a ordem, a visibilidade e o tamanho vêm do backend (escopo por perfil/unidade
+// decidido lá); os números são contagens do servidor, nada é estimado aqui.
+// "Personalizar painéis" grava a preferência; "Imprimir relatório" abre o
+// relatório imprimível.
 // =============================================================================
 
 export default function DashboardPage() {

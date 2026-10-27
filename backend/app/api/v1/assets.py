@@ -26,6 +26,7 @@ from app.api.v1.asset_schemas import (
     AssetListQuery,
     AssetUpdateRequest,
 )
+from app.api.v1.dashboard_schemas import CategoryOverrideRequest
 from app.api.v1.catalog_http import (
     ACTION_LIMIT,
     LIST_LIMIT,
@@ -49,6 +50,7 @@ from app.authorization.security_events import (
 )
 from app.database.session import get_db_session
 from app.security.rate_limit import rate_limit
+from app.services.dashboard_classification_service import override_category
 from app.services.asset_service import (
     AssetError,
     AssetFieldForbiddenError,
@@ -248,3 +250,27 @@ def restore_asset_endpoint(asset_id: uuid.UUID):
     except AssetError as exc:
         return _fail(exc, asset_id=asset_id, context="assets.restore")
     return jsonify(payload), 200
+
+
+@assets_bp.route("/<uuid:asset_id>/category-override", methods=["POST"])
+@require_auth
+@require_role("ADM")
+@require_aal2
+@require_permission("assets.update")
+@rate_limit(admin_rate_limit_key, limit=ACTION_LIMIT, window_seconds=WINDOW)
+def override_category_endpoint(asset_id: uuid.UUID):
+    """Override manual da categoria (só ADM + AAL2); `version` obrigatória, auditado."""
+    body, error = read_body(CategoryOverrideRequest, "assets.category_override")
+    if error is not None:
+        return error
+    try:
+        with get_db_session() as db:
+            payload = override_category(
+                db, g.current_user.id, asset_id, body.category, body.version,
+                request_id=get_request_id(),
+            )
+    except AssetError as exc:
+        return _fail(exc, asset_id=asset_id, context="assets.category_override")
+    response = jsonify(payload)
+    response.headers["Cache-Control"] = "no-store"
+    return response, 200

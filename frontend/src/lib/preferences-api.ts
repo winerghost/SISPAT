@@ -114,6 +114,154 @@ export function sameLayout(a: DashboardLayout, b: DashboardLayout): boolean {
   );
 }
 
+// --- Painéis do dashboard (catálogo de 12, ONDA 1 do backend) ----------------
+// `GET /v1/dashboard/panels` devolve SÓ os painéis que o perfil do JWT pode ver
+// (catálogo, layout padrão e preferências efetivas); `PUT /v1/dashboard/preferences`
+// grava visibilidade/ordem/tamanho ou restaura o padrão. O catálogo, os tamanhos
+// admitidos e as permissões são do BACKEND: aqui não há allowlist de ids, só
+// uma conferência defensiva da resposta contra o próprio catálogo recebido.
+
+export const PANEL_SIZES = ["P", "M", "G"] as const;
+export type PanelSize = (typeof PANEL_SIZES)[number];
+
+export function isPanelSize(value: unknown): value is PanelSize {
+  return typeof value === "string" && (PANEL_SIZES as readonly string[]).includes(value);
+}
+
+export interface PanelCatalogItem {
+  id: string;
+  label: string;
+  description: string;
+  group: string;
+  /** Tamanhos admitidos para ESTE painel (subconjunto de P/M/G). */
+  sizes: PanelSize[];
+  default_size: PanelSize;
+  exportable: boolean;
+}
+
+export interface PanelPref {
+  id: string;
+  visible: boolean;
+  size: PanelSize;
+}
+
+export interface DashboardPanelsData {
+  /** Catálogo permitido ao perfil (a ordem não é a de exibição). */
+  catalog: PanelCatalogItem[];
+  /** Layout padrão do perfil. */
+  defaultLayout: PanelPref[];
+  /** Preferências efetivas: lista COMPLETA e ordenada (ordem = exibição). */
+  panels: PanelPref[];
+  /** 0 = nunca gravada; enviar de volta no PUT. */
+  version: number;
+}
+
+const MAX_CATALOG = 64;
+const PANEL_ID_PATTERN = /^[a-z][a-z0-9_]{0,63}$/;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function text(value: unknown, max: number): string | null {
+  return typeof value === "string" && value.length <= max ? value : null;
+}
+
+function parseCatalogItem(value: unknown): PanelCatalogItem | null {
+  if (!isRecord(value)) return null;
+  const id = text(value.id, 64);
+  const label = text(value.label, 200);
+  const description = text(value.description ?? "", 500);
+  const group = text(value.group ?? "", 64);
+  if (!id || !PANEL_ID_PATTERN.test(id) || !label || description === null || group === null) return null;
+  if (!Array.isArray(value.sizes) || value.sizes.length === 0 || !value.sizes.every(isPanelSize)) return null;
+  const sizes = [...new Set(value.sizes)] as PanelSize[];
+  if (!isPanelSize(value.default_size) || !sizes.includes(value.default_size)) return null;
+  return {
+    id,
+    label,
+    description,
+    group,
+    sizes,
+    default_size: value.default_size,
+    exportable: value.exportable === true,
+  };
+}
+
+/**
+ * Lista ordenada de `{id, visible, size}` conferida contra o catálogo recebido.
+ * Painéis do catálogo ausentes entram ao fim, visíveis, no tamanho padrão (mesma
+ * regra do backend). Qualquer outra divergência = `null` (resposta inválida).
+ */
+export function parsePanelPrefs(value: unknown, catalog: readonly PanelCatalogItem[]): PanelPref[] | null {
+  if (!Array.isArray(value) || value.length > catalog.length) return null;
+  const byId = new Map(catalog.map((item) => [item.id, item]));
+  const seen = new Set<string>();
+  const out: PanelPref[] = [];
+  for (const raw of value) {
+    if (!isRecord(raw)) return null;
+    const item = typeof raw.id === "string" ? byId.get(raw.id) : undefined;
+    if (!item || seen.has(item.id) || typeof raw.visible !== "boolean") return null;
+    if (!isPanelSize(raw.size) || !item.sizes.includes(raw.size)) return null;
+    seen.add(item.id);
+    out.push({ id: item.id, visible: raw.visible, size: raw.size });
+  }
+  for (const item of catalog) {
+    if (!seen.has(item.id)) out.push({ id: item.id, visible: true, size: item.default_size });
+  }
+  return out.length > 0 && out.some((p) => p.visible) ? out : null;
+}
+
+function parseDashboardPanels(value: unknown): DashboardPanelsData | null {
+  if (!isRecord(value) || !Array.isArray(value.panels) || value.panels.length > MAX_CATALOG) return null;
+  const catalog: PanelCatalogItem[] = [];
+  for (const raw of value.panels) {
+    const item = parseCatalogItem(raw);
+    if (!item || catalog.some((c) => c.id === item.id)) return null;
+    catalog.push(item);
+  }
+  if (catalog.length === 0) return null;
+  const prefs = value.preferences;
+  if (!isRecord(prefs) || typeof prefs.version !== "number" || !Number.isSafeInteger(prefs.version) || prefs.version < 0) {
+    return null;
+  }
+  const defaultLayout = parsePanelPrefs(value.default_layout, catalog);
+  const panels = parsePanelPrefs(prefs.panels, catalog);
+  if (!defaultLayout || !panels) return null;
+  return { catalog, defaultLayout, panels, version: prefs.version };
+}
+
+/** Compara ordem, visibilidade e tamanho. */
+export function samePanelPrefs(a: readonly PanelPref[], b: readonly PanelPref[]): boolean {
+  return a.length === b.length && a.every((p, i) => p.id === b[i]!.id && p.visible === b[i]!.visible && p.size === b[i]!.size);
+}
+
+/** `GET /api/v1/dashboard/panels` — SÓ os painéis permitidos ao perfil do JWT. */
+export async function getDashboardPanels(): Promise<DashboardPanelsData> {
+  const data = parseDashboardPanels(await apiClient.get<unknown>("/v1/dashboard/panels"));
+  if (!data) throw new Error("Resposta de painéis inválida.");
+  return data;
+}
+
+/** Corpo do PUT: exatamente UM de `panels` ou `restore_default`. */
+export type DashboardPanelsUpdate =
+  | { version: number; panels: PanelPref[] }
+  | { version: number; restore_default: true };
+
+/** `PUT /api/v1/dashboard/preferences` — 400/403 panel_forbidden/409 version_conflict. */
+export async function updateDashboardPanels(
+  update: DashboardPanelsUpdate,
+  catalog: readonly PanelCatalogItem[],
+): Promise<{ panels: PanelPref[]; version: number }> {
+  const raw = await apiClient.put<unknown>("/v1/dashboard/preferences", update);
+  const panels = isRecord(raw) ? parsePanelPrefs(raw.panels, catalog) : null;
+  const version = isRecord(raw) ? raw.version : undefined;
+  if (!panels || typeof version !== "number" || !Number.isSafeInteger(version)) {
+    throw new Error("Resposta de painéis inválida.");
+  }
+  return { panels, version };
+}
+
 // --- Preferências -----------------------------------------------------------
 
 export interface MyPreferences {

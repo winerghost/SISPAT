@@ -1,359 +1,456 @@
 import AxeBuilder from "@axe-core/playwright";
-import { expect, test, type Locator, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page, type Route } from "@playwright/test";
 
-import {
-  DASHBOARD_PANEL_IDS,
-  defaultDashboardLayout,
-  installMocks,
-  seedSession,
-  waitForHydration,
-  type MockOptions,
-  type MockState,
-} from "./support/mocks";
-import {
-  DASHBOARD_CUSTOM_HIDDEN_BLOCKS,
-  DASHBOARD_CUSTOM_LAYOUT,
-  expectDashboardLoaded,
-  waitForAnimations,
-} from "./support/screens";
+import { installMocks, seedSession, waitForHydration, type MockOptions } from "./support/mocks";
+import { waitForAnimations } from "./support/screens";
 
 // =============================================================================
-// "Personalizar painéis" (preferência `dashboard_layout`). Contrato MOCKADO:
-//   GET  /api/v1/me/preferences -> dashboard_layout: {order: [15 ids], hidden: [ids]}
-//   PATCH {version, dashboard_layout: {order?, hidden?}} | {dashboard_layout: null}
-//   400 se esconder todos; 409 em conflito de versão.
-// Cobre: padrão, mover/ocultar por teclado (foco + anúncio), PATCH, estado
-// honesto (nada muda antes da confirmação), persistência, relatório com a
-// mesma ordem, restaurar, todos ocultos, 400, 409, backend anterior (sem a
-// chave), resposta inválida, painel oculto não consulta, axe e 320px.
+// "Personalizar painéis" — catálogo de 12 painéis (ONDA 3). Contrato MOCKADO
+// (espelha docs/architecture/dashboard-api.md):
+//   GET /api/v1/dashboard/panels        -> {panels, sizes, default_layout, preferences:{panels, version}}
+//   PUT /api/v1/dashboard/preferences   -> {version, panels} | {version, restore_default:true}
+//   400 sem painel visível/tamanho inválido; 403 panel_forbidden; 409 version_conflict.
+// O catálogo por perfil é decidido pelo mock (como o backend): a tela só renderiza.
+// Cobre: perfis ADM/USER/RH, teclado (foco + aria-live), arrastar, tamanho P/M/G,
+// salvar/restaurar/cancelar, estado honesto, 400/403/409, loading/erro/resposta
+// inválida, foco preso, Esc, axe e 320/768/1920px.
 // =============================================================================
 
 test.use({ viewport: { width: 1366, height: 900 } });
 
 const AXE_TAGS = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"];
-const PREFS_URL = (url: string) => url.endsWith("/v1/me/preferences");
-const BLOCK_OF: Record<string, string> = {
-  kpis: "indicadores",
-  units: "por-unidade",
-  status: "por-situacao",
-  monthly: "aquisicoes-mensais",
-  location: "localizacao-por-unidade",
-  bond: "por-vinculo",
-  pending: "pendencias-cadastro",
-  rooms: "por-sala",
-  inventory: "inventario",
-  tech_summary: "tecnologia-indicadores",
-  tech_category: "tecnologia-categoria",
-  tech_units: "tecnologia-por-unidade",
-  tech_status: "tecnologia-situacao",
-  tech_no_owner: "tecnologia-sem-responsavel",
-  tech_age: "tecnologia-tempo-registro",
-};
+const CORS = (route: Route) => ({
+  "access-control-allow-origin": route.request().headers()["origin"] ?? "*",
+  "access-control-allow-methods": "GET,POST,PUT,PATCH,DELETE,OPTIONS",
+  "access-control-allow-headers": route.request().headers()["access-control-request-headers"] ?? "authorization,content-type",
+  vary: "origin",
+});
 
-async function open(page: Page, opts: MockOptions = { role: "USER" }, path = "/dashboard"): Promise<MockState> {
-  const state = await installMocks(page, opts);
+type Size = "P" | "M" | "G";
+interface CatalogEntry {
+  id: string;
+  label: string;
+  description: string;
+  group: string;
+  sizes: Size[];
+  default_size: Size;
+  exportable: boolean;
+  roles: ("ADM" | "USER" | "RH")[];
+}
+
+const ALL: ("ADM" | "USER" | "RH")[] = ["ADM", "USER", "RH"];
+const CATALOG: CatalogEntry[] = [
+  { id: "kpi_workstations", label: "Postos de trabalho", description: "Cartões de Computadores, Notebooks e Monitores.", group: "indicadores", sizes: ["P", "M", "G"], default_size: "G", exportable: false, roles: ALL },
+  { id: "kpi_infrastructure", label: "Infraestrutura de TI", description: "Impressoras, Nobreaks, Estabilizadores e Docking.", group: "indicadores", sizes: ["P", "M", "G"], default_size: "G", exportable: false, roles: ALL },
+  { id: "kpi_furniture", label: "Mobiliário", description: "Gaveteiros, Armários, Mesas e Estações.", group: "indicadores", sizes: ["P", "M", "G"], default_size: "G", exportable: false, roles: ALL },
+  { id: "equipment_by_unit_table", label: "Equipamentos de TI por unidade", description: "Tabela com exportação.", group: "tabelas", sizes: ["M", "G"], default_size: "G", exportable: true, roles: ALL },
+  { id: "furniture_by_unit_table", label: "Mobiliário por unidade", description: "Tabela com exportação.", group: "tabelas", sizes: ["M", "G"], default_size: "G", exportable: true, roles: ALL },
+  { id: "equipment_by_unit_chart", label: "Equipamentos por unidade (gráfico)", description: "Barras agrupadas.", group: "graficos", sizes: ["P", "M", "G"], default_size: "G", exportable: false, roles: ALL },
+  { id: "category_distribution", label: "Distribuição por categoria", description: "Percentual por família e categoria.", group: "graficos", sizes: ["P", "M", "G"], default_size: "M", exportable: false, roles: ALL },
+  { id: "notebooks_without_docking", label: "Notebooks sem docking", description: "Estimativa por unidade.", group: "analises", sizes: ["P", "M", "G"], default_size: "M", exportable: false, roles: ["ADM", "USER"] },
+  { id: "workstation_ratio", label: "Monitores por computador", description: "Razão por posto.", group: "analises", sizes: ["P", "M", "G"], default_size: "P", exportable: false, roles: ["ADM", "USER"] },
+  { id: "unclassified_review", label: "Pendentes de revisão", description: "Bens OUTROS com baixa confiança.", group: "administracao", sizes: ["M", "G"], default_size: "M", exportable: false, roles: ["ADM"] },
+  { id: "classification_overrides", label: "Correções manuais de categoria", description: "Últimas correções.", group: "administracao", sizes: ["M", "G"], default_size: "M", exportable: false, roles: ["ADM"] },
+  { id: "sync_status", label: "Sincronização do Sheets", description: "Última importação e divergências.", group: "administracao", sizes: ["P", "M", "G"], default_size: "P", exportable: false, roles: ["ADM"] },
+];
+
+interface PanelsState {
+  role: "ADM" | "USER" | "RH";
+  version: number;
+  panels: { id: string; visible: boolean; size: Size }[];
+  gets: number;
+  puts: { method: string; body: Record<string, unknown> }[];
+  getStatus: number | null;
+  getDelayMs: number;
+  /** Corpo bruto devolvido pelo GET (resposta inválida), quando definido. */
+  rawGet: unknown;
+  /** Força o status do PUT. */
+  putStatus: { status: number; code: string } | null;
+  putGate: Promise<void> | null;
+}
+
+const allowed = (role: PanelsState["role"]) => CATALOG.filter((c) => c.roles.includes(role));
+const defaults = (role: PanelsState["role"]) => allowed(role).map((c) => ({ id: c.id, visible: true, size: c.default_size }));
+
+async function mockPanels(page: Page, role: PanelsState["role"], init: Partial<PanelsState> = {}): Promise<PanelsState> {
+  const state: PanelsState = {
+    role,
+    version: 0,
+    panels: defaults(role),
+    gets: 0,
+    puts: [],
+    getStatus: null,
+    getDelayMs: 0,
+    rawGet: undefined,
+    putStatus: null,
+    putGate: null,
+    ...init,
+  };
+  const reply = (route: Route, status: number, body: unknown) =>
+    route.fulfill({ status, headers: { ...CORS(route), "content-type": "application/json" }, body: JSON.stringify(body) });
+
+  await page.route("**/api/v1/dashboard/panels", async (route) => {
+    const method = route.request().method();
+    if (method === "OPTIONS") return route.fulfill({ status: 204, headers: CORS(route) });
+    if (method !== "GET") return route.fallback();
+    state.gets += 1;
+    if (state.getDelayMs) await new Promise((r) => setTimeout(r, state.getDelayMs));
+    if (state.getStatus) return reply(route, state.getStatus, { error: { code: "INTERNAL", message: "SISPAT_BACKEND_MSG" } });
+    if (state.rawGet !== undefined) return reply(route, 200, state.rawGet);
+    const catalog = allowed(state.role).map(({ roles: _roles, ...rest }) => rest);
+    return reply(route, 200, {
+      panels: catalog,
+      sizes: ["P", "M", "G"],
+      default_layout: defaults(state.role),
+      preferences: { panels: state.panels, version: state.version },
+    });
+  });
+
+  await page.route("**/api/v1/dashboard/preferences", async (route) => {
+    const request = route.request();
+    if (request.method() === "OPTIONS") return route.fulfill({ status: 204, headers: CORS(route) });
+    if (request.method() !== "PUT") return route.fallback();
+    const body = request.postDataJSON() as { version: number; panels?: PanelsState["panels"]; restore_default?: boolean };
+    state.puts.push({ method: request.method(), body });
+    if (state.putGate) await state.putGate;
+    if (state.putStatus) {
+      return reply(route, state.putStatus.status, { error: { code: state.putStatus.code, message: "SISPAT_BACKEND_MSG" } });
+    }
+    if (body.version !== state.version) {
+      return reply(route, 409, { error: { code: "version_conflict", message: "SISPAT_BACKEND_MSG" } });
+    }
+    const permitted = new Map(allowed(state.role).map((c) => [c.id, c]));
+    if (body.restore_default) {
+      state.panels = defaults(state.role);
+    } else {
+      const incoming = body.panels ?? [];
+      if (incoming.some((p) => !permitted.has(p.id))) {
+        return reply(route, 403, { error: { code: "panel_forbidden", message: "SISPAT_BACKEND_MSG" } });
+      }
+      if (!incoming.some((p) => p.visible) || incoming.some((p) => !permitted.get(p.id)!.sizes.includes(p.size))) {
+        return reply(route, 400, { error: { code: "validation_error", message: "SISPAT_BACKEND_MSG" } });
+      }
+      const rest = defaults(state.role).filter((d) => !incoming.some((p) => p.id === d.id));
+      state.panels = [...incoming, ...rest];
+    }
+    state.version += 1;
+    return reply(route, 200, { panels: state.panels, version: state.version });
+  });
+  return state;
+}
+
+async function open(
+  page: Page,
+  role: PanelsState["role"] = "ADM",
+  init: Partial<PanelsState> = {},
+  mock: MockOptions = {},
+): Promise<PanelsState> {
+  const opts: MockOptions = { role: role === "RH" ? "RH" : role, ...mock };
+  await installMocks(page, opts);
+  const state = await mockPanels(page, role, init);
   await seedSession(page, opts);
-  await page.goto(path);
+  await page.goto("/dashboard");
   await waitForHydration(page);
+  await expect(trigger(page)).toBeVisible();
   return state;
 }
 
 const trigger = (page: Page) => page.getByRole("button", { name: "Personalizar painéis" });
 const dialog = (page: Page) => page.getByRole("dialog", { name: "Personalizar painéis" });
-const patches = (state: MockState) => state.calls.filter((c) => c.method === "PATCH" && PREFS_URL(c.url));
-
-/** Ordem dos blocos na grade (DOM), sem o detalhamento fixo. */
-async function gridOrder(page: Page): Promise<string[]> {
-  return page
-    .locator("[data-dashboard-panels] > [data-dashboard-block]")
-    .evaluateAll((els) => els.map((el) => el.getAttribute("data-dashboard-block") ?? "").filter((id) => id !== "detalhamento"));
-}
+const save = (d: Locator) => d.getByRole("button", { name: "Salvar" });
+const announcement = (d: Locator) => d.locator("[data-layout-announcement]");
 
 async function dialogOrder(d: Locator): Promise<string[]> {
   return d.locator("[data-layout-item]").evaluateAll((els) => els.map((el) => el.getAttribute("data-layout-item") ?? ""));
 }
+const ids = (role: PanelsState["role"]) => allowed(role).map((c) => c.id);
 
-function dashboardCalls(state: MockState, endpoint: string): number {
-  return state.calls.filter(
-    (c) => c.method === "GET" && new URL(c.url, "http://x").pathname === `/api/v1/dashboard/${endpoint}`,
-  ).length;
+async function openDialog(page: Page): Promise<Locator> {
+  await trigger(page).click();
+  const d = dialog(page);
+  await expect(d).toBeVisible();
+  await expect(d.locator("[data-layout-item]").first()).toBeVisible();
+  return d;
 }
 
-test.describe("padrão", () => {
-  test("15 painéis na ordem padrão; diálogo lista todos; restaurar e salvar desabilitados", async ({ page }) => {
-    await open(page);
-    await expectDashboardLoaded(page);
-    expect(await gridOrder(page)).toEqual(DASHBOARD_PANEL_IDS.map((id) => BLOCK_OF[id]));
-    await expect(page.locator("[data-dashboard-block=detalhamento]")).toHaveCount(1);
+test.describe("catálogo por perfil (decidido pelo backend)", () => {
+  for (const [role, count] of [["ADM", 12], ["USER", 9], ["RH", 7]] as const) {
+    test(`${role}: lista exatamente ${count} painéis, na ordem do servidor`, async ({ page }) => {
+      await open(page, role);
+      const d = await openDialog(page);
+      expect(await dialogOrder(d)).toEqual(ids(role));
+      await expect(d.getByRole("checkbox")).toHaveCount(count);
+      for (const box of await d.getByRole("checkbox").all()) await expect(box).toBeChecked();
+      await expect(d.getByRole("button", { name: "Restaurar padrão" })).toBeDisabled();
+      await expect(save(d)).toBeDisabled();
+      // Painéis só-ADM nunca aparecem para outros perfis (a tela só renderiza o que veio).
+      const adminOnly = ["Pendentes de revisão", "Correções manuais de categoria", "Sincronização do Sheets"];
+      for (const label of adminOnly) {
+        await expect(d.getByRole("checkbox", { name: new RegExp(label) })).toHaveCount(role === "ADM" ? 1 : 0);
+      }
+    });
+  }
 
-    await trigger(page).click();
-    const d = dialog(page);
-    await expect(d).toBeVisible();
-    expect(await dialogOrder(d)).toEqual([...DASHBOARD_PANEL_IDS]);
-    await expect(d.getByRole("checkbox")).toHaveCount(DASHBOARD_PANEL_IDS.length);
-    for (const box of await d.getByRole("checkbox").all()) await expect(box).toBeChecked();
-    await expect(d.getByRole("button", { name: "Restaurar padrão" })).toBeDisabled();
-    await expect(d.getByRole("button", { name: "Salvar" })).toBeDisabled();
-    // Bordas: o primeiro não sobe e o último não desce.
-    await expect(d.getByRole("button", { name: "Mover Indicadores para cima" })).toBeDisabled();
-    await expect(d.getByRole("button", { name: "Mover Tecnologia: tempo desde o registro para baixo" })).toBeDisabled();
-    await expect(d.getByRole("button", { name: "Mover Inventário para baixo" })).toBeEnabled();
+  test("tamanhos oferecidos respeitam o catálogo (tabelas só M/G)", async ({ page }) => {
+    await open(page, "ADM");
+    const d = await openDialog(page);
+    const table = d.locator('[data-layout-item="equipment_by_unit_table"]');
+    await expect(table.getByRole("radio")).toHaveCount(2);
+    await expect(table.getByRole("radio", { name: "Pequeno" })).toHaveCount(0);
+    await expect(d.locator('[data-layout-item="kpi_workstations"]').getByRole("radio")).toHaveCount(3);
+    await expect(d.getByRole("group", { name: "Tamanho de Postos de trabalho" })).toBeVisible();
   });
 });
 
 test.describe("personalizar", () => {
-  test("teclado: move (foco acompanha + anúncio), oculta, salva só após confirmar e persiste", async ({ page }) => {
-    const state = await open(page);
-    await expectDashboardLoaded(page);
+  test("teclado: move (foco acompanha + aria-live), oculta, salva só após confirmar e persiste", async ({ page }) => {
+    const state = await open(page, "USER");
     await trigger(page).focus();
     await page.keyboard.press("Enter");
     const d = dialog(page);
     await expect(d).toBeVisible();
 
-    const up = d.getByRole("button", { name: "Mover Bens por vínculo para cima" });
+    const up = d.getByRole("button", { name: "Mover Distribuição por categoria para cima" });
     await up.focus();
     await page.keyboard.press("Enter");
     await expect(up).toBeFocused();
-    await expect(d.locator("[data-layout-announcement]")).toHaveText(
-      "Bens por vínculo movido para a posição 5 de 15.",
-    );
+    await expect(announcement(d)).toHaveText("Distribuição por categoria movido para a posição 6 de 9.");
     await page.keyboard.press("Enter");
-    await expect(d.locator("[data-layout-announcement]")).toHaveText(/posição 4 de 15/);
-    // "Inventário" oculto pelo teclado (Espaço no checkbox).
-    const inventory = d.getByRole("checkbox", { name: /Inventário/ });
-    await inventory.focus();
+    await expect(announcement(d)).toHaveText(/posição 5 de 9/);
+    // "Mobiliário" oculto pelo teclado (Espaço no checkbox).
+    const furniture = d.getByRole("checkbox", { name: /^Mobiliário \(/ });
+    await furniture.focus();
     await page.keyboard.press(" ");
-    await expect(inventory).not.toBeChecked();
+    await expect(furniture).not.toBeChecked();
 
-    // Estado honesto: com o PATCH pendente, a grade continua a confirmada.
+    // Estado honesto: com o PUT pendente, nada foi confirmado e o botão fica ocupado.
     let release: () => void = () => {};
-    const gate = new Promise<void>((resolve) => {
+    state.putGate = new Promise<void>((resolve) => {
       release = resolve;
     });
-    await page.route("**/v1/me/preferences", async (route) => {
-      if (route.request().method() === "PATCH") await gate;
-      await route.fallback();
-    });
-    const request = page.waitForRequest((r) => PREFS_URL(r.url()) && r.method() === "PATCH");
-    await d.getByRole("button", { name: "Salvar" }).click();
+    const request = page.waitForRequest((r) => r.url().endsWith("/v1/dashboard/preferences") && r.method() === "PUT");
+    await save(d).click();
     const expectedOrder = [
-      "kpis", "units", "status", "bond", "monthly", "location", "pending", "rooms", "inventory",
-      "tech_summary", "tech_category", "tech_units", "tech_status", "tech_no_owner", "tech_age",
+      "kpi_workstations", "kpi_infrastructure", "kpi_furniture", "equipment_by_unit_table", "category_distribution",
+      "furniture_by_unit_table", "equipment_by_unit_chart", "notebooks_without_docking", "workstation_ratio",
     ];
-    expect((await request).postDataJSON()).toEqual({
-      version: 0,
-      dashboard_layout: { order: expectedOrder, hidden: ["inventory"] },
-    });
-    await expect(d.getByRole("button", { name: "Salvar" })).toHaveAttribute("aria-busy", "true");
-    expect(await gridOrder(page)).toEqual(DASHBOARD_PANEL_IDS.map((id) => BLOCK_OF[id]));
+    const sent = (await request).postDataJSON() as { version: number; panels: { id: string; visible: boolean; size: string }[] };
+    expect(sent.version).toBe(0);
+    expect(sent.panels.map((p) => p.id)).toEqual(expectedOrder);
+    expect(sent.panels.filter((p) => !p.visible).map((p) => p.id)).toEqual(["kpi_furniture"]);
+    await expect(save(d)).toHaveAttribute("aria-busy", "true");
+    expect(state.version).toBe(0);
     release();
 
     await expect(d).toHaveCount(0);
     await expect(trigger(page)).toBeFocused();
     await expect(page.locator("[data-dashboard-layout-saved]")).toHaveText("Painéis do dashboard atualizados.");
-    await expect.poll(() => gridOrder(page)).toEqual(expectedOrder.filter((id) => id !== "inventory").map((id) => BLOCK_OF[id]));
-    await expect(page.locator("[data-dashboard-block=inventario]")).toHaveCount(0);
-    expect(state.prefs.dashboard_layout).toEqual({ order: expectedOrder, hidden: ["inventory"] });
-    expect(patches(state)).toHaveLength(1);
+    expect(state.version).toBe(1);
+    expect(state.puts).toHaveLength(1);
 
-    await page.reload();
-    await waitForHydration(page);
-    await expectDashboardLoaded(page, { hidden: ["inventario"] });
-    expect(await gridOrder(page)).toEqual(expectedOrder.filter((id) => id !== "inventory").map((id) => BLOCK_OF[id]));
+    // Reabrir mostra o estado CONFIRMADO.
+    const again = await openDialog(page);
+    expect(await dialogOrder(again)).toEqual(expectedOrder);
+    await expect(again.getByRole("checkbox", { name: /^Mobiliário \(/ })).not.toBeChecked();
   });
 
-  test("relatório imprimível usa a mesma ordem e oculta os mesmos painéis", async ({ page }) => {
-    await open(page, { role: "USER", prefs: { dashboard_layout: DASHBOARD_CUSTOM_LAYOUT } }, "/dashboard/relatorio");
-    await expectDashboardLoaded(page, { hidden: DASHBOARD_CUSTOM_HIDDEN_BLOCKS });
-    const expected = DASHBOARD_CUSTOM_LAYOUT.order
-      .filter((id) => !DASHBOARD_CUSTOM_LAYOUT.hidden.includes(id))
-      .map((id) => BLOCK_OF[id]);
-    expect(await gridOrder(page)).toEqual(expected);
-    // Relatório não oferece personalização.
-    await expect(trigger(page)).toHaveCount(0);
-  });
+  test("tamanho P/M/G: rádio nativo (setas), enviado ao backend", async ({ page }) => {
+    const state = await open(page, "ADM");
+    const d = await openDialog(page);
+    const group = d.getByRole("group", { name: "Tamanho de Postos de trabalho" });
+    const large = group.getByRole("radio", { name: "Grande" });
+    await expect(large).toBeChecked();
+    await large.focus();
+    await page.keyboard.press("ArrowLeft");
+    await expect(group.getByRole("radio", { name: "Médio" })).toBeChecked();
+    await d.locator('[data-layout-item="sync_status"]').getByRole("radio", { name: "Grande" }).check();
 
-  test("painel oculto não é montado e não consulta o backend", async ({ page }) => {
-    const state = await open(page, { role: "USER", prefs: { dashboard_layout: DASHBOARD_CUSTOM_LAYOUT } });
-    await expectDashboardLoaded(page, { hidden: DASHBOARD_CUSTOM_HIDDEN_BLOCKS });
-    expect(dashboardCalls(state, "aquisicoes-mensais")).toBe(0);
-    expect(dashboardCalls(state, "inventario")).toBe(0);
-    expect(dashboardCalls(state, "por-vinculo")).toBeGreaterThan(0);
-  });
-
-  test("grade sem buracos: painel de meia largura sozinho ocupa a linha inteira", async ({ page }) => {
-    await open(page, {
-      role: "USER",
-      prefs: {
-        dashboard_layout: {
-          order: ["status", "kpis", "bond", "rooms", "units", "monthly", "location", "pending", "inventory"],
-          hidden: [],
-        },
-      },
-    });
-    await expectDashboardLoaded(page);
-    const width = async (id: string) => (await page.locator(`[data-dashboard-block=${id}]`).boundingBox())!.width;
-    const kpis = await width("indicadores");
-    // "status" fica sozinho antes dos KPIs (largos) => mesma largura dos KPIs.
-    expect(Math.abs((await width("por-situacao")) - kpis)).toBeLessThan(2);
-    // "bond" + "rooms" dividem a linha.
-    expect(await width("por-vinculo")).toBeLessThan(kpis * 0.6);
-    expect(await width("por-sala")).toBeLessThan(kpis * 0.6);
-  });
-
-  test("restaurar padrão envia null e volta à grade padrão", async ({ page }) => {
-    const state = await open(page, { role: "USER", prefs: { dashboard_layout: DASHBOARD_CUSTOM_LAYOUT } });
-    await expectDashboardLoaded(page, { hidden: DASHBOARD_CUSTOM_HIDDEN_BLOCKS });
-    await trigger(page).click();
-    const d = dialog(page);
-    expect(await dialogOrder(d)).toEqual(DASHBOARD_CUSTOM_LAYOUT.order);
-    await expect(d.getByRole("checkbox", { name: /Aquisições mensais/ })).not.toBeChecked();
-    const request = page.waitForRequest((r) => PREFS_URL(r.url()) && r.method() === "PATCH");
-    await d.getByRole("button", { name: "Restaurar padrão" }).click();
-    expect((await request).postDataJSON()).toEqual({ version: 0, dashboard_layout: null });
+    await save(d).click();
     await expect(d).toHaveCount(0);
-    await expectDashboardLoaded(page);
-    expect(await gridOrder(page)).toEqual(DASHBOARD_PANEL_IDS.map((id) => BLOCK_OF[id]));
-    expect(state.prefs.dashboard_layout).toEqual(defaultDashboardLayout());
+    const body = state.puts[0]!.body as { version: number; panels: { id: string; size: Size }[] };
+    expect(body.version).toBe(0);
+    expect(body.panels.find((p) => p.id === "kpi_workstations")!.size).toBe("M");
+    expect(body.panels.find((p) => p.id === "sync_status")!.size).toBe("G");
+    expect(body.panels).toHaveLength(12);
+    expect("restore_default" in body).toBe(false);
   });
 
-  test("cancelar descarta o rascunho sem PATCH", async ({ page }) => {
-    const state = await open(page);
-    await expectDashboardLoaded(page);
-    await trigger(page).click();
-    const d = dialog(page);
-    await d.getByRole("button", { name: "Mover Inventário para cima" }).click();
+  test("arrastar pela alça reordena (barra de destino, aria-live) e só salva ao confirmar", async ({ page }) => {
+    const state = await open(page, "ADM");
+    const d = await openDialog(page);
+    const grip = d.locator('[data-layout-item="kpi_workstations"] [data-layout-grip]');
+    const target = d.locator('[data-layout-item="kpi_furniture"]');
+    const g = (await grip.boundingBox())!;
+    const t = (await target.boundingBox())!;
+    await page.mouse.move(g.x + g.width / 2, g.y + g.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(g.x + g.width / 2, t.y + t.height * 0.75, { steps: 6 });
+    await expect(d.locator("[data-layout-drop]")).toHaveCount(1);
+    await page.mouse.up();
+    await expect(announcement(d)).toHaveText("Postos de trabalho movido para a posição 3 de 12.");
+    expect((await dialogOrder(d)).slice(0, 3)).toEqual(["kpi_infrastructure", "kpi_furniture", "kpi_workstations"]);
+    expect(state.puts).toHaveLength(0);
+    await expect(d.locator("[data-layout-drop]")).toHaveCount(0);
+
+    await save(d).click();
+    await expect(d).toHaveCount(0);
+    expect(state.panels.slice(0, 3).map((p) => p.id)).toEqual(["kpi_infrastructure", "kpi_furniture", "kpi_workstations"]);
+  });
+
+  test("restaurar padrão envia restore_default e volta ao padrão", async ({ page }) => {
+    const custom = defaults("USER").reverse().map((p, i) => ({ ...p, visible: i !== 0 }));
+    const state = await open(page, "USER", { version: 3, panels: custom });
+    const d = await openDialog(page);
+    expect((await dialogOrder(d))[0]).toBe("workstation_ratio");
+    const request = page.waitForRequest((r) => r.url().endsWith("/v1/dashboard/preferences") && r.method() === "PUT");
+    await d.getByRole("button", { name: "Restaurar padrão" }).click();
+    expect((await request).postDataJSON()).toEqual({ version: 3, restore_default: true });
+    await expect(d).toHaveCount(0);
+    await expect(trigger(page)).toBeFocused();
+    expect(state.panels).toEqual(defaults("USER"));
+    const again = await openDialog(page);
+    expect(await dialogOrder(again)).toEqual(ids("USER"));
+    await expect(again.getByRole("button", { name: "Restaurar padrão" })).toBeDisabled();
+  });
+
+  test("cancelar descarta o rascunho sem PUT", async ({ page }) => {
+    const state = await open(page, "RH");
+    const d = await openDialog(page);
+    await d.getByRole("button", { name: "Mover Mobiliário para cima" }).click();
     await d.getByRole("button", { name: "Cancelar" }).click();
     await expect(d).toHaveCount(0);
-    expect(patches(state)).toHaveLength(0);
-    await trigger(page).click();
-    expect(await dialogOrder(dialog(page))).toEqual([...DASHBOARD_PANEL_IDS]);
+    expect(state.puts).toHaveLength(0);
+    expect(await dialogOrder(await openDialog(page))).toEqual(ids("RH"));
   });
 });
 
 test.describe("erros e contrato", () => {
-  test("todos ocultos: aviso e salvar desabilitado (nenhum PATCH)", async ({ page }) => {
-    const state = await open(page);
-    await expectDashboardLoaded(page);
-    await trigger(page).click();
-    const d = dialog(page);
+  test("todos ocultos: aviso e salvar desabilitado (nenhum PUT)", async ({ page }) => {
+    const state = await open(page, "RH");
+    const d = await openDialog(page);
     for (const box of await d.getByRole("checkbox").all()) await box.uncheck();
     await expect(d.getByRole("alert")).toHaveText(/Mantenha pelo menos um painel visível/);
-    await expect(d.getByRole("button", { name: "Salvar" })).toBeDisabled();
-    expect(patches(state)).toHaveLength(0);
+    await expect(save(d)).toBeDisabled();
+    expect(state.puts).toHaveLength(0);
   });
 
-  test("400 do backend: mensagem fixa (sem texto do servidor) e a grade não muda", async ({ page }) => {
-    await open(page);
-    await expectDashboardLoaded(page);
-    await page.route("**/v1/me/preferences", async (route) => {
-      if (route.request().method() !== "PATCH") return route.fallback();
-      return route.fulfill({
-        status: 400,
-        contentType: "application/json",
-        body: JSON.stringify({ error: { code: "validation_error", message: "SISPAT_BACKEND_MSG" } }),
-      });
-    });
-    await trigger(page).click();
-    const d = dialog(page);
-    await d.getByRole("checkbox", { name: /Bens por sala/ }).uncheck();
-    await d.getByRole("button", { name: "Salvar" }).click();
+  test("400 do backend: mensagem fixa (sem texto do servidor) e o diálogo continua aberto", async ({ page }) => {
+    const state = await open(page, "USER", { putStatus: { status: 400, code: "validation_error" } });
+    const d = await openDialog(page);
+    await d.getByRole("checkbox", { name: /^Mobiliário \(/ }).uncheck();
+    await save(d).click();
     await expect(d.getByRole("alert")).toHaveText(/Não foi possível salvar os painéis/);
     await expect(page.locator("body")).not.toContainText("SISPAT_BACKEND_MSG");
-    await expect(page.locator("[data-dashboard-block=por-sala]")).toHaveCount(1);
+    await expect(d).toBeVisible();
+    expect(state.version).toBe(0);
   });
 
-  test("409: avisa, recarrega a versão nova (rascunho = servidor) e salva de novo", async ({ page }) => {
-    const state = await open(page);
-    await expectDashboardLoaded(page);
+  test("409: avisa, recarrega do servidor (rascunho = servidor) e salva de novo com a versão nova", async ({ page }) => {
+    const state = await open(page, "USER");
+    const d = await openDialog(page);
+    await d.getByRole("checkbox", { name: /^Mobiliário \(/ }).uncheck();
+    // Outra sessão salvou antes: versão 4, "Notebooks sem docking" oculto.
+    state.version = 4;
+    state.panels = defaults("USER").map((p) => ({ ...p, visible: p.id !== "notebooks_without_docking" }));
+    await save(d).click();
+    await expect(d.getByRole("alert")).toContainText(/alteradas em outra sessão/);
+    await expect(d.getByRole("checkbox", { name: /Notebooks sem docking/ })).not.toBeChecked();
+    await expect(d.getByRole("checkbox", { name: /^Mobiliário \(/ })).toBeChecked();
+    expect(state.gets).toBeGreaterThanOrEqual(2);
+
+    await d.getByRole("checkbox", { name: /^Mobiliário \(/ }).uncheck();
+    const request = page.waitForRequest((r) => r.url().endsWith("/v1/dashboard/preferences") && r.method() === "PUT");
+    await save(d).click();
+    expect((await request).postDataJSON()).toMatchObject({ version: 4 });
+    await expect(d).toHaveCount(0);
+    expect(state.panels.filter((p) => !p.visible).map((p) => p.id).sort()).toEqual(["kpi_furniture", "notebooks_without_docking"]);
+  });
+
+  test("403 panel_forbidden: mensagem fixa e catálogo recarregado", async ({ page }) => {
+    const state = await open(page, "USER");
+    const d = await openDialog(page);
+    await d.getByRole("checkbox", { name: /^Mobiliário \(/ }).uncheck();
+    state.putStatus = { status: 403, code: "panel_forbidden" };
+    await save(d).click();
+    await expect(d.getByRole("alert")).toContainText(/não está disponível para o seu perfil/);
+    await expect(page.locator("body")).not.toContainText("SISPAT_BACKEND_MSG");
+    await expect(d.getByRole("checkbox", { name: /^Mobiliário \(/ })).toBeChecked();
+    expect(state.gets).toBeGreaterThanOrEqual(2);
+  });
+
+  test("carregando: estado de loading acessível e depois a lista", async ({ page }) => {
+    await open(page, "USER", { getDelayMs: 5000 });
     await trigger(page).click();
     const d = dialog(page);
-    await d.getByRole("checkbox", { name: /Bens por sala/ }).uncheck();
-    // Outra sessão salvou antes: versão 4, "Pendências" oculto.
-    state.prefs = { ...state.prefs, version: 4, dashboard_layout: { order: [...DASHBOARD_PANEL_IDS], hidden: ["pending"] } };
-    await d.getByRole("button", { name: "Salvar" }).click();
-    await expect(d.getByRole("alert")).toContainText(/alteradas em outra sessão/);
-    await expect(d.getByRole("checkbox", { name: /Pendências de cadastro/ })).not.toBeChecked();
-    await expect(d.getByRole("checkbox", { name: /Bens por sala/ })).toBeChecked();
-    // A grade reflete o servidor (pendências oculto), não o pedido.
-    await expect(page.locator("[data-dashboard-block=pendencias-cadastro]")).toHaveCount(0);
-    await expect(page.locator("[data-dashboard-block=por-sala]")).toHaveCount(1);
-
-    await d.getByRole("checkbox", { name: /Bens por sala/ }).uncheck();
-    const request = page.waitForRequest((r) => PREFS_URL(r.url()) && r.method() === "PATCH");
-    await d.getByRole("button", { name: "Salvar" }).click();
-    expect((await request).postDataJSON()).toMatchObject({ version: 4, dashboard_layout: { hidden: ["pending", "rooms"] } });
-    await expect(d).toHaveCount(0);
-    await expect(page.locator("[data-dashboard-block=por-sala]")).toHaveCount(0);
+    await expect(d).toBeVisible();
+    await expect(d.locator("[data-layout-loading]")).toHaveText(/Carregando painéis/);
+    await expect(save(d)).toBeDisabled();
+    await expect(d.locator("[data-layout-item]")).toHaveCount(9, { timeout: 20_000 });
+    await expect(d.locator("[data-layout-loading]")).toHaveCount(0);
   });
 
-  test("backend anterior (sem dashboard_layout nem chaves novas): padrões, sem erro, controles funcionam", async ({ page }) => {
-    const state = await open(page, { role: "USER", prefsLegacy: true });
-    await expectDashboardLoaded(page);
-    expect(await gridOrder(page)).toEqual(DASHBOARD_PANEL_IDS.map((id) => BLOCK_OF[id]));
-    // Novos painéis no tipo padrão e com seletor.
-    await expect(page.locator("[data-dashboard-block=localizacao-por-unidade] figure")).toHaveAttribute("data-chart-kind", "stacked");
-    await expect(page.locator("[data-dashboard-block=por-vinculo] figure")).toHaveAttribute("data-chart-kind", "donut");
-    await expect(page.locator("[data-dashboard-block=por-sala] figure")).toHaveAttribute("data-chart-kind", "horizontal");
-    for (const id of ["localizacao-por-unidade", "por-vinculo", "por-sala"]) {
-      await expect(page.locator(`[data-dashboard-block=${id}]`).getByRole("button", { name: /^Tipo de gráfico/ })).toBeVisible();
-    }
-    await expect(trigger(page)).toBeVisible();
-    await expect(page.locator("[data-dashboard-error]")).toHaveCount(0);
-    expect(state.prefsLegacy).toBe(true);
+  test("falha ao carregar: erro, 'Tentar novamente' recupera", async ({ page }) => {
+    const state = await open(page, "USER", { getStatus: 500 });
+    await trigger(page).click();
+    const d = dialog(page);
+    await expect(d.locator("[data-layout-load-error]")).toContainText("Não foi possível carregar os painéis");
+    await expect(page.locator("body")).not.toContainText("SISPAT_BACKEND_MSG");
+    await expect(d.getByRole("button", { name: "Restaurar padrão" })).toBeDisabled();
+    state.getStatus = null;
+    await d.getByRole("button", { name: "Tentar novamente" }).click();
+    await expect(d.locator("[data-layout-item]")).toHaveCount(9);
+    await expect(d.locator("[data-layout-load-error]")).toHaveCount(0);
   });
 
-  const invalidLayouts: { name: string; layout: unknown }[] = [
-    { name: "id desconhecido", layout: { order: [...DASHBOARD_PANEL_IDS.slice(0, 8), "<img src=x>"], hidden: [] } },
-    { name: "ordem incompleta", layout: { order: ["kpis", "units"], hidden: [] } },
-    { name: "id repetido", layout: { order: [...DASHBOARD_PANEL_IDS.slice(0, 8), "kpis"], hidden: [] } },
-    { name: "todos ocultos", layout: { order: [...DASHBOARD_PANEL_IDS], hidden: [...DASHBOARD_PANEL_IDS] } },
-    { name: "não é objeto", layout: "kpis,units" },
+  const invalid: { name: string; mutate: (body: Record<string, unknown>) => void }[] = [
+    { name: "tamanho fora do catálogo", mutate: (b) => ((b.preferences as { panels: { size: string }[] }).panels[3]!.size = "P") },
+    { name: "id fora do catálogo", mutate: (b) => ((b.preferences as { panels: { id: string }[] }).panels[0]!.id = "kpis") },
+    { name: "id com HTML", mutate: (b) => ((b.preferences as { panels: { id: string }[] }).panels[0]!.id = "<img src=x>") },
+    { name: "todos ocultos", mutate: (b) => (b.preferences as { panels: { visible: boolean }[] }).panels.forEach((p) => (p.visible = false)) },
   ];
-  for (const { name, layout } of invalidLayouts) {
-    test(`layout inválido na resposta (${name}): padrões, sem controles, sem quebrar`, async ({ page }) => {
-      await open(page, {
-        role: "USER",
-        prefs: { dashboard_layout: layout as never },
-      });
-      await expectDashboardLoaded(page);
-      expect(await gridOrder(page)).toEqual(DASHBOARD_PANEL_IDS.map((id) => BLOCK_OF[id]));
-      await expect(trigger(page)).toHaveCount(0);
-      await expect(page.getByRole("button", { name: /^Tipo de gráfico/ })).toHaveCount(0);
+  for (const { name, mutate } of invalid) {
+    test(`resposta inválida (${name}): erro de carregamento, sem quebrar nem injetar HTML`, async ({ page }) => {
+      const catalog = allowed("USER").map(({ roles: _r, ...rest }) => rest);
+      const body: Record<string, unknown> = {
+        panels: catalog,
+        sizes: ["P", "M", "G"],
+        default_layout: defaults("USER"),
+        preferences: { panels: defaults("USER"), version: 0 },
+      };
+      mutate(body);
+      await open(page, "USER", { rawGet: body });
+      await trigger(page).click();
+      await expect(dialog(page).locator("[data-layout-load-error]")).toBeVisible();
+      await expect(dialog(page).locator("[data-layout-item]")).toHaveCount(0);
       expect(await page.locator("main img").count()).toBe(0);
     });
   }
-
-  test("GET de preferências falha: layout padrão e sem botão de personalizar", async ({ page }) => {
-    await open(page, { role: "USER", prefsGetStatus: 500 });
-    await expectDashboardLoaded(page);
-    await expect(trigger(page)).toHaveCount(0);
-  });
 });
 
 test.describe("acessibilidade e responsividade", () => {
-  test("axe com o diálogo aberto (WCAG 2.2 AA) e Esc devolve o foco", async ({ page }) => {
-    await open(page);
-    await expectDashboardLoaded(page);
-    await trigger(page).click();
-    await expect(dialog(page)).toBeVisible();
-    await dialog(page).getByRole("checkbox", { name: /Inventário/ }).uncheck();
+  test("axe com o diálogo aberto (WCAG 2.2 AA), foco preso e Esc devolve o foco ao gatilho", async ({ page }) => {
+    await open(page, "ADM");
+    const d = await openDialog(page);
+    await d.getByRole("checkbox", { name: /^Mobiliário \(/ }).uncheck();
     await waitForAnimations(page);
     const results = await new AxeBuilder({ page }).withTags(AXE_TAGS).analyze();
     expect(results.violations, JSON.stringify(results.violations, null, 2)).toEqual([]);
+
+    // Foco preso: Tab repetido nunca sai do diálogo.
+    for (let i = 0; i < 70; i += 1) {
+      await page.keyboard.press("Tab");
+      expect(await page.evaluate(() => !!document.activeElement?.closest("[role=dialog]"))).toBe(true);
+    }
     await page.keyboard.press("Escape");
     await expect(dialog(page)).toHaveCount(0);
     await expect(trigger(page)).toBeFocused();
   });
 
-  for (const width of [320, 768]) {
-    test(`${width}px: diálogo cabe na tela, alvos >= 24px, sem rolagem horizontal`, async ({ page }) => {
-      await page.setViewportSize({ width, height: 700 });
-      await open(page);
-      await expectDashboardLoaded(page);
-      await trigger(page).click();
-      const d = dialog(page);
-      await expect(d).toBeVisible();
+  for (const width of [320, 768, 1920]) {
+    test(`${width}px: diálogo cabe na tela, alvos >= 24px, sem rolagem horizontal, axe`, async ({ page }) => {
+      await page.setViewportSize({ width, height: width === 1920 ? 1000 : 700 });
+      await open(page, "ADM");
+      const d = await openDialog(page);
       await waitForAnimations(page);
       const box = (await d.boundingBox())!;
       expect(box.x).toBeGreaterThanOrEqual(0);
@@ -361,13 +458,30 @@ test.describe("acessibilidade e responsividade", () => {
       for (const control of await d.locator("button:visible, input").all()) {
         const b = (await control.boundingBox())!;
         expect(b.height).toBeGreaterThanOrEqual(16);
-        if ((await control.getAttribute("type")) !== "checkbox") expect(b.height).toBeGreaterThanOrEqual(24);
+        if ((await control.getAttribute("type")) !== "checkbox") {
+          expect(b.height).toBeGreaterThanOrEqual(24);
+          expect(b.width).toBeGreaterThanOrEqual(24);
+        }
       }
+      // Nada dentro do diálogo transborda horizontalmente.
+      const overflow = await d.evaluate((el) => el.scrollWidth - el.clientWidth);
+      expect(overflow).toBeLessThanOrEqual(0);
       const { scroll, inner } = await page.evaluate(() => ({
         scroll: document.documentElement.scrollWidth,
         inner: window.innerWidth,
       }));
       expect(scroll).toBeLessThanOrEqual(inner);
+      const results = await new AxeBuilder({ page }).withTags(AXE_TAGS).analyze();
+      expect(results.violations, JSON.stringify(results.violations, null, 2)).toEqual([]);
     });
   }
+
+  test("prefers-reduced-motion: diálogo abre e fecha normalmente", async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await open(page, "USER");
+    const d = await openDialog(page);
+    await page.keyboard.press("Escape");
+    await expect(d).toHaveCount(0);
+    await expect(trigger(page)).toBeFocused();
+  });
 });

@@ -1,14 +1,6 @@
 import { expect, type Page } from "@playwright/test";
 
-import {
-  DASHBOARD_ENDPOINTS,
-  EMPTY_BLOCKS,
-  ERROR_BLOCKS,
-  KPI_CARDS,
-  TECH_ENDPOINTS,
-  emptyDashboard,
-  emptyTech,
-} from "./dashboard-mocks";
+import { CATALOG } from "../dashboard-equipment-support";
 import { installMocks, seedSession, waitForHydration, type MockOptions } from "./mocks";
 
 // =============================================================================
@@ -166,7 +158,69 @@ export async function expectDashboardLoaded(page: Page, opts: { hidden?: readonl
   });
 }
 
-/** Layout personalizado de exemplo: ordem trocada e 2 painéis ocultos. */
+// --- Painéis do catálogo (/dashboard): ids, contagens por perfil e esperas ------
+
+type PanelRole = "ADM" | "USER" | "RH";
+
+/** Ids do catálogo permitidos ao perfil (espelho do mock; a tela só desenha o que o backend devolve). */
+export const panelIdsFor = (role: PanelRole): string[] => CATALOG.filter((c) => c.roles.includes(role)).map((c) => c.id);
+
+/**
+ * Painéis do catálogo carregados na grade. `state`: "data" (todos com dados e o
+ * gráfico desenhado), "empty" (estado vazio em todos) ou "error" (erro + "Tentar
+ * novamente" em todos). `ids`: painéis esperados (padrão: o catálogo do perfil).
+ */
+export async function expectPanelsLoaded(
+  page: Page,
+  role: PanelRole,
+  opts: { state?: "data" | "empty" | "error"; ids?: readonly string[] } = {},
+): Promise<void> {
+  const ids = opts.ids ?? panelIdsFor(role);
+  const state = opts.state ?? "data";
+  await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+  await expect(page.locator("[data-equipment-panel]")).toHaveCount(ids.length, { timeout: 20_000 });
+  await expect(page.locator("[data-equipment-grid]")).toHaveAttribute("data-equipment-order", ids.join(","));
+  await expect(page.locator("[data-equipment-panel][aria-busy=true]")).toHaveCount(0, { timeout: 20_000 });
+  if (state === "empty") {
+    await expect(page.locator("[data-equipment-empty]")).toHaveCount(ids.length);
+  } else if (state === "error") {
+    await expect(page.locator("[data-equipment-error]")).toHaveCount(ids.length);
+    await expect(page.getByRole("button", { name: /Tentar novamente/ }).first()).toBeVisible();
+  } else if (ids.includes("equipment_by_unit_chart")) {
+    await expect(page.locator("[data-equipment-panel=equipment_by_unit_chart] figure")).toBeVisible({ timeout: 20_000 });
+  }
+}
+
+/** Preferências de painéis: tudo no tamanho `size` (quando o catálogo admite; senão o maior permitido). */
+export function panelPrefsAllSize(role: PanelRole, size: "P" | "G") {
+  return CATALOG.filter((c) => c.roles.includes(role)).map((c) => ({
+    id: c.id,
+    visible: true,
+    size: c.sizes.includes(size) ? size : c.sizes[0]!,
+  }));
+}
+
+/** Layout personalizado de exemplo (USER): ordem trocada e 2 painéis ocultos. */
+export const PANELS_CUSTOM_ORDER = [
+  "category_distribution",
+  "kpi_furniture",
+  "workstation_ratio",
+  "kpi_workstations",
+  "equipment_by_unit_chart",
+  "kpi_infrastructure",
+  "equipment_by_unit_table",
+  "furniture_by_unit_table",
+  "notebooks_without_docking",
+] as const;
+export const PANELS_CUSTOM_HIDDEN = ["workstation_ratio", "furniture_by_unit_table"] as const;
+export const PANELS_CUSTOM_PREFS = PANELS_CUSTOM_ORDER.map((id) => ({
+  id,
+  visible: !(PANELS_CUSTOM_HIDDEN as readonly string[]).includes(id),
+  size: "M" as const,
+}));
+export const PANELS_CUSTOM_VISIBLE = PANELS_CUSTOM_PREFS.filter((p) => p.visible).map((p) => p.id);
+
+/** Painéis do relatório (legado) em layout personalizado: ver DASHBOARD_CUSTOM_LAYOUT. */
 export const DASHBOARD_CUSTOM_LAYOUT = {
   order: [
     "bond", "status", "kpis", "rooms", "units", "location", "monthly", "pending", "inventory",
@@ -176,18 +230,16 @@ export const DASHBOARD_CUSTOM_LAYOUT = {
 };
 export const DASHBOARD_CUSTOM_HIDDEN_BLOCKS = ["aquisicoes-mensais", "inventario"] as const;
 
-/** No celular (< 768px) a barra de filtros é recolhível: abre se estiver fechada. */
-export async function openMobileFilters(page: Page): Promise<void> {
-  const toggle = page.locator("[data-dashboard-filters-toggle]");
-  if ((await toggle.isVisible()) && (await toggle.getAttribute("aria-expanded")) !== "true") {
-    await toggle.click();
-    await expect(toggle).toHaveAttribute("aria-expanded", "true");
-  }
-}
-
-/** Filtros de exemplo (URL compartilhável) usados nas telas responsive/a11y. */
+/** Filtros de exemplo do relatório imprimível (URL legada herdada pelo relatório). */
 export const DASHBOARD_FILTERED_QUERY =
   "unit_id=60000000-0000-4000-8000-000000000001&located=NAO&bond_status=Ocioso&registrado_desde=2026-01-01&inventario=nao_conferido";
+
+/** Filtros do dashboard (família + unidade) para as telas responsive/a11y. */
+export async function applyPanelFilters(page: Page): Promise<void> {
+  const filters = page.locator("[data-equipment-filters]");
+  await filters.getByLabel("Família").selectOption("TI");
+  await expect(filters).toContainText("1 filtro(s) ativo(s).");
+}
 
 export const RH_NAME = "Pessoa Sintética RH";
 export const ADMIN_NAME = "Pessoa Sintética Administradora com Nome Bastante Longo para Teste";
@@ -1721,38 +1773,47 @@ export const SCREENS: ScreenDef[] = [
       await expect(dialog.getByLabel("Local observado (opcional)")).toBeEnabled();
     },
   },
-  // --- Dashboard de indicadores (/dashboard) e relatório imprimível -----------
+  // --- Dashboard de painéis (/dashboard) e relatório imprimível ----------------
   {
     id: "dashboard-painel",
-    title: "Dashboard de indicadores — com dados (USER)",
+    title: "Dashboard de painéis — com dados (USER)",
     path: "/dashboard",
     session: { role: "USER" },
     prepare: async (page) => {
-      await expectDashboardLoaded(page);
+      await expectPanelsLoaded(page, "USER");
+    },
+  },
+  {
+    id: "dashboard-painel-adm",
+    title: "Dashboard de painéis — catálogo completo de 12 (ADM)",
+    path: "/dashboard",
+    session: { role: "ADM" },
+    prepare: async (page) => {
+      await expectPanelsLoaded(page, "ADM");
     },
   },
   {
     id: "dashboard-painel-vazio",
-    title: "Dashboard de indicadores — sem bens (estados vazios honestos)",
+    title: "Dashboard de painéis — sem bens (estados vazios honestos)",
     path: "/dashboard",
-    session: { role: "RH", dashboard: emptyDashboard(), dashboardTech: emptyTech() },
+    session: {
+      role: "RH",
+      dashboardPanels: { dataStatus: Object.fromEntries(panelIdsFor("RH").map((id) => [id, "empty" as const])) },
+    },
     prepare: async (page) => {
-      await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
-      await expect(page.locator("[data-dashboard-empty]")).toHaveCount(EMPTY_BLOCKS, { timeout: 15_000 });
-      await expect(page.locator("[data-dashboard-block=indicadores] [data-stat-card]")).toHaveCount(KPI_CARDS);
+      await expectPanelsLoaded(page, "RH", { state: "empty" });
     },
   },
   {
     id: "dashboard-painel-erro",
-    title: "Dashboard de indicadores — erro com nova tentativa",
+    title: "Dashboard de painéis — erro com nova tentativa",
     path: "/dashboard",
     session: {
       role: "USER",
-      dashboardStatus: Object.fromEntries([...DASHBOARD_ENDPOINTS, ...TECH_ENDPOINTS].map((endpoint) => [endpoint, 500])),
+      dashboardPanels: { dataStatus: Object.fromEntries(panelIdsFor("USER").map((id) => [id, 500])) },
     },
     prepare: async (page) => {
-      await expect(page.locator("[data-dashboard-error]")).toHaveCount(ERROR_BLOCKS, { timeout: 20_000 });
-      await expect(page.getByRole("button", { name: "Tentar novamente" }).first()).toBeVisible();
+      await expectPanelsLoaded(page, "USER", { state: "error" });
     },
   },
   {
@@ -1768,16 +1829,13 @@ export const SCREENS: ScreenDef[] = [
   },
   {
     id: "dashboard-filtros",
-    title: "Dashboard — filtros da URL aplicados e \"Mais filtros\" aberto (USER)",
-    path: `/dashboard?${DASHBOARD_FILTERED_QUERY}`,
+    title: "Dashboard de painéis — filtro de família aplicado (USER)",
+    path: "/dashboard",
     session: { role: "USER" },
     prepare: async (page) => {
-      await expectDashboardLoaded(page);
-      await expect(page.locator("[data-dashboard-filter-summary]")).toContainText("Vínculo: Ocioso");
-      await openMobileFilters(page);
-      // Filtro avançado ativo na URL => "Mais filtros" já abre expandido.
-      await expect(page.getByRole("button", { name: /Mais filtros/ })).toHaveAttribute("aria-expanded", "true");
-      await expect(page.getByLabel("Unidade pertencente")).toBeVisible();
+      await expectPanelsLoaded(page, "USER");
+      await applyPanelFilters(page);
+      await expect(page.locator("[data-equipment-panel][aria-busy=true]")).toHaveCount(0, { timeout: 20_000 });
     },
   },
   {
@@ -1792,49 +1850,23 @@ export const SCREENS: ScreenDef[] = [
     },
   },
   {
-    id: "dashboard-graficos-alternativos",
-    title: "Dashboard — tipos de gráfico escolhidos (horizontal, rosca, área; localização horizontal, vínculo pizza, sala vertical)",
+    id: "dashboard-tamanhos-pequenos",
+    title: "Dashboard de painéis — todos no menor tamanho permitido (P) (USER)",
     path: "/dashboard",
-    session: {
-      role: "USER",
-      prefs: {
-        dashboard_charts: { units: "horizontal", status: "donut", monthly: "area", location: "horizontal", bond: "pie", rooms: "bar" },
-      },
-    },
+    session: { role: "USER", dashboardPanels: { panels: panelPrefsAllSize("USER", "P") } },
     prepare: async (page) => {
-      await expectDashboardLoaded(page);
-      await expect(
-        page.locator("[data-dashboard-block=por-unidade]").getByRole("img", { name: /Gráfico de barras horizontais/ }),
-      ).toBeVisible();
+      await expectPanelsLoaded(page, "USER");
+      await expect(page.locator('[data-equipment-panel][data-panel-size="P"]').first()).toBeVisible();
     },
   },
   {
-    id: "dashboard-graficos-empilhado-barras",
-    title: "Dashboard — tipos de gráfico escolhidos (empilhadas, barras, barras; localização agrupada, vínculo barras)",
+    id: "dashboard-tamanhos-grandes",
+    title: "Dashboard de painéis — todos em largura total (G) (RH)",
     path: "/dashboard",
-    session: {
-      role: "RH",
-      prefs: {
-        dashboard_charts: { units: "stacked", status: "bar", monthly: "bar", location: "grouped", bond: "bar", rooms: "horizontal" },
-      },
-    },
+    session: { role: "RH", dashboardPanels: { panels: panelPrefsAllSize("RH", "G") } },
     prepare: async (page) => {
-      await expectDashboardLoaded(page);
-      await expect(
-        page.locator("[data-dashboard-block=por-unidade]").getByRole("img", { name: /Gráfico de barras empilhadas/ }),
-      ).toBeVisible();
-    },
-  },
-  {
-    id: "dashboard-filtros-celular",
-    title: "Dashboard — barra de filtros recolhível (celular) aberta, com filtros ativos",
-    path: `/dashboard?${DASHBOARD_FILTERED_QUERY}`,
-    session: { role: "USER" },
-    prepare: async (page) => {
-      await expectDashboardLoaded(page);
-      await expect(page.locator("[data-dashboard-filter-summary]")).toContainText("Vínculo: Ocioso");
-      await openMobileFilters(page);
-      await expect(page.getByLabel("Unidade de uso", { exact: true })).toBeVisible();
+      await expectPanelsLoaded(page, "RH");
+      await expect(page.locator('[data-equipment-panel][data-panel-size="G"]').first()).toBeVisible();
     },
   },
   {
@@ -1843,36 +1875,25 @@ export const SCREENS: ScreenDef[] = [
     path: "/dashboard",
     session: { role: "USER" },
     prepare: async (page) => {
-      await expectDashboardLoaded(page);
+      await expectPanelsLoaded(page, "USER");
       await page.getByRole("button", { name: "Personalizar painéis" }).click();
       const dialog = page.getByRole("dialog", { name: "Personalizar painéis" });
       await expect(dialog).toBeVisible();
-      await dialog.getByRole("button", { name: "Mover Bens por vínculo para cima" }).click();
-      await dialog.getByRole("checkbox", { name: /Inventário/ }).uncheck();
+      await dialog.getByRole("button", { name: "Mover Infraestrutura de TI para cima" }).click();
+      await dialog.getByRole("checkbox", { name: /Monitores por computador/ }).uncheck();
       await expect(dialog.getByRole("button", { name: "Salvar" })).toBeEnabled();
     },
   },
   {
     id: "dashboard-layout-personalizado",
-    title: "Dashboard — painéis reordenados/ocultos e \"Filtrar pelo gráfico\" aberto (USER)",
+    title: "Dashboard de painéis — ordem personalizada e 2 painéis ocultos (USER)",
     path: "/dashboard",
-    session: {
-      role: "USER",
-      prefs: {
-        dashboard_layout: DASHBOARD_CUSTOM_LAYOUT,
-        dashboard_charts: { location: "grouped", bond: "bar", rooms: "bar" },
-      },
-    },
+    session: { role: "USER", dashboardPanels: { version: 3, panels: PANELS_CUSTOM_PREFS } },
     prepare: async (page) => {
-      await expectDashboardLoaded(page, { hidden: DASHBOARD_CUSTOM_HIDDEN_BLOCKS });
-      const rooms = page.locator("[data-dashboard-block=por-sala]");
-      await rooms.getByRole("button", { name: /Filtrar pelo gráfico/ }).click();
-      await expect(rooms.getByRole("button", { name: "Sem sala" })).toBeVisible();
-      // O clique rolou a página: volta ao topo para não medir conteúdo sob o cabeçalho fixo.
-      await page.evaluate(() => {
-        window.scrollTo(0, 0);
-        document.getElementById("conteudo")?.scrollTo(0, 0);
-      });
+      await expectPanelsLoaded(page, "USER", { ids: PANELS_CUSTOM_VISIBLE });
+      for (const hidden of PANELS_CUSTOM_HIDDEN) {
+        await expect(page.locator(`[data-equipment-panel=${hidden}]`)).toHaveCount(0);
+      }
     },
   },
   {

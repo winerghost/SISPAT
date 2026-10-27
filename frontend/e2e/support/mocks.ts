@@ -14,6 +14,11 @@ import {
   type TechEndpoint,
   type TechMockData,
 } from "./dashboard-mocks";
+import {
+  defaultPanelsMock,
+  handleDashboardPanels,
+  type PanelsMockState,
+} from "../dashboard-equipment-support";
 import { defaultAssets, handleAssets, type AssetMockState } from "./asset-mocks";
 import { defaultMovements, handleMovements, type MovementMockState } from "./movement-mocks";
 import { defaultInventories, handleInventories, type InventoryMockState } from "./inventory-mocks";
@@ -112,6 +117,12 @@ export interface MockOptions {
   dashboardStatus?: Partial<Record<DashboardEndpoint | TechEndpoint, number>>;
   /** Respostas de `GET /api/v1/dashboard/tecnologia/*` (padrão: dados sintéticos de Tecnologia). */
   dashboardTech?: TechMockData;
+  /**
+   * Catálogo de painéis (`GET /dashboard/panels`, `.../panels/<id>/data`,
+   * `PUT /dashboard/preferences`): versão/preferências, status forçados por
+   * painel (`dataStatus`: número ou "empty"), atraso. Testes podem mutar `state.panels`.
+   */
+  dashboardPanels?: Partial<PanelsMockState>;
   /** Resposta de `GET /api/v1/ai/insights` (padrão: status ok com os 3 tipos). */
   aiInsights?: AiInsightsMock;
   /** Status HTTP forçado em `GET /api/v1/ai/insights` (ex.: 500, 403). */
@@ -444,6 +455,8 @@ export interface MockState extends CatalogMockState, AssetMockState, MovementMoc
   dashboard: DashboardMockData;
   dashboardStatus: Partial<Record<DashboardEndpoint | TechEndpoint, number>>;
   dashboardTech: TechMockData;
+  /** Estado do catálogo de painéis (ver `MockOptions.dashboardPanels`). */
+  panels: PanelsMockState;
   aiInsights: AiInsightsMock;
   aiInsightsStatus: number | null;
   aiAsk: AiAskMock;
@@ -1149,6 +1162,7 @@ export async function installMocks(page: Page, opts: MockOptions = {}): Promise<
     dashboard: { ...defaultDashboard(), ...opts.dashboard },
     dashboardTech: opts.dashboardTech ?? defaultTech(),
     dashboardStatus: { ...opts.dashboardStatus },
+    panels: defaultPanelsMock(opts.dashboardPanels),
     aiInsights: opts.aiInsights ?? defaultAiInsights(),
     aiInsightsStatus: opts.aiInsightsStatus ?? null,
     aiAsk: opts.aiAsk ?? defaultAiAsk(),
@@ -1342,6 +1356,20 @@ export async function installMocks(page: Page, opts: MockOptions = {}): Promise<
             headers: { ...corsHeaders(request), "content-type": contentType },
             body: fileBody,
           }),
+      })
+    ) {
+      return;
+    }
+
+    if (
+      await handleDashboardPanels({
+        panels: state.panels,
+        role: state.role,
+        method,
+        path,
+        query: url.searchParams,
+        body,
+        respond: (status, payload) => json(route, status, payload),
       })
     ) {
       return;

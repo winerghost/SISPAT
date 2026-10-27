@@ -30,6 +30,7 @@ from pydantic import (
 )
 
 from app.api.v1.asset_schemas import LocatedStatus, clean_bond_status_filter
+from app.api.v1.pagination import DEFAULT_PAGE_SIZE, PageNumber, PageSize
 from app.services.dashboard_panels_service import (
     MAX_PANELS,
     PANEL_IDS,
@@ -382,3 +383,88 @@ class DashboardPreferencesRequest(_StrictBody):
         if self.restore_default is False:
             raise ValueError("restore_default só aceita true")
         return self
+
+
+# ---------------------------------------------------------------------------
+# Dados dos 12 painéis, fila de revisão, override de categoria e exportação
+# (ONDA 2). Vocabulário FECHADO de `app.services.asset_classification`
+# (um teste garante a igualdade). Valor fora da lista -> 400 sem eco.
+# ---------------------------------------------------------------------------
+
+FamiliaFiltro = Literal["TI", "MOBILIARIO", "OUTROS", "NAO_CLASSIFICADO"]
+EquipamentoCategoriaFiltro = Literal[
+    "COMPUTADOR", "NOTEBOOK", "MONITOR", "IMPRESSORA", "NOBREAK", "ESTABILIZADOR",
+    "DOCKING", "REDE", "OUTRO_TI",
+    "MESA", "ARMARIO", "GAVETEIRO", "ESTACAO_TRABALHO", "CADEIRA", "POLTRONA", "SOFA",
+    "ESTANTE", "OUTRO_MOB",
+    "EQUIPAMENTO", "OUTROS",
+    "NAO_CLASSIFICADO",
+]
+EquipamentoCategoria = Literal[
+    "COMPUTADOR", "NOTEBOOK", "MONITOR", "IMPRESSORA", "NOBREAK", "ESTABILIZADOR",
+    "DOCKING", "REDE", "OUTRO_TI",
+    "MESA", "ARMARIO", "GAVETEIRO", "ESTACAO_TRABALHO", "CADEIRA", "POLTRONA", "SOFA",
+    "ESTANTE", "OUTRO_MOB",
+    "EQUIPAMENTO", "OUTROS",
+]
+
+
+class PanelDataQuery(_Query):
+    """Filtros dos dados de painel: unidade, família e categoria (allowlists)."""
+
+    unit_id: uuid.UUID | None = None
+    familia: FamiliaFiltro | None = None
+    categoria: EquipamentoCategoriaFiltro | None = None
+
+    def active_names(self) -> list[str]:
+        """NOMES dos filtros ativos (nunca os valores)."""
+        return [name for name in type(self).model_fields if getattr(self, name) is not None]
+
+
+class PanelExportQuery(PanelDataQuery):
+    format: ExportFormat = "csv"
+
+    def active_names(self) -> list[str]:
+        return [n for n in super().active_names() if n != "format"]
+
+
+ReviewSort = Literal[
+    "patrimony_number", "-patrimony_number", "description", "-description",
+    "updated_at", "-updated_at",
+]
+
+
+class ReviewQueueQuery(_Query):
+    """Fila de revisão (OUTROS + confiança BAIXA): paginação + unidade + ordenação."""
+
+    page: PageNumber = 1
+    page_size: PageSize = DEFAULT_PAGE_SIZE
+    unit_id: uuid.UUID | None = None
+    sort: ReviewSort = "patrimony_number"
+
+
+class ReviewExportQuery(_Query):
+    unit_id: uuid.UUID | None = None
+    sort: ReviewSort = "patrimony_number"
+    format: ExportFormat = "csv"
+
+
+class CategoryOverrideRequest(_StrictBody):
+    """Corpo de `POST /assets/<id>/category-override` (ADM + AAL2).
+
+    Só `category` (vocabulário fechado de 20 valores) e `version` (controle
+    otimista). `user_id`, `role`, `unit_id`, `deleted_at` e qualquer outro
+    campo -> 400 + evento de segurança (`parse_body`).
+    """
+
+    category: EquipamentoCategoria
+    version: StrictInt = Field(ge=1, le=2_147_483_647)
+
+
+class PanelDataOut(_Out):
+    """Envelope dos dados de um painel (conteúdo depende do `tipo`; só contagens/rótulos)."""
+
+    panel_id: str = Field(pattern=r"^[a-z_]{1,64}$")
+    tipo: str = Field(pattern=r"^[a-z_]{1,32}$")
+    dados: dict[str, Any]
+    filtros_aplicados: list[str] = Field(default_factory=list, max_length=20)

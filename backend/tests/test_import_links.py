@@ -237,3 +237,28 @@ def test_idempotencia_e_item_existente_nao_sobrescreve_campos_manuais(world) -> 
     world.db.refresh(asset)
     assert asset.notes == "editado manualmente"
     assert asset.version == 2
+
+
+def test_item_existente_atualiza_sala_localizado_e_responsavel_da_planilha(world) -> None:
+    """Regressão: sync de bem EXISTENTE aplicava só descrição/vínculo."""
+    service = _service(world, [_line(SALA="", LOCALIZADO="N", RESP2="", USUARIO="")])
+    _confirm(service, world.db, service.create_preview(ACTOR))
+    asset = world.db.execute(select(Asset)).scalars().one()
+    assert asset.room_id is None and asset.located == "NAO" and asset.responsible_person_id is None
+
+    service2 = _service(world, [_line()])  # planilha atualizada: sala 3, localizado, responsável
+    preview2 = service2.create_preview(ACTOR)
+    assert preview2.count_existente == 1
+    out = _confirm(service2, world.db, preview2)
+    assert out["updated"] == 1
+    world.db.refresh(asset)
+    assert asset.room_id == world.room.id
+    assert asset.located == "SIM"
+    assert asset.responsible_person_id == world.person.id
+
+    service3 = _service(world, [_line()])  # reimportar igual é no-op
+    preview3 = service3.create_preview(ACTOR)
+    version = asset.version
+    _confirm(service3, world.db, preview3)
+    world.db.refresh(asset)
+    assert asset.version == version
