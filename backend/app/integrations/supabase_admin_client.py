@@ -20,7 +20,11 @@ Operações suportadas (todas sobre `{settings.supabase_url}/auth/v1/...`):
       (bane o usuário no GoTrue); `unban_user` desfaz o banimento.
     - `send_password_recovery`: dispara o e-mail de recuperação de senha
       enviado PELO PRÓPRIO Supabase (`POST /auth/v1/recover`); o link nunca
-      passa por este backend.
+      passa por este backend. NÃO é mais usado pelo fluxo de redefinição —
+      ver o aviso na docstring do método.
+    - `generate_recovery_token_hash`: cria o token de recuperação SEM enviar
+      e-mail (`POST /auth/v1/admin/generate_link`) para que a entrega seja
+      feita por `app.services.password_reset_delivery`. É o caminho em uso.
     - `delete_all_mfa_factors`: remove todos os fatores MFA de um usuário
       (reset administrativo de MFA).
 
@@ -74,6 +78,11 @@ _LOCAL_DEV_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 # Forma mínima de e-mail aceita antes de chamar `/recover` (o e-mail vem do
 # banco local, nunca do cliente; checagem defensiva de formato/tamanho).
 _EMAIL_SHAPE_RE = re.compile(r"[^@\s]{1,64}@[^@\s]{1,189}")
+
+# Forma aceita para o `hashed_token` devolvido por `admin/generate_link`:
+# base64url/hex do GoTrue. Serve para recusar lixo (HTML de proxy, mensagem de
+# erro) ANTES de o valor virar query string de um link enviado por e-mail.
+_TOKEN_HASH_SHAPE_RE = re.compile(r"[A-Za-z0-9._~+/=-]{16,512}")
 
 
 def _safe_path_segment(value: Any, field_name: str) -> str:
@@ -369,8 +378,71 @@ class SupabaseAdminClient:
             json_body={"ban_duration": "none"},
         )
 
+    def generate_recovery_token_hash(self, email: str, redirect_to: str) -> str:
+        """Cria o token de recuperação de senha SEM enviar e-mail algum.
+
+        Usa `POST /auth/v1/admin/generate_link` com `type: "recovery"`: o
+        GoTrue gera o token e DEVOLVE o `hashed_token` ao chamador, sem
+        disparar mensagem. A entrega passa a ser deste backend
+        (`app.services.password_reset_delivery`), com um link que aponta para
+        a nossa própria página — e NÃO para `/auth/v1/verify`.
+
+        POR QUE NÃO `/auth/v1/recover` (ver
+        `docs/deploy/PLANO_ACAO_RESET_SENHA_2026-10-27.md`): o e-mail do
+        Supabase usa `{{ .ConfirmationURL }}`, que é um GET de USO ÚNICO em
+        `/auth/v1/verify`. Scanners de antivírus de e-mail abrem esse link
+        automaticamente 2–4 s após o envio: gastam o token (a pessoa vê
+        "link expirado") e, no fluxo implícito, RECEBEM access/refresh token
+        válidos da conta. Corrigir pelo template do Supabase exigiria plano
+        pago neste projeto, então a entrega virou responsabilidade nossa.
+
+        Devolve SOMENTE o `hashed_token`. O `action_link` e o `email_otp` da
+        resposta são descartados e NUNCA logados, auditados ou devolvidos a
+        quem chamou a rota. O retorno é SEGREDO DE USO ÚNICO: o chamador não
+        pode registrá-lo em log, auditoria nem resposta HTTP.
+        """
+        if redirect_to not in self._settings.invite_allowed_redirect_urls_list:
+            logger.warning(
+                "supabase_admin_client: geração de link de recuperação com redirect_to "
+                "fora da allow-list; chamada bloqueada."
+            )
+            raise InviteRedirectNotAllowedError(
+                "A URL de redirecionamento informada não está na lista de URLs "
+                "previamente autorizadas."
+            )
+        if not isinstance(email, str) or not _EMAIL_SHAPE_RE.fullmatch(email):
+            raise SupabaseAdminClientError("E-mail inválido para recuperação de senha.")
+        response = self._request(
+            "POST",
+            "/auth/v1/admin/generate_link",
+            # `redirect_to` aqui só compõe o `action_link` que descartamos; o
+            # link enviado é montado por `password_reset_delivery`. Mantido
+            # para o GoTrue validar o destino também do lado dele.
+            json_body={"type": "recovery", "email": email, "redirect_to": redirect_to},
+        )
+        payload = self._json_object(response, "geração de link de recuperação")
+        token_hash = payload.get("hashed_token")
+        if not isinstance(token_hash, str) or not _TOKEN_HASH_SHAPE_RE.fullmatch(token_hash):
+            # Nunca logar `payload`: ele carrega `action_link` e `email_otp`.
+            logger.error(
+                "supabase_admin_client: resposta de generate_link sem hashed_token válido."
+            )
+            raise SupabaseAdminClientError(
+                "A API Admin do Supabase não devolveu um token de recuperação válido."
+            )
+        return token_hash
+
     def send_password_recovery(self, email: str, redirect_to: str) -> None:
         """Dispara o e-mail de recuperação de senha pelo PRÓPRIO Supabase Auth.
+
+        ATENÇÃO — NÃO USE NO FLUXO DE REDEFINIÇÃO. O e-mail gerado aqui usa o
+        template do painel (`{{ .ConfirmationURL }}`), cujo link de uso único
+        é consumido por scanners de antivírus de e-mail antes do clique da
+        pessoa, e que entrega access/refresh token ao scanner no fluxo
+        implícito. Use `generate_recovery_token_hash` +
+        `app.services.password_reset_delivery`. Mantido apenas porque o
+        endpoint continua sendo o único caminho em que o link NUNCA passa por
+        este backend, caso um dia o template do painel seja corrigido.
 
         Usa `POST /auth/v1/recover` (o mesmo endpoint de
         `supabase.auth.resetPasswordForEmail`): o GoTrue gera o link e envia o

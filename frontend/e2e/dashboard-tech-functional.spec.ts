@@ -6,7 +6,12 @@ import { defaultTech } from "./support/dashboard-mocks";
 import { waitForAnimations } from "./support/screens";
 
 // =============================================================================
-// Painéis de TECNOLOGIA do dashboard (ids tech_*). Contrato MOCKADO:
+// Painéis de TECNOLOGIA (ids tech_*). Onda 3: /dashboard desenha só o catálogo
+// de painéis; os blocos de Tecnologia antigos agora compõem apenas o relatório
+// imprimível (/dashboard/relatorio, onde estes testes rodam, tema papel). A
+// exportação CSV/XLSX e os filtros por clique/barra eram só da tela antiga: o
+// equivalente atual é a exportação dos painéis do catálogo (seção própria abaixo).
+// Contrato MOCKADO:
 //   GET /api/v1/dashboard/tecnologia/{resumo,por-categoria,por-unidade,
 //       por-status,sem-responsavel,tempo-registro}  (+ filtros categoria/tipo_ti/status)
 //   GET /api/v1/dashboard/tecnologia/export?format=csv|xlsx
@@ -29,7 +34,7 @@ const TECH_BLOCKS = [
 ] as const;
 const TECH_PATHS = ["resumo", "por-categoria", "por-unidade", "por-status", "sem-responsavel", "tempo-registro"];
 
-async function open(page: Page, opts: MockOptions = { role: "USER" }, path = "/dashboard"): Promise<MockState> {
+async function open(page: Page, opts: MockOptions = { role: "USER" }, path = "/dashboard/relatorio"): Promise<MockState> {
   const state = await installMocks(page, opts);
   await seedSession(page, opts);
   await page.goto(path);
@@ -138,13 +143,13 @@ test.describe("erros e painel oculto", () => {
   });
 });
 
-test.describe("filtros na URL", () => {
-  test("classificação vai só às consultas de Tecnologia; os demais painéis não a recebem", async ({ page }) => {
-    const state = await open(page, { role: "USER" }, "/dashboard?categoria=TECNOLOGIA&status=EM_USO&located=SIM");
+test.describe("filtros na URL (herdados pelo relatório)", () => {
+  test("classificação vai só às consultas de Tecnologia; os demais blocos não a recebem", async ({ page }) => {
+    const state = await open(page, { role: "USER" }, "/dashboard/relatorio?categoria=TECNOLOGIA&status=EM_USO&located=SIM");
     await expectTechLoaded(page);
-    await expect(page.locator("[data-dashboard-filter-summary]")).toContainText("Categoria: Tecnologia");
-    await expect(page.locator("[data-dashboard-filter-summary]")).toContainText("Situação operacional: Em uso");
-    await expect(page.locator("[data-dashboard-filter-summary]")).toContainText("só os painéis de Tecnologia");
+    const filters = page.locator("[data-report-filters]");
+    await expect(filters).toContainText("Categoria: Tecnologia");
+    await expect(filters).toContainText("Situação operacional: Em uso");
     const tech = techCalls(state, "por-categoria");
     expect(tech.length).toBeGreaterThan(0);
     for (const call of tech) {
@@ -164,25 +169,9 @@ test.describe("filtros na URL", () => {
     await expect(page.locator("main")).not.toContainText("filtros_aplicados");
   });
 
-  test("selecionar a categoria no filtro atualiza a URL e refaz só as consultas de Tecnologia", async ({ page }) => {
-    const state = await open(page);
-    await expectTechLoaded(page);
-    const before = baseCalls(state, "por-unidade").length;
-    const toggle = page.locator("[data-dashboard-filters-toggle]");
-    if (await toggle.isVisible()) await toggle.click();
-    await page.getByRole("button", { name: /Mais filtros/ }).click();
-    await page.locator("[data-dashboard-tech-filters]").getByLabel("Categoria", { exact: true }).selectOption("MOBILIARIO");
-    await expect(page).toHaveURL(/categoria=MOBILIARIO/);
-    await expect
-      .poll(() => techCalls(state, "por-categoria").some((c) => new URL(c.url, "http://x").searchParams.get("categoria") === "MOBILIARIO"))
-      .toBe(true);
-    expect(baseCalls(state, "por-unidade").length).toBe(before); // painel geral não refaz
-  });
-
   test("valor inválido na URL é descartado e nunca chega ao backend", async ({ page }) => {
-    const state = await open(page, { role: "USER" }, "/dashboard?categoria=INVALIDA&tipo_ti=notebook");
+    const state = await open(page, { role: "USER" }, "/dashboard/relatorio?categoria=INVALIDA&tipo_ti=notebook");
     await expectTechLoaded(page);
-    await expect(page).not.toHaveURL(/categoria=/);
     for (const path of TECH_PATHS) {
       for (const call of techCalls(state, path)) {
         const q = new URL(call.url, "http://x").searchParams;
@@ -192,37 +181,49 @@ test.describe("filtros na URL", () => {
   });
 });
 
-test.describe("exportação", () => {
-  test("CSV e XLSX baixam o arquivo com os filtros aplicados", async ({ page }) => {
-    const state = await open(page, { role: "USER" }, "/dashboard?categoria=TECNOLOGIA");
-    await expectTechLoaded(page);
-    const actions = block(page, "tecnologia-indicadores").locator("[data-tech-export]");
-    await expect(actions).toContainText("sem dados pessoais");
-    const csv = page.waitForEvent("download");
-    await actions.getByRole("button", { name: "Exportar CSV" }).click();
-    expect((await csv).suggestedFilename()).toMatch(/^sispat-tecnologia-\d{8}T\d{6}Z\.csv$/);
-    await expect(actions.getByRole("status")).toContainText("gerado");
-    const xlsx = page.waitForEvent("download");
-    await actions.getByRole("button", { name: "Exportar XLSX" }).click();
-    expect((await xlsx).suggestedFilename()).toMatch(/\.xlsx$/);
-    const exports = techCalls(state, "export").map((c) => new URL(c.url, "http://x").searchParams);
-    expect(exports.map((q) => q.get("format"))).toEqual(["csv", "xlsx"]);
-    expect(exports.every((q) => q.get("categoria") === "TECNOLOGIA")).toBe(true);
+test.describe("sem Tecnologia antiga no /dashboard", () => {
+  test("a tela do dashboard não renderiza nem consulta os blocos tecnologia-*", async ({ page }) => {
+    const state = await open(page, { role: "USER" }, "/dashboard");
+    await expect(page.locator("[data-equipment-panel]").first()).toBeVisible({ timeout: 20_000 });
+    for (const id of TECH_BLOCKS) await expect(block(page, id)).toHaveCount(0);
+    for (const path of [...TECH_PATHS, "export"]) expect(techCalls(state, path)).toHaveLength(0);
+    await expect(page.locator("[data-tech-export]")).toHaveCount(0);
   });
+});
 
-  test("erro 403 mostra texto fixo, nunca a mensagem do backend", async ({ page }) => {
-    await open(page, { role: "RH", dashboardStatus: { "tecnologia/export": 403 } });
-    await expectTechLoaded(page);
-    const actions = block(page, "tecnologia-indicadores").locator("[data-tech-export]");
-    await actions.getByRole("button", { name: "Exportar CSV" }).click();
-    await expect(actions.getByRole("alert")).toHaveText("Seu perfil não tem permissão para exportar.");
-    await expect(page.getByText("SISPAT_BACKEND_MSG")).toHaveCount(0);
-  });
-
+test.describe("exportação (painéis do catálogo)", () => {
   test("relatório imprimível não mostra os botões de exportação", async ({ page }) => {
     await open(page, { role: "USER" }, "/dashboard/relatorio");
     await expectTechLoaded(page);
     await expect(page.locator("[data-tech-export]")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: /Exportar/ })).toHaveCount(0);
+  });
+
+  test("erro 403 na exportação do catálogo mostra texto fixo, nunca a mensagem do backend", async ({ page }) => {
+    await open(page, { role: "RH" }, "/dashboard");
+    await page.route("**/api/v1/dashboard/panels/*/export**", (route) =>
+      route.request().method() === "OPTIONS"
+        ? route.fulfill({
+            status: 204,
+            headers: {
+              "access-control-allow-origin": route.request().headers()["origin"] ?? "*",
+              "access-control-allow-headers": "authorization,content-type,accept",
+            },
+          })
+        : route.fulfill({
+            status: 403,
+            headers: {
+              "access-control-allow-origin": route.request().headers()["origin"] ?? "*",
+              "content-type": "application/json",
+            },
+            body: JSON.stringify({ error: { code: "FORBIDDEN", message: "SISPAT_BACKEND_MSG" } }),
+          }),
+    );
+    const actions = page.locator("[data-equipment-export=equipment_by_unit_table]");
+    await expect(actions).toBeVisible({ timeout: 20_000 });
+    await actions.getByRole("button", { name: /Exportar CSV/ }).click();
+    await expect(actions.getByRole("alert")).toHaveText("Seu perfil não tem permissão para exportar.");
+    await expect(page.getByText("SISPAT_BACKEND_MSG")).toHaveCount(0);
   });
 });
 

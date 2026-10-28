@@ -3,9 +3,15 @@
 Sistema de Gestão Patrimonial da **Advocacia-Geral da União (AGU)** — unidade
 **Palmas/TO**.
 
-> **Status atual: Fase 1 — banco de dados, modelagem e permissionamento em
-> andamento.** Frontend e demais fases ainda não foram iniciados
-> [Documentação local](#documentação-local-não-versionada)).
+> **Status atual (2026-10-27): Fase 1 (banco, modelagem e permissionamento)
+> concluída; em andamento: importação do Google Sheets (importação de Bens ainda
+> não executada), MFA/convite, UX e o dashboard de equipamentos com classificação
+> patrimonial (Ondas 1-5 documentadas; ver [Classificação patrimonial e painéis
+> (Onda 5)](#classificação-patrimonial-e-painéis-do-dashboard-onda-5-2026-10-27)).**
+> Backend e frontend já existem; a implantação na VPS registrada em "Implantado"
+> é de 2026-10-20/21 e NÃO inclui as Ondas 1-5 de 2026-10-27. O que é pendência
+> está marcado como tal em cada seção
+> ([Documentação local](#documentação-local-não-versionada)).
 
 ## Visão geral
 
@@ -13,9 +19,8 @@ O SISPAT-AGU controla o inventário patrimonial da unidade, com:
 
 - **Backend:** Python, Flask, SQLAlchemy 2.x e Alembic (migrações
   versionadas). Toda regra de negócio e validação crítica vive aqui.
-- **Frontend:** Next.js, React e TypeScript (fase futura — ainda não
-  implementado; o frontend é camada de apresentação, nunca mecanismo de
-  segurança).
+- **Frontend:** Next.js, React e TypeScript (implementado em `frontend/`; é
+  camada de apresentação, nunca mecanismo de segurança).
 - **Banco de dados:** Supabase/PostgreSQL remoto e gerenciado é a fonte
   operacional de verdade. Não há banco de produção local neste repositório.
 - **Credencial do Google Sheets no Docker:** o JSON da service account fica
@@ -217,6 +222,38 @@ vhost).
   aceitando `dashboard_layout` durante a transição.
 - Rebuild: backend (frontend só quando a tela nova consumir as rotas).
 
+### Classificação patrimonial e painéis do dashboard (Onda 5, 2026-10-27)
+
+- **Classificação:** 3 famílias (TI, MOBILIARIO, OUTROS) e 20 categorias, motor
+  determinístico e puro em `backend/app/services/asset_classification.py`
+  (confiança ALTA/BAIXA, regra e versão gravadas por bem; `category_override` do
+  ADM prevalece). Regras, listas de contexto e **como adicionar uma regra nova**
+  (onde, ordem de prioridade, teste, medir o impacto com `flask classify-equipment`
+  em dry-run): `docs/architecture/classificacao-patrimonial.md`.
+- **12 painéis** com permissão por perfil no backend (ADM 12, USER 9, RH 7), tela
+  "Personalizar painéis" e dados em `/api/v1/dashboard/panels/<id>/data`; fila de
+  revisão `/dashboard/classificacao` e `POST /assets/<id>/category-override` (ADM +
+  AAL2). Contrato, mapa de migração dos 15 painéis antigos e limitações
+  (`notebooks_without_docking` é ESTIMATIVA; `sync_status` é global; não existe
+  remoção de override): `docs/architecture/dashboard-api.md`.
+- **Banco:** migrações `0016_asset_search_key`, `0017_dashboard_panel_prefs` e
+  `0018_equipment_classification` (espelhos `sql/0019`, `sql/0020`, `sql/0021`), DDL
+  aplicado à mão no Supabase; `alembic_version` = `0018` por UPDATE manual. **Nunca
+  rodar `alembic upgrade` sobre este banco.** Rollbacks, backup e verificação:
+  `docs/database/historico-migracoes.md`.
+- **Pendência (decisão do responsável):** as colunas de classificação estão NULL
+  (sem backfill). Rodar `flask classify-equipment` (dry-run por padrão) e decidir
+  entre `--apply` (só com autorização) antes da 1ª importação ou aceitar que a 1ª
+  importação conte ~1.069 bens como atualizados (`version`+1). Medidas do acervo
+  (protótipo, 2026-10-27): MOBILIARIO 630, TI 403, OUTROS 36; ALTA 1.068, BAIXA 1;
+  sem impressoras (cartão = 0, correto).
+- **Segurança (Onda 4):** `docs/security/REVISAO_QA_ONDA4_2026-10-27.md` —
+  backend 14344 passed/64 skipped/4 xfailed/0 failed em Python 3.10 e SQLite;
+  gitleaks e trivy não executados, pip-audit inconclusivo; **não validado em
+  PostgreSQL nem em Python 3.11+**.
+- Rebuild: backend + frontend (`docker compose build backend frontend && docker
+  compose up -d backend frontend`), somente com autorização de implantação.
+
 ### Painéis de Tecnologia no dashboard (2026-10-22)
 
 - Seis painéis novos (`/dashboard/tecnologia/*`: indicadores, categoria, por unidade,
@@ -260,7 +297,7 @@ vhost).
 SISPAT-AGU/
 ├── backend/                 # API Flask (modelos, rotas, serviços, migrações)
 │   └── Dockerfile
-├── frontend/                 # Next.js (fase futura — esqueleto mínimo)
+├── frontend/                 # Next.js (telas, testes Playwright em e2e/)
 │   ├── Dockerfile
 │   └── src/{app,components,features,lib}/
 │                              # app/(publico): /login e /ativar-conta (tela
@@ -391,6 +428,12 @@ Tela **Administração → Usuários** (ADM com MFA/AAL2) e **Configurações �
   unidade); alvo alheio, inexistente ou malformado → mesmo 404.
 - **Detalhe:** perfil e unidades (checkboxes), conta (desativar/reativar, encerrar
   sessões, e-mail de redefinição de senha, reset de MFA), foto e histórico de auditoria.
+- **Redefinição de senha:** o e-mail é montado e enviado pelo **próprio backend**
+  (`app/services/password_reset_delivery.py`), com link `?token_hash=...&type=recovery`
+  para `/ativar-conta`; o `POST /auth/v1/recover` não é usado porque o link do template
+  do Supabase é consumido por scanners de antivírus de e-mail antes do clique da pessoa
+  (diagnóstico e evidência em `docs/deploy/PLANO_ACAO_RESET_SENHA_2026-10-27.md`).
+  Exige `EMAIL_ENABLED=true` com SMTP configurado; o ADM nunca vê link nem senha.
 - **Regras no backend:** controle otimista (`version`), sem auto-alteração, nunca
   remove o último ADM, promover/rebaixar ADM exige confirmação. Mudanças de privilégio,
   desativar ADM e reset de MFA exigem que **todas** as unidades do alvo estejam no
@@ -460,6 +503,9 @@ A IA é **consultiva e somente leitura**: nunca altera dados nem executa ações
 1. **Fase 1 (concluída):** banco de dados, modelagem e permissionamento.
 2. **Em andamento:** importação do Google Sheets, MFA/convite, UX e o módulo de
    Configurações (IA, Aparência, Gestão de Usuários) — ver `CLAUDE.md` (mantido localmente).
+   Dashboard de equipamentos (classificação patrimonial, 12 painéis, fila de revisão):
+   Ondas 1-5 de 2026-10-27, com backfill e implantação pendentes (seção "Classificação
+   patrimonial e painéis do dashboard (Onda 5)").
    Etapas 1 (IA), 2 (usuários) e 3 (Aparência: `/me/preferences`, cookie `sispat-ui`,
    `/configuracoes/aparencia`) e 4 (alertas determinísticos `/dashboard/alerts`, insights
    `/ai/insights` e assistente `/ai/ask`, ADM + AAL2) concluídas. Evidências em

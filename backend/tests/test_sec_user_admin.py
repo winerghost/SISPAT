@@ -15,6 +15,7 @@ assinados com o segredo FICTÍCIO de `tests/conftest.py`. Sem rede.
 from __future__ import annotations
 
 import io
+import logging
 import time
 import uuid
 from datetime import datetime, timezone
@@ -117,7 +118,7 @@ def test_rotas_sem_corpo_rejeitam_version_ou_alvo_no_corpo(scene, suffix):
     )
     assert response.status_code == 400
     scene.api.admin.delete_all_mfa_factors.assert_not_called()
-    scene.api.admin.send_password_recovery.assert_not_called()
+    scene.api.admin.generate_recovery_token_hash.assert_not_called()
     assert scene.w.get(scene.user_x).sessions_revoked_at is None
 
 
@@ -413,18 +414,46 @@ def test_mfa_reset_alvo_alheio_com_reautenticacao_valida_e_404(scene):
 # ---------------------------------------------------------------------------
 
 
+TOKEN_HASH = "hash-de-uso-unico-de-teste-" + "a" * 20
+
+
 def _set_redirect(monkeypatch, value):
     from app.config.settings import get_settings
 
+    cls = type(get_settings())
     monkeypatch.setattr(
-        type(get_settings()), "password_reset_redirect_effective_url", property(lambda _s: value)
+        cls, "password_reset_redirect_effective_url", property(lambda _s: value)
     )
+    # Em produção a URL efetiva SEMPRE está na allow-list (garantido por
+    # `password_reset_redirect_effective_url`); `password_reset_delivery`
+    # revalida o link contra ela antes de montar o e-mail.
+    monkeypatch.setattr(cls, "invite_allowed_redirect_urls_list", property(lambda _s: [value]))
+
+
+def _stub_delivery(monkeypatch, api, *, status="sent"):
+    """Habilita a entrega do e-mail de redefinição sem tocar em SMTP.
+
+    Devolve a lista das mensagens que o módulo tentou enviar, para inspecionar
+    o corpo (é o ÚNICO lugar em que o link de uso único pode aparecer).
+    """
+    from app.services import password_reset_delivery as delivery
+    from app.services.email.sender import EmailResult
+
+    api.admin.generate_recovery_token_hash.return_value = TOKEN_HASH
+    sent: list = []
+
+    def fake_send(message, **_kwargs):
+        sent.append(message)
+        return EmailResult(status=status)
+
+    monkeypatch.setattr(delivery, "send_email_safely", fake_send)
+    return sent
 
 
 def test_limite_por_alvo_vale_entre_adms_e_grafias_do_uuid(scene, monkeypatch):
     api = scene.api
     _set_redirect(monkeypatch, "https://app.exemplo.invalid/redefinir-senha")
-    api.admin.send_password_recovery.return_value = None
+    _stub_delivery(monkeypatch, api)
     target = str(scene.user_x)
     plan = [(ADM_SUB, target), (ADM2_SUB, target.upper()), (ADM_SUB, target), (ADM2_SUB, target.upper()),
             (ADM_SUB, target)]
@@ -433,21 +462,37 @@ def test_limite_por_alvo_vale_entre_adms_e_grafias_do_uuid(scene, monkeypatch):
         assert response.status_code == 200 and response.get_json() == {"result": "sent"}
     sixth = api.client.post(f"/api/v1/users/{target.upper()}/password-reset", headers=_h(ADM2_SUB))
     assert sixth.status_code == 429
-    assert api.admin.send_password_recovery.call_count == 5
+    assert api.admin.generate_recovery_token_hash.call_count == 5
 
 
-def test_reset_de_senha_nao_devolve_nem_audita_link_email_ou_redirect(scene, monkeypatch):
+def test_reset_de_senha_nao_devolve_nem_audita_link_email_ou_redirect(scene, monkeypatch, caplog):
+    """PR-LINK: desde 2026-10-27 o backend VÊ o token (monta o e-mail ele
+    mesmo, porque o link do template do Supabase é gasto por scanner de
+    antivírus). O token de uso único só pode existir no corpo do e-mail:
+    nunca na resposta HTTP, nunca em `audit_logs`, nunca em log."""
     api = scene.api
     redirect = "https://app.exemplo.invalid/redefinir-senha"
     _set_redirect(monkeypatch, redirect)
-    api.admin.send_password_recovery.return_value = {"action_link": "https://x.invalid/#token=SEGREDO"}
-    response = api.client.post(f"/api/v1/users/{scene.user_x}/password-reset", headers=_h())
+    sent = _stub_delivery(monkeypatch, api)
+    with caplog.at_level(logging.DEBUG):
+        response = api.client.post(f"/api/v1/users/{scene.user_x}/password-reset", headers=_h())
     assert response.get_json() == {"result": "sent"}
-    api.admin.send_password_recovery.assert_called_once_with("pessoa.x@exemplo.invalid", redirect)
+    api.admin.generate_recovery_token_hash.assert_called_once_with(
+        "pessoa.x@exemplo.invalid", redirect
+    )
+    # O endpoint cujo e-mail é vulnerável ao scanner não pode mais ser usado.
+    api.admin.send_password_recovery.assert_not_called()
+    (message,) = sent
+    expected_link = f"{redirect}?token_hash={TOKEN_HASH}&type=recovery"
+    assert expected_link in message.text_body
+    # No HTML o `&` sai escapado (autoescape=True): o href continua correto.
+    assert expected_link.replace("&", "&amp;") in (message.html_body or "")
     (audit,) = scene.w.audits("USER_PASSWORD_RESET_SENT")
     dumped = str(audit.previous_values) + str(audit.new_values)
-    for leak in ("SEGREDO", "pessoa.x@exemplo.invalid", redirect):
-        assert leak not in dumped and leak not in response.get_data(as_text=True)
+    body = response.get_data(as_text=True)
+    for leak in (TOKEN_HASH, "pessoa.x@exemplo.invalid", redirect):
+        assert leak not in dumped and leak not in body
+    assert TOKEN_HASH not in caplog.text
 
 
 @pytest.mark.parametrize(

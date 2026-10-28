@@ -4,9 +4,17 @@ Código: rotas `backend/app/api/v1/dashboard.py`, schemas `dashboard_schemas.py`
 regras `backend/app/services/dashboard_service.py` (filtros comuns com a lista de
 bens em `asset_service.asset_filter_clauses`). Testes:
 `backend/tests/test_dashboard_summary_api.py`, `test_dashboard_filters.py`,
-`test_sec_dashboard_review.py` e `test_sec_route_inventory.py`. **Sem migração**
-(filtros só na URL; salvar por usuário fica para a fase 3). `GET /dashboard/alerts`
+`test_sec_dashboard_review.py` e `test_sec_route_inventory.py`. Os filtros dos
+endpoints de agregação abaixo vivem só na URL (sem migração). `GET /dashboard/alerts`
 (Etapa 4a) está em `modulo-configuracoes.md`.
+
+**Mapa deste documento (atualizado na Onda 5, 2026-10-27):** as seções "Política
+comum", "Filtros" e "Rotas" descrevem os endpoints de agregação ANTERIORES; "Painéis de
+Tecnologia" descreve `/dashboard/tecnologia/*` (vocabulário legado da 0015); as seções
+"Personalizar painéis" e "Dados dos 12 painéis" (Ondas 1-2) são o contrato VIGENTE do
+dashboard de equipamentos. Regras de classificação, famílias e categorias:
+`docs/architecture/classificacao-patrimonial.md`. Limitações conhecidas: seção final
+"Limitações e lacunas conhecidas".
 
 ## Política comum
 Pilha: `require_auth -> require_aal2_for_adm -> require_permission("reports.read")
@@ -113,6 +121,9 @@ fictício), CHECKs fechados, índice parcial `ix_assets_category_active`
 (`deleted_at IS NULL AND asset_category IS NOT NULL`). **PENDENTE DE APLICAÇÃO**: sem ela
 as rotas de Tecnologia respondem erro de banco; só com autorização (padrão do projeto:
 executar o espelho `.sql` e depois `alembic stamp 0015_asset_tech_classification`).
+(Atualização Onda 5: o `alembic_version` do banco foi levado a `0018` por UPDATE manual;
+isso NÃO prova que o DDL da 0015 esteja no banco. Conferir com as consultas de
+verificação de `docs/database/historico-migracoes.md` antes de usar `/tecnologia/*`.)
 
 | Campo | Valores |
 |---|---|
@@ -165,7 +176,8 @@ Rotas:
 Painéis de layout novos (`dashboard_layout`): `tech_summary`, `tech_category`,
 `tech_units`, `tech_status`, `tech_no_owner`, `tech_age` (ao fim da ordem padrão; 15 ids no
 total). O CHECK de tamanho de `dashboard_layout` (1024 bytes) comporta o pior caso (cerca de
-600 bytes): não foi alterado.
+600 bytes): não foi alterado. **Substituído** pelo catálogo de 12 painéis (próxima seção):
+esses 15 ids só existem agora como entrada do mapa de migração.
 
 ## Personalizar painéis (`GET /dashboard/panels`, `PUT /dashboard/preferences`)
 
@@ -178,23 +190,37 @@ Substitui integralmente a personalização antiga de 15 ids em
 tamanho padrão e sinalização de exportação. O frontend nunca decide o que um
 perfil pode ver: ele pede o catálogo e desenha o que vier.
 
-| Id | Painel | Perfis | Tamanhos | Padrão |
-|---|---|---|---|---|
-| `kpi_workstations` | Postos de trabalho (Computadores, Notebooks, Monitores) | ADM/USER/RH | P M G | G |
-| `kpi_infrastructure` | Infraestrutura de TI (Impressoras, Nobreaks, Estabilizadores, Docking) | ADM/USER/RH | P M G | G |
-| `kpi_furniture` | Mobiliário (Gaveteiros, Armários, Mesas, Estações) | ADM/USER/RH | P M G | G |
-| `equipment_by_unit_table` | Equipamentos de TI por unidade (exportação) | ADM/USER/RH | M G | G |
-| `furniture_by_unit_table` | Mobiliário por unidade (exportação) | ADM/USER/RH | M G | G |
-| `equipment_by_unit_chart` | Equipamentos por unidade (barras agrupadas) | ADM/USER/RH | P M G | G |
-| `category_distribution` | Distribuição percentual por família/categoria | ADM/USER/RH | P M G | M |
-| `notebooks_without_docking` | Notebooks sem docking station, por unidade | ADM/USER | P M G | M |
-| `workstation_ratio` | Monitores por computador/notebook | ADM/USER | P M G | P |
-| `unclassified_review` | Pendentes de revisão (OUTROS + BAIXA) | ADM | M G | M |
-| `classification_overrides` | Últimas correções manuais de categoria | ADM | M G | M |
-| `sync_status` | Última sincronização do Sheets e divergências | ADM | P M G | P |
+`tipo` é o campo `tipo` do envelope de `GET /dashboard/panels/<id>/data`; "Exportável" é
+`exportable` do catálogo (rota `/export`). Fonte: `PANEL_CATALOG` e `PANEL_BUILDERS`.
+
+| Id | Painel | Tipo | Perfis | Exportável | Tamanhos | Padrão |
+|---|---|---|---|---|---|---|
+| `kpi_workstations` | Postos de trabalho (Computadores, Notebooks, Monitores) | `cartoes` | ADM/USER/RH | não | P M G | G |
+| `kpi_infrastructure` | Infraestrutura de TI (Impressoras, Nobreaks, Estabilizadores, Docking) | `cartoes` | ADM/USER/RH | não | P M G | G |
+| `kpi_furniture` | Mobiliário (Gaveteiros, Armários, Mesas, Estações) | `cartoes` | ADM/USER/RH | não | P M G | G |
+| `equipment_by_unit_table` | Equipamentos de TI por unidade | `tabela` | ADM/USER/RH | sim | M G | G |
+| `furniture_by_unit_table` | Mobiliário por unidade | `tabela` | ADM/USER/RH | sim | M G | G |
+| `equipment_by_unit_chart` | Equipamentos por unidade (barras agrupadas) | `grafico` | ADM/USER/RH | não | P M G | G |
+| `category_distribution` | Distribuição percentual por família/categoria | `distribuicao` | ADM/USER/RH | não | P M G | M |
+| `notebooks_without_docking` | Notebooks sem docking station, por unidade | `ranking` | ADM/USER | não | P M G | M |
+| `workstation_ratio` | Monitores por computador/notebook | `razao` | ADM/USER | não | P M G | P |
+| `unclassified_review` | Pendentes de revisão (OUTROS + BAIXA) | `fila` | ADM | não (a fila tem rota própria de exportação) | M G | M |
+| `classification_overrides` | Últimas correções manuais de categoria | `lista` | ADM | não | M G | M |
+| `sync_status` | Última sincronização do Sheets e divergências | `status` | ADM | não | P M G | P |
 
 Total por perfil: **ADM 12, USER 9, RH 7**. Papel desconhecido/ausente -> nenhum
 painel (negar por padrão).
+
+**Tela "Personalizar painéis"** (frontend, apresentação apenas):
+`frontend/src/components/features/dashboard/dashboard-layout-dialog.tsx`
+(`DashboardLayoutButton`, aberta pelo `dashboard-view.tsx`), com o estado em
+`use-dashboard-panel-prefs.ts` e as chamadas em `frontend/src/lib/preferences-api.ts`. O
+diálogo lista só o catálogo devolvido por `GET /dashboard/panels`; trabalha num rascunho
+local; "Salvar" envia `PUT {version, panels}` e "Restaurar padrão" envia `{version,
+restore_default: true}`; a grade só muda depois da confirmação do servidor (409/403
+recarrega e refaz o rascunho). Ordem por arrastar (alça) ou botões mover para cima/baixo;
+tamanho P/M/G só entre os admitidos pelo painel; ao menos um painel visível (o backend
+também recusa). Detalhes de UX: `docs/ux/DASHBOARD_PERSONALIZACAO.md`.
 
 ### `GET /api/v1/dashboard/panels`
 
@@ -227,8 +253,16 @@ nunca é exposto.
 
 ### `PUT /api/v1/dashboard/preferences`
 
-Mesmos decorators, limite de 60 gravações/h por usuário,
-`Cache-Control: no-store`. Corpo `extra="forbid"`; `user_id` NUNCA vem do
+Mesmos decorators, limite de 60 gravações/h por usuário (`PANELS_WRITE_LIMIT`),
+`Cache-Control: no-store`.
+
+**Política READ (decisão registrada na Onda 4):** apesar de ser um `PUT`, a rota exige
+`reports.read` (e não `assets.update`/`exports.create`) porque grava apenas a
+preferência de exibição do PRÓPRIO usuário, nunca dado patrimonial. A defesa não vem da
+permissão e sim de: alvo sempre o `sub` do JWT; painel proibido ao perfil nunca é
+habilitado (nem por `restore_default`, ids repetidos ou desconhecidos); controle otimista
+por `version`; negação gravada em `audit_logs`. Testes:
+`backend/tests/test_qa_onda4_preferences.py` (14 funções de teste) e `test_dashboard_panels_api.py`. Corpo `extra="forbid"`; `user_id` NUNCA vem do
 cliente (o alvo é sempre o usuário do JWT; tentativa -> 400 + evento
 `PRIVILEGE_ESCALATION_ATTEMPT`). Exatamente UM de `panels` ou
 `restore_default: true`:
@@ -341,6 +375,39 @@ Override: corpo `{category, version}` (`extra="forbid"`; `category` = uma das 20
 `category_override`, define `classification_confidence='ALTA'`, `version+1`, e registra
 `ASSET_CATEGORY_OVERRIDDEN` em `audit_logs` na mesma transação. Erros: 400 (validação / campo extra,
 com evento de segurança), 403 (não ADM / sem AAL2), 404 (alheio, inexistente ou excluído, idênticos),
-409 `version_conflict`. Repetir a mesma categoria é idempotente (sem gravação nem auditoria).
+409 `version_conflict` (a versão é checada ANTES da idempotência). Repetir a mesma categoria
+sobre um bem que já está com esse override e confiança `ALTA` devolve o bem sem gravar nem
+auditar (`override_category` em `dashboard_classification_service.py`). A auditoria
+`ASSET_CATEGORY_OVERRIDDEN` traz em `previous_values` o override, a categoria efetiva e a de
+regra, a confiança, a regra e a versão; em `new_values`, categoria e família efetivas.
 Exportações: auditadas (`DASHBOARD_EQUIPMENT_EXPORTED`, `DASHBOARD_REVIEW_QUEUE_EXPORTED`), toda
-célula via `csv_safety`.
+célula via `csv_safety`. Limites: leituras `LIST_LIMIT` (1200/h); exportações
+`TECH_EXPORT_LIMIT` (30/h).
+
+## Limitações e lacunas conhecidas (Onda 5, 2026-10-27)
+
+1. **`notebooks_without_docking` é ESTIMATIVA.** Não existe vínculo notebook x docking no
+   banco. O painel calcula, por unidade, `max(notebooks - docking, 0)` sobre contagens de
+   categoria efetiva e só lista unidades com pelo menos um notebook; o campo `metodo` vem
+   como `diferenca_de_contagens_por_unidade`. Uma docking station em unidade diferente
+   da do notebook, ou uma docking compartilhada, distorce o número. A interface deve
+   apresentá-lo como estimativa.
+2. **`sync_status` é GLOBAL (achado QA4-03).** `ultima_importacao` (última `ImportPreview`
+   `CONFIRMADA`) e `ultimo_job` (último `SyncJob`) não são filtrados por escopo de unidade
+   nem pelos filtros do painel; só `conflitos_pendentes` respeita o escopo (conflitos cujo
+   bem está no escopo OU ainda sem bem). Como o painel é só ADM e o ADM não tem bypass de
+   unidade em bens, é uma exceção consciente do escopo: contagens e datas, nenhum registro
+   de bem. Aberto como achado de baixa severidade (ver
+   `docs/security/REVISAO_QA_ONDA4_2026-10-27.md`).
+3. **Não existe remoção de override (achado QA4-04).** Só há `POST
+   /assets/<id>/category-override`; nenhuma rota `DELETE`/"limpar" devolve o bem à
+   classificação por regra. O override também fixa `classification_confidence = 'ALTA'`,
+   tira o bem da fila de revisão e o motor (importação e `flask classify-equipment`) nunca
+   escreve em `category_override`. Hoje a única forma de desfazer é SQL manual (fora do
+   fluxo auditado) ou outro override para a categoria desejada. Pendência de produto.
+4. `PUT /dashboard/preferences` usa a política READ (`reports.read`); ver a seção da rota.
+5. Os endpoints `/dashboard/tecnologia/*` e o vocabulário legado da 0015 continuam no código
+   e nenhum dos 12 painéis do catálogo os usa (o frontend ainda contém
+   `dashboard-tech-panels.tsx`; se ele continua montado na tela não foi verificado nesta
+   rodada — pendência de limpeza); as colunas `equipment_*` (0018) são
+   independentes de `asset_category`/`tech_type` (0015).

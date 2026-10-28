@@ -94,6 +94,9 @@ convite localmente, adicione a URL local por pouco tempo e remova depois.
 Reset Password. **Só depois do rebuild do frontend com a correção de
 2026-10-21** (a página `/ativar-conta` passou a aceitar `type=recovery`).
 
+HTML pronto, diagnóstico com evidência dos logs (2026-10-27) e roteiro de
+teste: `docs/deploy/email-template-reset-senha.md`.
+
 1. Assunto: `Redefinição de senha do SISPAT-AGU`.
 2. No corpo, troque o link `{{ .ConfirmationURL }}` por exatamente:
 

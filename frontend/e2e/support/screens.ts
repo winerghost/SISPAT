@@ -1,6 +1,7 @@
 import { expect, type Page } from "@playwright/test";
 
 import { CATALOG } from "../dashboard-equipment-support";
+import { KPI_CARDS } from "./dashboard-mocks";
 import { installMocks, seedSession, waitForHydration, type MockOptions } from "./mocks";
 
 // =============================================================================

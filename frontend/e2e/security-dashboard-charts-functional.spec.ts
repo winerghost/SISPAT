@@ -10,16 +10,21 @@ import {
   waitForHydration,
   type DashboardChartsMock,
   type MockOptions,
+  type MockState,
 } from "./support/mocks";
-import { expectDashboardLoaded } from "./support/screens";
+import { expectDashboardLoaded, expectPanelsLoaded } from "./support/screens";
 
 // =============================================================================
 // L-2 (docs/security/REVISAO_DASHBOARD_NIVO_2026-10-20.md): rótulos maliciosos
-// em TODAS as variantes de gráfico são renderizados como TEXTO (escape do
-// React) — legenda, tabela alternativa, eixo, tooltip e botões de filtro — e
-// dado de preferência legado/inválido nunca quebra a tela nem é exibido.
+// são renderizados como TEXTO (escape do React) — legenda, tabela alternativa,
+// eixo e tooltip — e dado de preferência/catálogo legado ou inválido nunca
+// quebra a tela nem é exibido.
 // Critério: `window.__xss` indefinido, nenhum <img src="x"> no DOM e o texto
 // literal visível onde o rótulo aparece.
+// Onda 3: /dashboard desenha SÓ o catálogo de painéis (seção "catálogo de
+// painéis"); os 15 blocos antigos (variantes de gráfico, preferência
+// `dashboard_charts`) só existem no relatório imprimível (/dashboard/relatorio)
+// e são verificados lá.
 // =============================================================================
 
 test.use({ viewport: { width: 1366, height: 900 } });
@@ -58,7 +63,7 @@ function maliciousDashboard(): Partial<DashboardMockData> {
       { unidade: LABELS.location, sim: 3, nao: 2, desconhecido: 1, total: 6 },
       ...base["localizacao-por-unidade"],
     ],
-    // `id` também malicioso: vira bond_status na URL (codificado) se clicado.
+    // `id` também malicioso: nunca vira filtro (o relatório não tem ação de clique).
     "por-vinculo": [{ id: LABELS.bond, label: LABELS.bond, value: 900 }, ...base["por-vinculo"]],
     "por-sala": [{ id: "80000000-0000-4000-8000-0000000000ee", label: LABELS.room, value: 400 }, ...base["por-sala"]],
   };
@@ -79,11 +84,12 @@ const VARIANTS: { name: string; charts: DashboardChartsMock }[] = [
   },
 ];
 
-async function open(page: Page, opts: MockOptions): Promise<void> {
-  await installMocks(page, opts);
+async function open(page: Page, opts: MockOptions, path = "/dashboard/relatorio"): Promise<MockState> {
+  const state = await installMocks(page, opts);
   await seedSession(page, opts);
-  await page.goto("/dashboard");
+  await page.goto(path);
   await waitForHydration(page);
+  return state;
 }
 
 /** Responde o GET de preferências com um corpo CRU (sem a mescla de padrões do mock). */
@@ -106,8 +112,8 @@ async function expectClean(page: Page): Promise<void> {
 }
 
 /** Passa o ponteiro sobre as marcas do gráfico (abre o tooltip do Nivo). */
-async function hoverMarks(page: Page, id: string): Promise<void> {
-  const surface = block(page, id).locator("[data-chart-surface]");
+async function hoverMarks(page: Page, scope: ReturnType<Page["locator"]>): Promise<void> {
+  const surface = scope.locator("[data-chart-surface]").first();
   await surface.scrollIntoViewIfNeeded();
   const marks = surface.locator("svg g rect, svg path");
   const count = Math.min(await marks.count(), 6);
@@ -120,7 +126,7 @@ async function hoverMarks(page: Page, id: string): Promise<void> {
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
 }
 
-test.describe("XSS por variante de gráfico (texto puro)", () => {
+test.describe("XSS por variante de gráfico — relatório imprimível (texto puro)", () => {
   for (const variant of VARIANTS) {
     test(variant.name, async ({ page }) => {
       await open(page, { role: "USER", dashboard: maliciousDashboard(), prefs: { dashboard_charts: variant.charts } });
@@ -137,25 +143,22 @@ test.describe("XSS por variante de gráfico (texto puro)", () => {
       await expect(page.getByRole("table", { name: /Detalhamento/ })).toContainText(LABELS.unit);
 
       for (const id of ["por-unidade", "por-situacao", "aquisicoes-mensais", "localizacao-por-unidade", "por-vinculo", "por-sala"]) {
-        await hoverMarks(page, id);
+        await hoverMarks(page, block(page, id));
         await expectClean(page);
       }
 
-      // Botões de filtro com rótulo malicioso (sala) são texto.
-      const rooms = block(page, "por-sala");
-      await rooms.getByRole("button", { name: /Filtrar pelo gráfico/ }).click();
-      await expect(rooms.getByRole("button", { name: LABELS.room })).toBeVisible();
+      // O relatório não tem ação de clique: nenhum rótulo vira botão de filtro.
+      await expect(page.getByRole("button", { name: /Filtrar/ })).toHaveCount(0);
       await expectClean(page);
     });
   }
 
-  test("filtrar pelo vínculo malicioso: URL codificada, resumo em texto, nada executa", async ({ page }) => {
-    await open(page, { role: "USER", dashboard: maliciousDashboard(), prefs: { dashboard_charts: { bond: "bar" } } });
+  test("filtro malicioso herdado da URL: aparece como texto no cabeçalho do relatório, nada executa", async ({ page }) => {
+    // `bond_status` com HTML na URL é listado como TEXTO literal (escape do React), sem virar <img>.
+    const query = `bond_status=${encodeURIComponent(LABELS.bond)}`;
+    await open(page, { role: "USER", dashboard: maliciousDashboard() }, `/dashboard/relatorio?${query}`);
     await expectDashboardLoaded(page);
-    await block(page, "por-vinculo").getByRole("button", { name: /Filtrar por vínculo: Vinc/ }).click();
-    await expect(page).toHaveURL(/bond_status=Vinc\+%3Cimg/);
-    await expect(page.locator("[data-dashboard-filter-summary]")).toContainText(`Vínculo: ${LABELS.bond}`);
-    await expectDashboardLoaded(page);
+    await expect(page.locator("[data-report-filters]")).toContainText(`Vínculo: ${LABELS.bond}`);
     await expectClean(page);
   });
 
@@ -174,17 +177,16 @@ test.describe("XSS por variante de gráfico (texto puro)", () => {
     await expectClean(page);
   });
 
-  test("situação com id desconhecido não vira filtro (sem botão, sem ação no clique)", async ({ page }) => {
+  test("situação com id desconhecido é só texto na legenda (sem botão no relatório)", async ({ page }) => {
     await open(page, { role: "USER", dashboard: maliciousDashboard(), prefs: { dashboard_charts: { status: "bar" } } });
     await expectDashboardLoaded(page);
     const legend = block(page, "por-situacao").getByRole("list", { name: /Legenda/ });
     await expect(legend).toContainText("Sit <img src=x");
-    await expect(legend.getByRole("button", { name: /Sit/ })).toHaveCount(0);
-    await expect(legend.getByRole("button", { name: /Localizado/ })).toHaveCount(1);
+    await expect(legend.getByRole("button")).toHaveCount(0);
   });
 });
 
-test.describe("preferência legada/inválida", () => {
+test.describe("preferência legada/inválida (relatório imprimível)", () => {
   const invalidCharts: { name: string; charts: unknown }[] = [
     { name: "valor de outro painel (units: pie)", charts: { units: "pie", status: "pie", monthly: "line" } },
     { name: "valor com HTML", charts: { units: XSS_IMG, status: "pie", monthly: "line" } },
@@ -198,13 +200,12 @@ test.describe("preferência legada/inválida", () => {
       await installMocks(page, opts);
       await routeRawPreferences(page, charts);
       await seedSession(page, opts);
-      await page.goto("/dashboard");
+      await page.goto("/dashboard/relatorio");
       await waitForHydration(page);
       await expectDashboardLoaded(page);
       await expect(block(page, "por-unidade").locator("figure")).toHaveAttribute("data-chart-kind", "grouped");
       await expect(block(page, "por-vinculo").locator("figure")).toHaveAttribute("data-chart-kind", "donut");
       await expect(page.getByRole("button", { name: /^Tipo de gráfico/ })).toHaveCount(0);
-      await expect(page.getByRole("button", { name: "Personalizar painéis" })).toHaveCount(0);
       await expect(page.locator("main")).not.toContainText("donut");
       await expectClean(page);
     });
@@ -215,22 +216,132 @@ test.describe("preferência legada/inválida", () => {
     await installMocks(page, opts);
     await routeRawPreferences(page, { units: "stacked", status: "pie", monthly: "line", x: 1, role: "ADM" });
     await seedSession(page, opts);
-    await page.goto("/dashboard");
+    await page.goto("/dashboard/relatorio");
     await waitForHydration(page);
     await expectDashboardLoaded(page);
     await expect(block(page, "por-unidade").locator("figure")).toHaveAttribute("data-chart-kind", "stacked");
-    await expect(block(page, "por-unidade").getByRole("button", { name: /^Tipo de gráfico/ })).toBeVisible();
+    await expect(page.getByRole("button", { name: /^Tipo de gráfico/ })).toHaveCount(0);
   });
 
-  test("backend anterior (só units/status/monthly, sem layout): novos painéis no padrão, PATCH funciona", async ({ page }) => {
+  test("backend anterior (só units/status/monthly, sem layout): o relatório usa os padrões das chaves novas", async ({ page }) => {
     await open(page, { role: "USER", prefsLegacy: true, prefs: { dashboard_charts: { units: "horizontal" } } });
     await expectDashboardLoaded(page);
     await expect(block(page, "por-unidade").locator("figure")).toHaveAttribute("data-chart-kind", "horizontal");
     await expect(block(page, "localizacao-por-unidade").locator("figure")).toHaveAttribute("data-chart-kind", "stacked");
-    const request = page.waitForRequest((r) => r.url().endsWith("/v1/me/preferences") && r.method() === "PATCH");
-    await block(page, "por-sala").getByRole("button", { name: /^Tipo de gráfico/ }).click();
-    await page.getByRole("menuitemradio", { name: "Barras verticais" }).click();
-    expect((await request).postDataJSON()).toEqual({ version: 0, dashboard_charts: { rooms: "bar" } });
-    await expect(block(page, "por-sala").locator("figure")).toHaveAttribute("data-chart-kind", "grouped");
+    await expect(block(page, "por-sala").locator("figure")).toHaveAttribute("data-chart-kind", "horizontal");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Catálogo de painéis (/dashboard): equivalente, no contrato novo, do que as
+// asserções acima protegem — rótulos do backend/planilha são texto, e resposta
+// inválida do catálogo nunca é exibida nem quebra a tela.
+// ---------------------------------------------------------------------------
+
+const CAT = {
+  unit: `Unid ${XSS_IMG}`,
+  col: `Col ${XSS_SCRIPT}`,
+  family: `Fam ${XSS_IMG}`,
+  category: `Cat ${XSS_IMG}`,
+};
+
+const maliciousUnitRow = (unidade: string) => ({
+  unidade,
+  total: 15,
+  valores: { COMPUTADOR: 10, NOTEBOOK: 5 },
+});
+
+const maliciousPayloads = {
+  kpi_workstations: { tipo: "cartoes", dados: { itens: [{ id: "COMPUTADOR", label: CAT.col, value: 7 }], total: 7 } },
+  equipment_by_unit_table: {
+    tipo: "tabela",
+    dados: {
+      colunas: [
+        { id: "COMPUTADOR", label: CAT.col },
+        { id: "NOTEBOOK", label: "Notebook" },
+      ],
+      linhas: [maliciousUnitRow(CAT.unit)],
+      total: 15,
+    },
+  },
+  equipment_by_unit_chart: {
+    tipo: "grafico",
+    dados: {
+      familia: "TI",
+      familia_label: CAT.family,
+      series: [
+        { id: "COMPUTADOR", label: CAT.col },
+        { id: "NOTEBOOK", label: "Notebook" },
+      ],
+      unidades: [maliciousUnitRow(CAT.unit)],
+      total: 15,
+    },
+  },
+  category_distribution: {
+    tipo: "distribuicao",
+    dados: {
+      total: 20,
+      familias: [{ id: "TI", label: CAT.family, value: 20, percentual: 100 }],
+      categorias: [{ id: "COMPUTADOR", label: CAT.category, familia: "TI", value: 20, percentual: 100 }],
+    },
+  },
+};
+
+/** Catálogo mínimo VÁLIDO (1 painel) com um campo adulterado conforme `bad`. */
+function catalogBody(bad: { id?: string; size?: string; prefId?: string; visible?: boolean }): Record<string, unknown> {
+  const entry = {
+    id: bad.id ?? "kpi_workstations",
+    label: "Postos de trabalho",
+    description: "",
+    group: "indicadores",
+    sizes: ["P", "M", "G"],
+    default_size: "M",
+    exportable: false,
+  };
+  const pref = { id: bad.prefId ?? entry.id, visible: bad.visible ?? true, size: bad.size ?? "M" };
+  return { panels: [entry], sizes: ["P", "M", "G"], default_layout: [pref], preferences: { panels: [pref], version: 0 } };
+}
+
+test.describe("catálogo de painéis: rótulos maliciosos são texto puro", () => {
+  test("cartões, tabela, gráfico (legenda, tabela alternativa, tooltip) e distribuição", async ({ page }) => {
+    await open(page, { role: "USER", dashboardPanels: { payloadOverride: maliciousPayloads } }, "/dashboard");
+    await expectPanelsLoaded(page, "USER");
+
+    const panel = (id: string) => page.locator(`[data-equipment-panel=${id}]`);
+    await expect(panel("kpi_workstations")).toContainText("Col <script>");
+    await expect(panel("equipment_by_unit_table").locator("table")).toContainText(CAT.unit);
+    await expect(panel("equipment_by_unit_table").locator("table")).toContainText("Col <script>");
+    const chart = panel("equipment_by_unit_chart");
+    await expect(chart).toContainText(CAT.unit);
+    await expect(panel("category_distribution")).toContainText("Cat <img src=x");
+    await expectClean(page);
+
+    await hoverMarks(page, chart);
+    await expectClean(page);
+  });
+
+  const invalidCatalogs: { name: string; body: unknown }[] = [
+    { name: "não é objeto", body: ["kpi_workstations"] },
+    { name: "id de painel com HTML", body: catalogBody({ id: XSS_IMG }) },
+    { name: "tamanho fora de P/M/G", body: catalogBody({ size: "XG" }) },
+    { name: "painel das preferências fora do catálogo", body: catalogBody({ prefId: "painel_inexistente" }) },
+    { name: "nenhum painel visível", body: catalogBody({ visible: false }) },
+  ];
+  for (const { name, body } of invalidCatalogs) {
+    test(`catálogo inválido (${name}): erro com nova tentativa, nenhum painel nem valor exibido`, async ({ page }) => {
+      await open(page, { role: "USER", dashboardPanels: { rawCatalog: body } }, "/dashboard");
+      await expect(page.locator("[data-equipment-catalog-error]")).toBeVisible({ timeout: 20_000 });
+      await expect(page.locator("[data-equipment-catalog-error]").getByRole("button", { name: "Tentar novamente" })).toBeVisible();
+      await expect(page.locator("[data-equipment-panel]")).toHaveCount(0);
+      await expect(page.locator("main")).not.toContainText("XG");
+      await expectClean(page);
+    });
+  }
+
+  test("chave desconhecida/privilegiada na resposta é ignorada (perfil nunca vem do cliente)", async ({ page }) => {
+    const body = { ...catalogBody({}), role: "ADM", x: 1 };
+    await open(page, { role: "USER", dashboardPanels: { rawCatalog: body } }, "/dashboard");
+    await expect(page.locator("[data-equipment-panel=kpi_workstations]")).toBeVisible({ timeout: 20_000 });
+    await expect(page.locator("[data-equipment-panel=sync_status]")).toHaveCount(0);
   });
 });

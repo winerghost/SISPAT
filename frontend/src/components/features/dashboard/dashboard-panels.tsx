@@ -75,7 +75,13 @@ import {
 } from "./dashboard-transform";
 
 // =============================================================================
-// Painel de indicadores patrimoniais (tela /dashboard e relatório imprimível).
+// Blocos patrimoniais LEGADOS (15 painéis antigos). Desde a Onda 3 a tela
+// /dashboard NÃO os usa: ela é governada só pelo catálogo de painéis
+// (equipment-panels.tsx + use-dashboard-panel-prefs.ts). Este módulo é consumido
+// apenas pelo relatório imprimível (/dashboard/relatorio, tema "paper"), que
+// ainda compõe os blocos antigos; os ramos interativos (tema "screen":
+// seletor de tipo, clique-para-filtrar, exportação de Tecnologia) ficam sem
+// uso até o relatório migrar para o contrato novo de painéis.
 // =============================================================================
 // - Dados SEMPRE do backend via src/lib/dashboard-api.ts; nada é estimado.
 // - Cada bloco tem skeleton, erro com "Tentar novamente" e estado vazio

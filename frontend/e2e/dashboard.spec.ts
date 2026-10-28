@@ -9,7 +9,13 @@ import {
   type MockOptions,
   type MockState,
 } from "./support/mocks";
-import { expectDashboardLoaded } from "./support/screens";
+import {
+  PANELS_CUSTOM_HIDDEN,
+  PANELS_CUSTOM_PREFS,
+  PANELS_CUSTOM_VISIBLE,
+  expectDashboardLoaded,
+  expectPanelsLoaded,
+} from "./support/screens";
 
 // =============================================================================
 // /dashboard e /dashboard/relatorio. Contrato mockado:
@@ -34,10 +40,14 @@ async function open(page: Page, path: string, opts: MockOptions = { role: "USER"
 
 const block = (page: Page, id: string) => page.locator(`[data-dashboard-block=${id}]`);
 
-test.describe("dashboard", () => {
+// Os 15 painéis antigos (blocos `data-dashboard-block`) deixaram de existir em /dashboard:
+// só o relatório imprimível (/dashboard/relatorio) ainda os compõe. Os testes de
+// números, gráficos acessíveis, estados e escape de texto abaixo continuam
+// valendo para esses blocos e rodam no relatório (mesmos mocks e seletores).
+test.describe("blocos patrimoniais (relatório)", () => {
   test("KPIs mostram exatamente os números do backend", async ({ page }) => {
-    await open(page, "/dashboard");
-    await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+    await open(page, "/dashboard/relatorio");
+    await expect(page.getByRole("heading", { level: 1, name: "Relatório patrimonial" })).toBeVisible();
     const kpis = block(page, "indicadores");
     await expect(kpis.locator("[data-stat-card]")).toHaveCount(KPI_CARDS);
     await expect(kpis.locator("[data-stat-card=total-bens]")).toContainText(/1\.?234/);
@@ -50,7 +60,7 @@ test.describe("dashboard", () => {
   });
 
   test("número do KPI usa a escala heading do DESIGN.md (36px)", async ({ page }) => {
-    await open(page, "/dashboard");
+    await open(page, "/dashboard/relatorio");
     const value = block(page, "indicadores").locator("[data-stat-card=total-bens] .text-heading").first();
     await expect(value).toContainText(/1\.?234/);
     await expect(value).toHaveCSS("font-size", "36px");
@@ -59,7 +69,7 @@ test.describe("dashboard", () => {
   });
 
   test("variação positiva: selo com sinal e texto", async ({ page }) => {
-    await open(page, "/dashboard");
+    await open(page, "/dashboard/relatorio");
     const delta = block(page, "indicadores").locator("[data-stat-card=total-bens] [data-stat-delta]");
     await expect(delta).toContainText("+3,5%");
     await expect(delta).toContainText("aumento de 3,5%");
@@ -68,20 +78,20 @@ test.describe("dashboard", () => {
   test("variação negativa: selo com sinal de menos", async ({ page }) => {
     const base = defaultDashboard().resumo;
     const resumo = { ...base, variacao: { ...base.variacao, total_bens: -2.1 } };
-    await open(page, "/dashboard", { role: "USER", dashboard: { resumo } });
+    await open(page, "/dashboard/relatorio", { role: "USER", dashboard: { resumo } });
     await expect(block(page, "indicadores").locator("[data-stat-delta]")).toContainText("−2,1%");
   });
 
   test("variação null: nenhum selo", async ({ page }) => {
     const base = defaultDashboard().resumo;
     const resumo = { ...base, variacao: { ...base.variacao, total_bens: null } };
-    await open(page, "/dashboard", { role: "USER", dashboard: { resumo } });
+    await open(page, "/dashboard/relatorio", { role: "USER", dashboard: { resumo } });
     await expect(block(page, "indicadores").locator("[data-stat-card]")).toHaveCount(KPI_CARDS);
     await expect(page.locator("[data-stat-delta]")).toHaveCount(0);
   });
 
   test("indicadores indisponíveis: explica a ausência e não exibe número", async ({ page }) => {
-    await open(page, "/dashboard");
+    await open(page, "/dashboard/relatorio");
     const box = page.locator("[data-dashboard-unavailable]");
     await expect(box.getByRole("heading", { name: "Indicadores indisponíveis" })).toBeVisible();
     await expect(box).toContainText("O cadastro de bens ainda não possui valor");
@@ -93,7 +103,7 @@ test.describe("dashboard", () => {
   });
 
   test("gráficos: role=img com resumo, legenda e tabela alternativa", async ({ page }) => {
-    await open(page, "/dashboard");
+    await open(page, "/dashboard/relatorio");
     await expectDashboardLoaded(page);
 
     const bars = block(page, "por-unidade");
@@ -120,15 +130,13 @@ test.describe("dashboard", () => {
     await expect(lineTable.getByRole("row", { name: /out.*37/i })).toHaveCount(1);
     await expect(lineTable.getByRole("row", { name: /jul.*0/i })).toHaveCount(1);
 
-    // Seleção por teclado na legenda da pizza (aria-pressed).
-    const pick = donut.getByRole("button", { name: /Nao localizado/ });
-    await pick.focus();
-    await page.keyboard.press("Enter");
-    await expect(pick).toHaveAttribute("aria-pressed", "true");
+    // No relatório a legenda é só texto: não há seleção/filtro por clique ou teclado
+    // (a seleção por legenda pertencia à tela antiga, sem equivalente no catálogo).
+    await expect(donut.getByRole("list", { name: /Legenda/ }).getByRole("button")).toHaveCount(0);
   });
 
   test("tabela de detalhamento: linhas por unidade e linha de total", async ({ page }) => {
-    await open(page, "/dashboard");
+    await open(page, "/dashboard/relatorio");
     await expectDashboardLoaded(page);
     const table = page.getByRole("table", { name: "Detalhamento de bens por unidade e tipo" });
     await expect(table.getByRole("columnheader", { name: "Unidade" })).toBeVisible();
@@ -143,7 +151,7 @@ test.describe("dashboard", () => {
   test("nomes vindos do backend são texto puro (sem HTML/XSS)", async ({ page }) => {
     const rows = defaultDashboard()["por-unidade"];
     rows[0]!.unidade = `Unid ${XSS_IMG}`;
-    await open(page, "/dashboard", { role: "USER", dashboard: { "por-unidade": rows } });
+    await open(page, "/dashboard/relatorio", { role: "USER", dashboard: { "por-unidade": rows } });
     await expectDashboardLoaded(page);
     await expect(page.getByRole("table", { name: /Detalhamento/ }).getByText(`Unid ${XSS_IMG}`)).toBeVisible();
     expect(await page.locator("main img").count()).toBe(0);
@@ -151,7 +159,7 @@ test.describe("dashboard", () => {
   });
 
   test("sem bens: estados vazios honestos, sem gráficos nem números de exemplo", async ({ page }) => {
-    await open(page, "/dashboard", { role: "RH", dashboard: emptyDashboard(), dashboardTech: emptyTech() });
+    await open(page, "/dashboard/relatorio", { role: "RH", dashboard: emptyDashboard(), dashboardTech: emptyTech() });
     await expect(page.locator("[data-dashboard-empty]")).toHaveCount(EMPTY_BLOCKS, { timeout: 15_000 });
     await expect(block(page, "por-unidade")).toContainText("Nenhum bem cadastrado");
     await expect(block(page, "por-situacao")).toContainText("Nenhum bem para classificar");
@@ -168,7 +176,7 @@ test.describe("dashboard", () => {
   });
 
   test("erro em um bloco não derruba os outros; nova tentativa recupera", async ({ page }) => {
-    const state = await open(page, "/dashboard", { role: "USER", dashboardStatus: { "por-situacao": 500 } });
+    const state = await open(page, "/dashboard/relatorio", { role: "USER", dashboardStatus: { "por-situacao": 500 } });
     const failed = block(page, "por-situacao");
     const retry = failed.getByRole("button", { name: "Tentar novamente" });
     await expect(retry).toBeVisible({ timeout: 20_000 });
@@ -184,7 +192,7 @@ test.describe("dashboard", () => {
 
   test("resposta fora da allowlist é rejeitada (valor_total numérico => erro)", async ({ page }) => {
     const resumo = { ...defaultDashboard().resumo, valor_total: 999999 };
-    await open(page, "/dashboard", { role: "USER", dashboard: { resumo } });
+    await open(page, "/dashboard/relatorio", { role: "USER", dashboard: { resumo } });
     const kpis = block(page, "indicadores");
     await expect(kpis.getByRole("button", { name: "Tentar novamente" })).toBeVisible({ timeout: 20_000 });
     await expect(kpis.locator("[data-stat-card]")).toHaveCount(0);
@@ -193,7 +201,7 @@ test.describe("dashboard", () => {
 
   test("KPIs em 2 colunas no celular e 5 (uma linha) no desktop largo", async ({ page }) => {
     await page.setViewportSize({ width: 375, height: 800 });
-    await open(page, "/dashboard");
+    await open(page, "/dashboard/relatorio");
     const cards = block(page, "indicadores").locator("[data-stat-card]");
     await expect(cards).toHaveCount(KPI_CARDS);
     const distinctTops = async () =>
@@ -205,7 +213,7 @@ test.describe("dashboard", () => {
 
   test("reduced motion: valores finais exatos", async ({ page }) => {
     await page.emulateMedia({ reducedMotion: "reduce" });
-    await open(page, "/dashboard");
+    await open(page, "/dashboard/relatorio");
     await expectDashboardLoaded(page);
     await expect(block(page, "indicadores").locator("[data-stat-card=total-bens]")).toContainText(/1\.?234/);
   });
@@ -229,13 +237,78 @@ test.describe("navegação", () => {
     await expect(page).toHaveURL(/\/dashboard$/, { timeout: 45_000 }); // 1ª compilação do `next dev`
   });
 
-  for (const role of ["ADM", "USER", "RH"] as const) {
-    test(`${role}: acessa /dashboard`, async ({ page }) => {
+  for (const [role, count] of [["ADM", 12], ["USER", 9], ["RH", 7]] as const) {
+    test(`${role}: acessa /dashboard e recebe só os ${count} painéis do catálogo do backend`, async ({ page }) => {
       await open(page, "/dashboard", { role });
       await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
-      await expect(block(page, "indicadores").locator("[data-stat-card]")).toHaveCount(KPI_CARDS);
+      await expect(page.locator("[data-equipment-panel]")).toHaveCount(count, { timeout: 20_000 });
     });
   }
+});
+
+// Correção de fechamento da Onda 3: a grade de /dashboard é governada SOMENTE
+// pelo catálogo de painéis (GET /dashboard/panels + preferências).
+test.describe("grade governada só pelo catálogo de painéis", () => {
+  test("sem blocos nem consultas dos 15 painéis antigos; só o catálogo", async ({ page }) => {
+    const state = await open(page, "/dashboard", { role: "USER" });
+    await expectPanelsLoaded(page, "USER");
+    await expect(page.locator("[data-dashboard-block]")).toHaveCount(0);
+    await expect(page.locator("[data-dashboard-panels]")).toHaveCount(0);
+    await expect(page.locator("[data-dashboard-filter-summary]")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: /^Tipo de gráfico/ })).toHaveCount(0);
+    const legacy = state.calls.filter((c) =>
+      /^\/api\/v1\/dashboard\/(resumo|por-|aquisicoes|localizacao|pendencias|inventario|tecnologia)/.test(
+        new URL(c.url, "http://x").pathname,
+      ),
+    );
+    expect(legacy).toEqual([]);
+    expect(state.calls.some((c) => c.url === "/api/v1/dashboard/panels")).toBe(true);
+  });
+
+  test("ordem, visibilidade e tamanho vêm das preferências confirmadas pelo backend", async ({ page }) => {
+    await open(page, "/dashboard", { role: "USER", dashboardPanels: { version: 2, panels: PANELS_CUSTOM_PREFS } });
+    await expectPanelsLoaded(page, "USER", { ids: PANELS_CUSTOM_VISIBLE });
+    await expect(page.locator("[data-equipment-panel]").first()).toHaveAttribute("data-equipment-panel", PANELS_CUSTOM_VISIBLE[0]!);
+    for (const hidden of PANELS_CUSTOM_HIDDEN) await expect(page.locator(`[data-equipment-panel=${hidden}]`)).toHaveCount(0);
+    await expect(page.locator('[data-equipment-panel][data-panel-size="M"]').first()).toBeVisible();
+  });
+
+  test("painel oculto nas preferências não consulta dados no backend", async ({ page }) => {
+    const state = await open(page, "/dashboard", { role: "USER", dashboardPanels: { panels: PANELS_CUSTOM_PREFS } });
+    await expectPanelsLoaded(page, "USER", { ids: PANELS_CUSTOM_VISIBLE });
+    for (const hidden of PANELS_CUSTOM_HIDDEN) {
+      expect(state.panels.calls.filter((c) => c.url.includes(`/panels/${hidden}/data`))).toEqual([]);
+    }
+    expect(state.panels.calls.filter((c) => c.url.includes("/data")).length).toBeGreaterThanOrEqual(PANELS_CUSTOM_VISIBLE.length);
+  });
+
+  test("Personalizar painéis salva (PUT) e a grade só muda depois da confirmação", async ({ page }) => {
+    const state = await open(page, "/dashboard", { role: "USER" });
+    await expectPanelsLoaded(page, "USER");
+    await page.getByRole("button", { name: "Personalizar painéis" }).click();
+    const dialog = page.getByRole("dialog", { name: "Personalizar painéis" });
+    await dialog.getByRole("checkbox", { name: /Monitores por computador/ }).uncheck();
+    await expect(page.locator("[data-equipment-panel=workstation_ratio]")).toHaveCount(1); // rascunho: grade intacta
+    await dialog.getByRole("button", { name: "Salvar" }).click();
+    await expect(page.locator("[data-equipment-panel=workstation_ratio]")).toHaveCount(0);
+    expect(state.panels.calls.filter((c) => c.method === "PUT")).toHaveLength(1);
+    expect(state.panels.version).toBe(1);
+  });
+
+  test("estados do painel: vazio, erro com nova tentativa e 404 oculta o painel", async ({ page }) => {
+    const state = await open(page, "/dashboard", {
+      role: "USER",
+      dashboardPanels: { dataStatus: { kpi_workstations: "empty", kpi_infrastructure: 500, kpi_furniture: 404 } },
+    });
+    await expect(page.locator("[data-equipment-panel=kpi_workstations] [data-equipment-empty]")).toBeVisible({ timeout: 20_000 });
+    const failed = page.locator("[data-equipment-panel=kpi_infrastructure]");
+    await expect(failed.locator("[data-equipment-error]")).toBeVisible({ timeout: 20_000 });
+    await expect(failed).not.toContainText("SISPAT_BACKEND_MSG");
+    await expect(page.locator("[data-equipment-panel=kpi_furniture]")).toHaveCount(0);
+    state.panels.dataStatus = {};
+    await failed.getByRole("button", { name: /Tentar novamente/ }).click();
+    await expect(failed.locator("[data-stat-card]").first()).toBeVisible({ timeout: 20_000 });
+  });
 });
 
 test.describe("relatório imprimível", () => {

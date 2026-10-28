@@ -178,6 +178,57 @@ def test_recuperacao_de_senha_usa_recover_com_redirect_da_allowlist():
     assert req.call_args.kwargs["json"] == {"email": "p@exemplo.invalid"}
 
 
+def test_generate_link_de_recuperacao_devolve_so_o_hashed_token():
+    """PR-LINK: `admin/generate_link` NÃO envia e-mail; devolvemos apenas o
+    `hashed_token`. O `action_link` (o `/verify` de uso único que o scanner de
+    antivírus gasta) e o `email_otp` são descartados."""
+    payload = {
+        "hashed_token": "pkce_" + "a" * 40,
+        "action_link": "https://proj.supabase.co/auth/v1/verify?token=SEGREDO",
+        "email_otp": "123456",
+    }
+    with patch("requests.Session.request", return_value=_response(payload=payload)) as req:
+        token = SupabaseAdminClient(settings=_settings()).generate_recovery_token_hash(
+            "p@exemplo.invalid", REDIRECT
+        )
+    assert token == payload["hashed_token"]
+    method, url = req.call_args.args
+    assert method == "POST" and url == "https://proj.supabase.co/auth/v1/admin/generate_link"
+    assert req.call_args.kwargs["json"] == {
+        "type": "recovery",
+        "email": "p@exemplo.invalid",
+        "redirect_to": REDIRECT,
+    }
+    assert req.call_args.kwargs["allow_redirects"] is False
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [{}, {"hashed_token": None}, {"hashed_token": ""}, {"hashed_token": "curto"},
+     {"hashed_token": "a" * 40 + " &type=x"}, {"hashed_token": "<html>erro</html>"}],
+)
+def test_generate_link_recusa_hashed_token_ausente_ou_malformado(payload):
+    """Lixo (HTML de proxy, valor com separador de query) nunca pode virar o
+    `token_hash` de um link enviado por e-mail."""
+    with patch("requests.Session.request", return_value=_response(payload=payload)):
+        with pytest.raises(SupabaseAdminClientError):
+            SupabaseAdminClient(settings=_settings()).generate_recovery_token_hash(
+                "p@exemplo.invalid", REDIRECT
+            )
+
+
+@pytest.mark.parametrize(
+    "email,redirect",
+    [("p@exemplo.invalid", "https://evil.invalid/"), ("sem-arroba", REDIRECT), ("a@b c", REDIRECT), (None, REDIRECT)],
+)
+def test_generate_link_de_recuperacao_invalido_nao_chama_rede(email, redirect):
+    with patch("requests.Session.request") as req, pytest.raises(SupabaseAdminClientError) as exc:
+        SupabaseAdminClient(settings=_settings()).generate_recovery_token_hash(email, redirect)
+    req.assert_not_called()
+    if redirect != REDIRECT:
+        assert isinstance(exc.value, InviteRedirectNotAllowedError)
+
+
 @pytest.mark.parametrize(
     "email,redirect",
     [("p@exemplo.invalid", "https://evil.invalid/"), ("sem-arroba", REDIRECT), ("a@b c", REDIRECT), (None, REDIRECT)],

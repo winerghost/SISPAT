@@ -74,6 +74,7 @@ from app.services.invite_service import (
     _acquire_advisory_xact_lock,
     _normalize_email,
 )
+from app.services.password_reset_delivery import OUTCOME_SENT, deliver_password_reset
 
 logger = logging.getLogger(__name__)
 
@@ -772,7 +773,14 @@ class UserAdminService:
         consume_target_quota: Callable[[], None] | None = None,
     ) -> dict[str, Any]:
         """`consume_target_quota` (UA-RL-01) só roda com o escopo já confirmado:
-        um ADM de outra unidade não consegue esgotar o limite do alvo."""
+        um ADM de outra unidade não consegue esgotar o limite do alvo.
+
+        O e-mail é gerado e enviado pelo BACKEND (`password_reset_delivery`),
+        não pelo template do Supabase — ver o módulo para o motivo. O ADM
+        nunca vê link nem senha; o `audit_logs` recebe só `result`/`reason`.
+        `reason` possíveis: `inactive_user`, `redirect_not_configured`,
+        `provider_unavailable`, `provider_error`, `email_disabled`,
+        `email_failed`, `link_not_allowed`."""
         target, _ = self._load_scoped_target(actor_id, target_id)
         self._require_not_orphan("orphan_password_reset")
         if consume_target_quota is not None:
@@ -787,9 +795,22 @@ class UserAdminService:
         elif self._admin_client is None:
             reason = "provider_unavailable"
         else:
+            # O e-mail é montado e enviado PELO BACKEND: o link do template do
+            # Supabase (`{{ .ConfirmationURL }}`) é gasto por scanner de
+            # antivírus antes do clique. Ver
+            # `app.services.password_reset_delivery`.
             try:
-                self._admin_client.send_password_recovery(target.email, redirect_to)
-                result = "sent"
+                outcome = deliver_password_reset(
+                    token_source=self._admin_client,
+                    email=target.email,
+                    recipient_name=target.name,
+                    redirect_to=redirect_to,
+                    settings=self._settings,
+                )
+                if outcome == OUTCOME_SENT:
+                    result = "sent"
+                else:
+                    reason = outcome
             except SupabaseAdminClientError as exc:
                 reason = "provider_error"
                 logger.error(

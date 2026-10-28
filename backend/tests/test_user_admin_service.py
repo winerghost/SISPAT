@@ -414,37 +414,62 @@ def test_revogar_sessoes_nao_incrementa_versao(world, scene):
 # ---------------------------------------------------------------------------
 
 
-def test_reset_de_senha_envia_pelo_supabase_sem_link(world, scene):
+def test_reset_de_senha_envia_pelo_backend_sem_link(world, scene):
+    """O e-mail sai por `password_reset_delivery` (nunca por `/auth/v1/recover`,
+    cujo link de template é gasto por scanner de antivírus antes do clique).
+    Nem o link nem o e-mail do alvo podem chegar ao `audit_logs`."""
     admin = MagicMock()
-    admin.send_password_recovery.return_value = None
-    with world.session() as db:
-        payload = _service(db, admin_client=admin).send_password_reset(scene.actor, scene.user_a)
+    with patch.object(svc_module, "deliver_password_reset", return_value="sent") as deliver:
+        with world.session() as db:
+            payload = _service(db, admin_client=admin).send_password_reset(
+                scene.actor, scene.user_a
+            )
     assert payload == {"result": "sent"}
-    email = world.get(scene.user_a).email
-    admin.send_password_recovery.assert_called_once_with(email, REDIRECT)
+    target = world.get(scene.user_a)
+    deliver.assert_called_once()
+    assert deliver.call_args.kwargs["token_source"] is admin
+    assert deliver.call_args.kwargs["email"] == target.email
+    assert deliver.call_args.kwargs["recipient_name"] == target.name
+    assert deliver.call_args.kwargs["redirect_to"] == REDIRECT
+    # O endpoint vulnerável ao scanner não pode mais ser usado.
+    admin.send_password_recovery.assert_not_called()
     (audit,) = world.audits("USER_PASSWORD_RESET_SENT")
-    assert audit.result == "SUCESSO" and email not in str(audit.new_values)
+    assert audit.result == "SUCESSO" and target.email not in str(audit.new_values)
 
 
-@pytest.mark.parametrize("case", ["inativo", "sem_redirect", "erro_provedor"])
+@pytest.mark.parametrize(
+    "case",
+    ["inativo", "sem_redirect", "erro_provedor", "email_desligado", "email_falhou"],
+)
 def test_reset_de_senha_indisponivel(world, scene, case):
     admin = MagicMock()
     settings = SimpleNamespace(password_reset_redirect_effective_url=REDIRECT)
+    outcomes = {"email_desligado": "email_disabled", "email_falhou": "email_failed"}
+    deliver_kwargs: dict = {"return_value": "sent"}
     if case == "inativo":
         world.set(scene.user_a, active=False)
     elif case == "sem_redirect":
         settings = SimpleNamespace(password_reset_redirect_effective_url=None)
+    elif case == "erro_provedor":
+        deliver_kwargs = {"side_effect": SupabaseAdminClientError("fora")}
     else:
-        admin.send_password_recovery.side_effect = SupabaseAdminClientError("fora")
-    with world.session() as db:
-        payload = _service(db, admin_client=admin, settings=settings).send_password_reset(
-            scene.actor, scene.user_a
-        )
+        deliver_kwargs = {"return_value": outcomes[case]}
+    with patch.object(svc_module, "deliver_password_reset", **deliver_kwargs) as deliver:
+        with world.session() as db:
+            payload = _service(db, admin_client=admin, settings=settings).send_password_reset(
+                scene.actor, scene.user_a
+            )
     assert payload == {"result": "unavailable"}
-    if case != "erro_provedor":
-        admin.send_password_recovery.assert_not_called()
+    if case in ("inativo", "sem_redirect"):
+        deliver.assert_not_called()
     (audit,) = world.audits("USER_PASSWORD_RESET_SENT")
     assert audit.result == "FALHA"
+    expected_reason = {
+        "inativo": "inactive_user",
+        "sem_redirect": "redirect_not_configured",
+        "erro_provedor": "provider_error",
+    }.get(case, outcomes.get(case))
+    assert audit.new_values["reason"] == expected_reason
 
 
 def test_reset_de_mfa_remove_fatores_e_encerra_sessoes(world, scene):
@@ -643,7 +668,7 @@ def test_conta_orfa_so_reativa_ou_recebe_unidades(world, scene):
     ):
         with world.session() as db, pytest.raises(TargetOutOfScopeError):
             call(_service(db, admin_client=admin))
-    admin.send_password_recovery.assert_not_called()
+    admin.generate_recovery_token_hash.assert_not_called()
     # Unidades do escopo (com ou sem perfil) são permitidas.
     with world.session() as db:
         _service(db).update_user(scene.actor, scene.orphan, _body(version=2, role="USER", unit_ids=[scene.a]))
@@ -698,13 +723,14 @@ def test_reset_de_mfa_parcial_encerra_sessoes_e_audita_quantidade(world, scene):
 def test_cota_do_reset_de_senha_so_e_consumida_apos_o_escopo(world, scene):
     consumed: list[str] = []
     admin = MagicMock()
-    with world.session() as db, pytest.raises(TargetNotFoundError):
-        _service(db, admin_client=admin).send_password_reset(
-            scene.actor, scene.user_b, consume_target_quota=lambda: consumed.append("x")
-        )
-    assert consumed == []
-    with world.session() as db:
-        _service(db, admin_client=admin).send_password_reset(
-            scene.actor, scene.user_a, consume_target_quota=lambda: consumed.append("x")
-        )
+    with patch.object(svc_module, "deliver_password_reset", return_value="sent"):
+        with world.session() as db, pytest.raises(TargetNotFoundError):
+            _service(db, admin_client=admin).send_password_reset(
+                scene.actor, scene.user_b, consume_target_quota=lambda: consumed.append("x")
+            )
+        assert consumed == []
+        with world.session() as db:
+            _service(db, admin_client=admin).send_password_reset(
+                scene.actor, scene.user_a, consume_target_quota=lambda: consumed.append("x")
+            )
     assert consumed == ["x"]

@@ -349,21 +349,38 @@ def test_revoke_legado_agora_desativa_e_encerra_sessoes(scene):
     assert scene.w.role_codes(scene.user_a) == set()
 
 
+PR_TOKEN_HASH = "hash-de-uso-unico-api-" + "b" * 20
+
+
+def _enable_reset_delivery(monkeypatch, api, redirect="https://app.exemplo.invalid/ativar-conta"):
+    """Redirect efetivo + allow-list + entrega do e-mail sem SMTP (PR-LINK).
+
+    O e-mail de redefinicao passou a ser montado e enviado pelo BACKEND
+    (`app.services.password_reset_delivery`), porque o link do template do
+    Supabase e consumido por scanner de antivirus antes do clique.
+    """
+    from app.config.settings import get_settings
+    from app.services import password_reset_delivery as delivery
+    from app.services.email.sender import EmailResult
+
+    cls = type(get_settings())
+    monkeypatch.setattr(
+        cls, "password_reset_redirect_effective_url", property(lambda _self: redirect)
+    )
+    monkeypatch.setattr(cls, "invite_allowed_redirect_urls_list", property(lambda _self: [redirect]))
+    api.admin.generate_recovery_token_hash.return_value = PR_TOKEN_HASH
+    monkeypatch.setattr(delivery, "send_email_safely", lambda *_a, **_k: EmailResult(status="sent"))
+
+
 def test_reset_de_senha_limite_por_alvo_e_sem_link(scene, monkeypatch):
     api = scene.api
-    from app.config.settings import get_settings
-
-    monkeypatch.setattr(
-        type(get_settings()), "password_reset_redirect_effective_url",
-        property(lambda _self: "https://app.exemplo.invalid/ativar-conta"),
-    )
-    api.admin.send_password_recovery.return_value = None
+    _enable_reset_delivery(monkeypatch, api)
     url = f"/api/v1/users/{scene.user_a}/password-reset"
     for _ in range(5):
         response = api.client.post(url, headers=_headers())
         assert response.status_code == 200 and response.get_json() == {"result": "sent"}
     assert api.client.post(url, headers=_headers()).status_code == 429
-    assert api.admin.send_password_recovery.call_count == 5
+    assert api.admin.generate_recovery_token_hash.call_count == 5
 
 
 def test_historico_do_usuario(scene):
@@ -535,12 +552,7 @@ def test_promocao_de_alvo_com_unidade_alheia_403_target_out_of_scope_auditado(sc
 def test_cota_do_reset_de_senha_nao_e_consumida_por_alvo_alheio(scene, monkeypatch):
     """UA-RL-01: 404 de escopo não gasta o limite de 5/h do alvo."""
     api = scene.api
-    from app.config.settings import get_settings
-
-    monkeypatch.setattr(
-        type(get_settings()), "password_reset_redirect_effective_url",
-        property(lambda _self: "https://app.exemplo.invalid/ativar-conta"),
-    )
+    _enable_reset_delivery(monkeypatch, api)
     other_unit_adm = scene.w.user("Adm B", role="ADM", units=[scene.b], auth_user_id="auth-adm-b")
     assert other_unit_adm
     for _ in range(6):

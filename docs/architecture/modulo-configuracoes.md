@@ -264,13 +264,24 @@ Corpo (`extra="forbid"`):
   as sessões AAL2 do alvo. Isso vale também quando a remoção falha ou fica parcial, inclusive
   com fator de id fora do padrão, que conta como falha (UA-MFA-01). Nesses casos a resposta é
   502 `auth_provider_unavailable` e a auditoria registra `FALHA` com `removed_factors`.
-- **`password-reset`:** usa `POST /auth/v1/recover`, e o próprio Supabase envia o e-mail;
-  nenhum link passa pelo backend. O destino é a nova `PASSWORD_RESET_REDIRECT_URL`, que
-  precisa estar em `INVITE_ALLOWED_REDIRECT_URLS`; se vazia, usa a 1ª URL dessa lista. Alvo
-  inativo, redirect não configurado ou erro do Supabase → `{"result": "unavailable"}`
-  (auditado como FALHA). Limites: 5/h por alvo e 20/h por ADM. A cota por alvo só é
-  consumida depois de o escopo ser confirmado (UA-RL-01); alvo alheio dá 404 sem gastar
-  a cota da vítima.
+- **`password-reset`:** desde 2026-10-27 o **backend monta e envia o e-mail**
+  (`app.services.password_reset_delivery`): `POST /auth/v1/admin/generate_link`
+  (`type=recovery`, que NÃO envia nada) devolve o `hashed_token`, o backend monta
+  `<redirect>?token_hash=...&type=recovery` e despacha por `send_email_safely` (SMTP
+  próprio). O `POST /auth/v1/recover` deixou de ser usado porque o e-mail do template do
+  Supabase usa `{{ .ConfirmationURL }}`, um GET de uso único em `/auth/v1/verify` que
+  scanners de antivírus de e-mail consomem 2–4 s após o envio — ver
+  `docs/deploy/PLANO_ACAO_RESET_SENHA_2026-10-27.md`. O ADM continua sem ver link nem
+  senha, e o `audit_logs` recebe só `result`/`reason` (nunca token, e-mail ou redirect).
+  O destino é `PASSWORD_RESET_REDIRECT_URL`, que precisa estar em
+  `INVITE_ALLOWED_REDIRECT_URLS`; se vazia, usa a 1ª URL dessa lista (se a configurada
+  estiver fora da lista, o resultado é `None` e nada é enviado). Exige `EMAIL_ENABLED=true`
+  com SMTP configurado: com e-mail desligado a resposta é `unavailable` /
+  `reason=email_disabled`. `reason` possíveis: `inactive_user`,
+  `redirect_not_configured`, `provider_unavailable`, `provider_error`, `email_disabled`,
+  `email_failed`, `link_not_allowed`. Limites: 5/h por alvo, 20/h por ADM e o teto global
+  `EMAIL_MAX_PER_HOUR`. A cota por alvo só é consumida depois de o escopo ser confirmado
+  (UA-RL-01); alvo alheio dá 404 sem gastar a cota da vítima.
 - **Convite pendente:** atribuir perfil pelo PATCH marca o convite pendente do alvo como
   `REVOGADO` (substituído), para a ativação posterior não duplicar papéis.
 - **`revoke` (legado):** agora também grava `active=false`, `deactivated_at/by`,

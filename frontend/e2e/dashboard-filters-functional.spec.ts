@@ -11,17 +11,25 @@ import {
   type MockOptions,
   type MockState,
 } from "./support/mocks";
-import { DASHBOARD_FILTERED_QUERY, expectDashboardLoaded, openMobileFilters, waitForAnimations } from "./support/screens";
+import {
+  DASHBOARD_FILTERED_QUERY,
+  expectDashboardLoaded,
+  expectPanelsLoaded,
+  panelIdsFor,
+  waitForAnimations,
+} from "./support/screens";
 
 // =============================================================================
-// Filtros do dashboard na URL (docs/ux/DASHBOARD_PERSONALIZACAO.md).
-// Contrato mockado: GET /api/v1/dashboard/* com os filtros em query string; o
-// mock recusa (400) chave desconhecida/repetida/vazia/inválida, como o backend.
-// Cobre: filtro → URL (debounce) → TODAS as requisições com os parâmetros;
-// URL reabre filtrada; valor inválido na URL é descartado; "Limpar filtros";
-// relatório herda e lista os filtros; sala depende da unidade; período
-// inválido não é enviado; erro em um painel não derruba os outros; XSS nos
-// rótulos; teclado no "Mais filtros"; axe com o painel aberto.
+// Filtros do dashboard (Onda 3). /dashboard é governado pelo catálogo de painéis:
+// os filtros são família, unidade e categoria (dentro da grade), enviados a
+// GET /api/v1/dashboard/panels/<id>/data; o mock recusa (400) parâmetro fora
+// dessa allowlist, como o backend. A antiga barra de filtros na URL (cerca de 10
+// filtros dos 15 painéis antigos) não existe mais em /dashboard; o relatório
+// imprimível (/dashboard/relatorio) ainda herda filtros legados da URL.
+// Cobre: filtro → TODAS as consultas dos painéis visíveis levam o parâmetro (sem
+// recarregar); família limita as categorias; "Limpar filtros"; URL legada é
+// ignorada (nenhum parâmetro antigo sai); relatório lista e aplica os filtros;
+// erro/XSS/números dos blocos do relatório; teclado, axe e 320/768px.
 // =============================================================================
 
 test.use({ viewport: { width: 1366, height: 900 } });
@@ -39,215 +47,158 @@ async function open(page: Page, path = "/dashboard", opts: MockOptions = { role:
 }
 
 const block = (page: Page, id: string) => page.locator(`[data-dashboard-block=${id}]`);
-const summary = (page: Page) => page.locator("[data-dashboard-filter-summary]");
-const filters = (page: Page) => page.locator("[data-dashboard-filters]");
+const filters = (page: Page) => page.locator("[data-equipment-filters]");
 /** Seletor nativo da barra de filtros pelo rótulo visível (exato). */
-const select = (page: Page, name: string) => filters(page).getByRole("combobox", { name, exact: true });
+const select = (page: Page, name: string) => filters(page).getByLabel(name, { exact: true });
 
-/** Query strings das chamadas GET a um endpoint do dashboard. */
-function calls(state: MockState, endpoint: DashboardEndpoint): URLSearchParams[] {
-  return state.calls
-    .filter((c) => c.method === "GET" && new URL(c.url, "http://x").pathname === `/api/v1/dashboard/${endpoint}`)
+/** Query strings das consultas `/panels/<id>/data` (opcionalmente de um painel). */
+function dataCalls(state: MockState, id?: string): URLSearchParams[] {
+  return state.panels.calls
+    .filter((c) => c.method === "GET" && c.url.includes("/data") && (!id || c.url.includes(`/panels/${id}/data`)))
     .map((c) => new URL(c.url, "http://x").searchParams);
 }
 
-/** Todo endpoint (de painel) recebeu ao menos uma chamada com estes parâmetros. */
-async function expectAllEndpointsCalledWith(state: MockState, expected: Record<string, string>): Promise<void> {
-  const panels = DASHBOARD_ENDPOINTS.filter((e) => e !== "tipos");
+/** Todo painel visível recebeu ao menos uma consulta com estes parâmetros. */
+async function expectAllPanelsCalledWith(state: MockState, ids: readonly string[], expected: Record<string, string>) {
   await expect
     .poll(() =>
-      panels.filter(
-        (endpoint) =>
-          !calls(state, endpoint).some((params) => Object.entries(expected).every(([k, v]) => params.get(k) === v)),
+      ids.filter(
+        (id) => !dataCalls(state, id).some((params) => Object.entries(expected).every(([k, v]) => params.get(k) === v)),
       ),
     )
     .toEqual([]);
 }
 
 function no400(state: MockState): void {
-  // O mock responde 400 a qualquer lixo; nenhuma chamada do dashboard pode ter
-  // chave fora da allowlist ou repetida.
-  const allowed = new Set([
-    "unit_id",
-    "owner_unit_id",
-    "room_id",
-    "responsible_person_id",
-    "has_room",
-    "has_responsible",
-    "located",
-    "bond_status",
-    "tipo",
-    "registrado_desde",
-    "registrado_ate",
-    "inventario",
-    "movimentacao_pendente",
-    "meses",
-  ]);
-  for (const endpoint of DASHBOARD_ENDPOINTS) {
-    for (const params of calls(state, endpoint)) {
-      for (const key of new Set(params.keys())) {
-        expect(allowed.has(key), `${endpoint}: ${key}`).toBe(true);
-        expect(params.getAll(key)).toHaveLength(1);
-      }
+  // O mock responde 400 a qualquer chave fora da allowlist; nenhuma consulta pode
+  // tê-la nem repetir chave.
+  const allowed = new Set(["unit_id", "familia", "categoria"]);
+  for (const params of dataCalls(state)) {
+    for (const key of new Set(params.keys())) {
+      expect(allowed.has(key), key).toBe(true);
+      expect(params.getAll(key)).toHaveLength(1);
     }
   }
 }
 
-test.describe("filtros na URL", () => {
-  test("filtro altera a URL sem recarregar e todas as requisições levam o parâmetro", async ({ page }) => {
+/** Query strings das chamadas GET a um endpoint (legado) do dashboard. */
+function legacyCalls(state: MockState, endpoint: DashboardEndpoint): URLSearchParams[] {
+  return state.calls
+    .filter((c) => c.method === "GET" && new URL(c.url, "http://x").pathname === `/api/v1/dashboard/${endpoint}`)
+    .map((c) => new URL(c.url, "http://x").searchParams);
+}
+
+/** Todo endpoint (de bloco do relatório) recebeu ao menos uma chamada com estes parâmetros. */
+async function expectAllEndpointsCalledWith(state: MockState, expected: Record<string, string>): Promise<void> {
+  const panels = DASHBOARD_ENDPOINTS.filter((e) => e !== "tipos");
+  await expect
+    .poll(() =>
+      panels.filter(
+        (endpoint) =>
+          !legacyCalls(state, endpoint).some((params) => Object.entries(expected).every(([k, v]) => params.get(k) === v)),
+      ),
+    )
+    .toEqual([]);
+}
+
+test.describe("filtros dos painéis (família, unidade, categoria)", () => {
+  test("filtro não recarrega a página e todas as consultas dos painéis visíveis levam o parâmetro", async ({ page }) => {
     const state = await open(page);
-    await expectDashboardLoaded(page);
-    await expect(summary(page)).toContainText("Sem filtros");
+    const ids = panelIdsFor("USER");
+    await expectPanelsLoaded(page, "USER");
+    await expect(filters(page)).toContainText("Sem filtros: todos os bens visíveis ao seu perfil.");
+    expect(dataCalls(state).every((p) => p.size === 0)).toBe(true);
     // Marca a página: se houver recarga, o marcador some.
     await page.evaluate(() => ((window as unknown as { __sameDoc: boolean }).__sameDoc = true));
 
-    await select(page, "Localizado").selectOption("NAO");
-    await select(page, "Vínculo").selectOption("Ocioso");
-    await expect(page).toHaveURL(/\/dashboard\?located=NAO&bond_status=Ocioso$/);
+    await select(page, "Família").selectOption("TI");
+    await expectAllPanelsCalledWith(state, ids, { familia: "TI" });
+    await select(page, "Categoria").selectOption("NOTEBOOK");
+    await expectAllPanelsCalledWith(state, ids, { familia: "TI", categoria: "NOTEBOOK" });
+    await select(page, "Unidade").selectOption(UNIT_1!.id);
+    await expectAllPanelsCalledWith(state, ids, { familia: "TI", categoria: "NOTEBOOK", unit_id: UNIT_1!.id });
     expect(await page.evaluate(() => (window as unknown as { __sameDoc?: boolean }).__sameDoc)).toBe(true);
 
-    await expectAllEndpointsCalledWith(state, { located: "NAO", bond_status: "Ocioso" });
-    expect(calls(state, "aquisicoes-mensais").at(-1)?.get("meses")).toBe("6");
-    // Debounce: as duas trocas seguidas viram UMA rodada (nenhuma chamada só com o 1º filtro).
-    expect(calls(state, "resumo").filter((p) => p.get("located") === "NAO" && !p.has("bond_status"))).toHaveLength(0);
-    // `/tipos` nunca recebe o próprio `tipo`.
-    await select(page, "Tipo").selectOption("INFORMATICA");
-    await expect(page).toHaveURL(/tipo=INFORMATICA/);
-    await expectAllEndpointsCalledWith(state, { tipo: "INFORMATICA" });
-    expect(calls(state, "tipos").some((p) => p.has("tipo"))).toBe(false);
-
-    await expect(summary(page)).toContainText("Os números refletem os filtros:");
-    await expect(summary(page)).toContainText("Localizado: Não; Vínculo: Ocioso; Tipo: Informatica");
-    await expect(summary(page)).toHaveAttribute("role", "status");
-    await expectDashboardLoaded(page);
+    await expect(filters(page)).toContainText("3 filtro(s) ativo(s).");
+    await expectPanelsLoaded(page, "USER");
     no400(state);
   });
 
-  test("URL com filtros reabre a tela já filtrada (link compartilhável)", async ({ page }) => {
-    const state = await open(page, `/dashboard?${DASHBOARD_FILTERED_QUERY}`);
-    await expectDashboardLoaded(page);
-    await expect(select(page, "Unidade de uso")).toHaveValue(UNIT_1!.id);
-    await expect(select(page, "Localizado")).toHaveValue("NAO");
-    await expect(select(page, "Vínculo")).toHaveValue("Ocioso");
-    await expect(page.getByRole("button", { name: /Mais filtros \(2\)/ })).toHaveAttribute("aria-expanded", "true");
-    await expect(page.getByLabel("De", { exact: true })).toHaveValue("2026-01-01");
-    await expect(select(page, "Inventário")).toHaveValue("nao_conferido");
-
-    await expect(summary(page)).toContainText(`Unidade de uso: ${UNIT_1_LABEL}`);
-    await expect(summary(page)).toContainText("Localizado: Não");
-    await expect(summary(page)).toContainText("Vínculo: Ocioso");
-    await expect(summary(page)).toContainText("Registrado desde: 01/01/2026");
-    await expect(summary(page)).toContainText("Inventário: Não conferido");
-    await expectAllEndpointsCalledWith(state, {
-      unit_id: UNIT_1!.id,
-      located: "NAO",
-      bond_status: "Ocioso",
-      registrado_desde: "2026-01-01",
-      inventario: "nao_conferido",
-    });
-    // Nenhuma chamada sem os filtros (a tela abre já filtrada).
-    expect(calls(state, "resumo").every((p) => p.get("located") === "NAO")).toBe(true);
-    no400(state);
-  });
-
-  test("valor inválido, repetido ou desconhecido na URL é descartado sem quebrar a tela", async ({ page }) => {
-    const state = await open(
-      page,
-      "/dashboard?located=XYZ&unit_id=nao-e-uuid&tipo=OUTROS&foo=bar&bond_status=Ocioso&bond_status=Servidor" +
-        "&registrado_desde=2026-02-30&has_room=talvez&inventario=conferido",
-    );
-    await expectDashboardLoaded(page);
-    // Só o válido sobrevive; a URL é normalizada.
-    await expect(page).toHaveURL(/\/dashboard\?inventario=conferido$/);
-    await expect(summary(page)).toContainText("Inventário: Conferido");
-    await expect(summary(page)).not.toContainText("XYZ");
-    await expect(select(page, "Localizado")).toHaveValue("");
-    for (const endpoint of DASHBOARD_ENDPOINTS.filter((e) => e !== "tipos")) {
-      expect(calls(state, endpoint).length, endpoint).toBeGreaterThan(0);
-      for (const params of calls(state, endpoint)) {
-        for (const key of ["located", "unit_id", "tipo", "foo", "bond_status", "registrado_desde", "has_room"]) {
-          expect(params.has(key), `${endpoint}: ${key}`).toBe(false);
-        }
-      }
-    }
-    await expect(page.locator("[data-dashboard-error]")).toHaveCount(0);
-    no400(state);
-  });
-
-  test("período inválido não é enviado e é explicado ao lado das datas", async ({ page }) => {
+  test("a família limita as categorias e descarta a categoria incompatível", async ({ page }) => {
     const state = await open(page);
-    await expectDashboardLoaded(page);
-    await page.getByRole("button", { name: "Mais filtros" }).click();
-    await page.getByLabel("De", { exact: true }).fill("2026-05-01");
-    await page.getByLabel("Até", { exact: true }).fill("2026-01-01");
-    await expect(page.getByText(/Período não aplicado/)).toBeVisible();
-    await expect(page.getByLabel("Até", { exact: true })).toHaveAttribute("aria-invalid", "true");
-    await expect(page).toHaveURL(/registrado_desde=2026-05-01$/);
-    await page.getByLabel("Até", { exact: true }).fill("2026-08-31");
-    await expect(page).toHaveURL(/registrado_desde=2026-05-01&registrado_ate=2026-08-31$/);
-    await expect(page.getByText(/Período não aplicado/)).toHaveCount(0);
-    await expectAllEndpointsCalledWith(state, { registrado_desde: "2026-05-01", registrado_ate: "2026-08-31" });
+    await expectPanelsLoaded(page, "USER");
+    await select(page, "Família").selectOption("TI");
+    await select(page, "Categoria").selectOption("NOTEBOOK");
+    await expect(select(page, "Categoria").locator("option", { hasText: "Mesa" })).toHaveCount(0);
+    await select(page, "Família").selectOption("MOBILIARIO");
+    await expect(select(page, "Categoria")).toHaveValue("");
+    await expect(select(page, "Categoria").locator("option", { hasText: "Mesa" })).toHaveCount(1);
+    await expect.poll(() => dataCalls(state).some((p) => p.get("familia") === "MOBILIARIO" && !p.has("categoria"))).toBe(true);
     no400(state);
   });
 
-  test("Sala e Pessoa só habilitam após a unidade; trocar a unidade limpa a sala", async ({ page }) => {
+  test("Limpar filtros volta ao total (consultas sem parâmetro)", async ({ page }) => {
     const state = await open(page);
-    await expectDashboardLoaded(page);
-    await page.getByRole("button", { name: "Mais filtros" }).click();
-    const room = select(page, "Sala");
-    await expect(room).toBeDisabled();
-    await expect(select(page, "Pessoa responsável")).toBeDisabled();
-    await expect(page.getByText("Escolha a unidade de uso para filtrar por sala.")).toBeVisible();
-
-    await select(page, "Unidade de uso").selectOption(UNIT_1!.id);
-    await expect(room).toBeEnabled();
-    await expect(room.locator("option", { hasText: "Almoxarifado Sintético" })).toHaveCount(1);
-    await room.selectOption({ label: "Almoxarifado Sintético" });
-    await expect(page).toHaveURL(/unit_id=.*&room_id=80000000-0000-4000-8000-000000000002/);
-    await expect(summary(page)).toContainText("Sala: Almoxarifado Sintético");
-    await expectAllEndpointsCalledWith(state, { room_id: "80000000-0000-4000-8000-000000000002" });
-
-    await select(page, "Unidade de uso").selectOption(UNITS[1]!.id);
-    await expect(page).toHaveURL(new RegExp(`unit_id=${UNITS[1]!.id}$`));
-    await expect(room).toHaveValue("");
-    no400(state);
-  });
-
-  test("Limpar filtros volta ao total e limpa a URL", async ({ page }) => {
-    const state = await open(page, `/dashboard?${DASHBOARD_FILTERED_QUERY}`);
-    await expectDashboardLoaded(page);
+    await expectPanelsLoaded(page, "USER");
+    await select(page, "Família").selectOption("OUTROS");
+    await expect(filters(page)).toContainText("1 filtro(s) ativo(s).");
+    await expectPanelsLoaded(page, "USER");
     const clear = filters(page).getByRole("button", { name: "Limpar filtros" });
     await expect(clear).toBeEnabled();
+    state.panels.calls.length = 0;
     await clear.click();
-    await expect(page).toHaveURL(/\/dashboard$/);
-    await expect(summary(page)).toContainText("Sem filtros");
-    await expect(select(page, "Vínculo")).toHaveValue("");
+    await expect(select(page, "Família")).toHaveValue("");
     await expect(clear).toBeDisabled();
-    await expect.poll(() => calls(state, "resumo").some((p) => [...p.keys()].length === 0)).toBe(true);
-    await expectDashboardLoaded(page);
+    await expect(filters(page)).toContainText("Sem filtros");
+    // A grade já tinha os dados sem filtro em cache ou os pede sem parâmetro: nunca com o antigo.
+    await expectPanelsLoaded(page, "USER");
+    expect(dataCalls(state).every((p) => !p.has("familia"))).toBe(true);
   });
 
-  test("voltar do navegador reabre a URL anterior com os filtros dela", async ({ page }) => {
-    await open(page, "/dashboard?located=SIM");
-    await expectDashboardLoaded(page);
-    await page.goto("/dashboard?located=DESCONHECIDO");
-    await waitForHydration(page);
-    await expect(select(page, "Localizado")).toHaveValue("DESCONHECIDO");
-    await page.goBack();
-    await expect(select(page, "Localizado")).toHaveValue("SIM");
-    await expect(summary(page)).toContainText("Localizado: Sim");
+  test("os filtros não vão para a URL e a URL legada é ignorada (nenhum parâmetro antigo sai)", async ({ page }) => {
+    const state = await open(page, `/dashboard?${DASHBOARD_FILTERED_QUERY}&lixo=1&unit_id=nao-e-uuid`);
+    await expectPanelsLoaded(page, "USER");
+    await select(page, "Família").selectOption("TI");
+    await expect(page).toHaveURL(/\/dashboard\?/);
+    expect(new URL(page.url()).searchParams.has("familia")).toBe(false);
+    // Filtros legados da URL (located, bond_status, unit_id...) não chegam aos painéis.
+    for (const params of dataCalls(state)) {
+      for (const key of ["located", "bond_status", "tipo", "registrado_desde", "inventario", "lixo", "unit_id"]) {
+        expect(params.has(key), key).toBe(false);
+      }
+    }
+    expect(dataCalls(state).length).toBeGreaterThan(0);
+    for (const endpoint of DASHBOARD_ENDPOINTS) expect(legacyCalls(state, endpoint)).toHaveLength(0);
+    no400(state);
+  });
+
+  test("filtro que não casa com nada: estado vazio claro em cada painel e nenhum valor de exemplo", async ({ page }) => {
+    await open(page, "/dashboard", {
+      role: "RH",
+      dashboardPanels: { dataStatus: Object.fromEntries(panelIdsFor("RH").map((id) => [id, "empty" as const])) },
+    });
+    await expectPanelsLoaded(page, "RH", { state: "empty" });
+    await select(page, "Família").selectOption("OUTROS");
+    await expect(page.locator("[data-equipment-empty]").first()).toContainText("Nenhum bem com estes filtros");
+    await expect(page.locator("figure")).toHaveCount(0);
   });
 });
 
 test.describe("relatório", () => {
-  test("Imprimir relatório preserva os filtros; o relatório lista os filtros e os aplica", async ({ page }) => {
-    const state = await open(page, `/dashboard?${DASHBOARD_FILTERED_QUERY}`);
-    await expectDashboardLoaded(page);
+  test("Imprimir relatório abre o relatório; ele lista os filtros herdados da URL e os aplica", async ({ page }) => {
+    const state = await open(page, "/dashboard");
+    await expectPanelsLoaded(page, "USER");
+    // O dashboard não tem mais filtros legados para repassar: o link é fixo.
     const link = page.getByRole("link", { name: "Imprimir relatório" });
-    await expect(link).toHaveAttribute("href", `/dashboard/relatorio?${DASHBOARD_FILTERED_QUERY}`);
+    await expect(link).toHaveAttribute("href", "/dashboard/relatorio");
     await link.click();
-    await expect(page).toHaveURL(new RegExp(`/dashboard/relatorio\\?${DASHBOARD_FILTERED_QUERY.replace(/[?.]/g, "\\$&")}$`));
+    await expect(page).toHaveURL(/\/dashboard\/relatorio$/);
     await expect(page.getByRole("heading", { level: 1, name: "Relatório patrimonial" })).toBeVisible();
+
+    // O relatório ainda herda filtros legados da URL (parse defensivo) e os lista.
+    state.calls.length = 0;
+    await page.goto(`/dashboard/relatorio?${DASHBOARD_FILTERED_QUERY}`);
+    await waitForHydration(page);
     const list = page.locator("[data-report-filters]");
     await expect(list.getByRole("heading", { name: "Filtros aplicados" })).toBeVisible();
     for (const text of [
@@ -260,16 +211,9 @@ test.describe("relatório", () => {
       await expect(list.getByText(text, { exact: true })).toBeVisible();
     }
     await expectDashboardLoaded(page);
-    // Navegação cliente reaproveita o cache (queryKeys com os filtros); numa
-    // carga nova o próprio relatório envia os filtros a todos os endpoints.
-    state.calls.length = 0;
-    await page.reload();
-    await waitForHydration(page);
-    await expectDashboardLoaded(page);
     await expectAllEndpointsCalledWith(state, { located: "NAO", bond_status: "Ocioso", inventario: "nao_conferido" });
-    no400(state);
-    // O relatório não oferece controles de filtro e volta com os mesmos filtros.
-    await expect(page.locator("[data-dashboard-filters]")).toHaveCount(0);
+    // O relatório não oferece controles de filtro e volta ao dashboard.
+    await expect(page.locator("[data-equipment-filters]")).toHaveCount(0);
     await expect(page.getByRole("link", { name: "Voltar ao dashboard" })).toHaveAttribute(
       "href",
       `/dashboard?${DASHBOARD_FILTERED_QUERY}`,
@@ -282,9 +226,12 @@ test.describe("relatório", () => {
   });
 });
 
-test.describe("painéis novos", () => {
-  test("erro em um painel novo não derruba os outros; nova tentativa recupera", async ({ page }) => {
-    const state = await open(page, "/dashboard", { role: "USER", dashboardStatus: { "por-vinculo": 500, inventario: 500 } });
+test.describe("blocos do relatório (painéis patrimoniais)", () => {
+  test("erro em um bloco não derruba os outros; nova tentativa recupera", async ({ page }) => {
+    const state = await open(page, "/dashboard/relatorio", {
+      role: "USER",
+      dashboardStatus: { "por-vinculo": 500, inventario: 500 },
+    });
     const failed = block(page, "por-vinculo");
     await expect(failed.getByRole("button", { name: "Tentar novamente" })).toBeVisible({ timeout: 20_000 });
     await expect(block(page, "inventario").locator("[data-dashboard-error]")).toBeVisible();
@@ -308,19 +255,17 @@ test.describe("painéis novos", () => {
         ...base["localizacao-por-unidade"],
       ],
     };
-    await open(page, "/dashboard", { role: "USER", dashboard });
+    await open(page, "/dashboard/relatorio", { role: "USER", dashboard });
     await expectDashboardLoaded(page);
     await expect(block(page, "por-vinculo").getByRole("list", { name: /Legenda/ })).toContainText(`Vínculo ${XSS_IMG}`);
     await expect(block(page, "por-sala").getByRole("table")).toContainText(`Sala ${XSS_IMG}`);
     await expect(block(page, "localizacao-por-unidade").getByRole("table")).toContainText(`Unid ${XSS_IMG}`);
-    // Unidades (com XSS no nome) também aparecem como texto no seletor.
-    await expect(select(page, "Unidade de uso").locator("option", { hasText: "NUC-03" })).toHaveCount(1);
     expect(await page.locator("main img").count()).toBe(0);
     expect(await page.evaluate(() => (window as unknown as { __xss?: number }).__xss)).toBeUndefined();
   });
 
-  test("números exatos do backend nos painéis novos", async ({ page }) => {
-    await open(page);
+  test("números exatos do backend", async ({ page }) => {
+    await open(page, "/dashboard/relatorio");
     await expectDashboardLoaded(page);
     const loc = block(page, "localizacao-por-unidade");
     await expect(loc.getByRole("img", { name: /Gráfico de barras empilhadas/ })).toBeVisible();
@@ -337,41 +282,39 @@ test.describe("painéis novos", () => {
 });
 
 test.describe("teclado e acessibilidade", () => {
-  test("Mais filtros: disclosure por teclado (Enter/Espaço), foco segue para os campos", async ({ page }) => {
+  test("filtros: ordem de Tab (Família, Unidade, Categoria, Limpar) e rótulos associados", async ({ page }) => {
     await open(page);
-    await expectDashboardLoaded(page);
-    const more = page.getByRole("button", { name: "Mais filtros" });
-    await expect(more).toHaveAttribute("aria-expanded", "false");
-    const controls = await more.getAttribute("aria-controls");
-    expect(controls).toBeTruthy();
-    await expect(page.locator(`[id="${controls}"]`)).toBeHidden();
-
-    await more.focus();
-    await page.keyboard.press("Enter");
-    await expect(more).toHaveAttribute("aria-expanded", "true");
-    await expect(page.locator(`[id="${controls}"]`)).toBeVisible();
-    await expect(more).toBeFocused();
-    await expect(more).toHaveCSS("box-shadow", /rgb/);
-
-    // Tab percorre os campos visíveis e chega aos de "Mais filtros".
-    let reached = false;
-    for (let i = 0; i < 12 && !reached; i += 1) {
+    await expectPanelsLoaded(page, "USER");
+    await expect(filters(page)).toHaveAccessibleName("Filtros dos painéis de equipamentos");
+    await select(page, "Família").focus();
+    const order: string[] = [];
+    for (let i = 0; i < 3; i += 1) {
+      order.push(
+        await page.evaluate(() => {
+          const el = document.activeElement as HTMLSelectElement | HTMLButtonElement | null;
+          return el?.labels?.[0]?.textContent ?? el?.textContent ?? "";
+        }),
+      );
       await page.keyboard.press("Tab");
-      reached = await select(page, "Unidade pertencente").evaluate((el) => el === document.activeElement);
     }
-    expect(reached).toBe(true);
-
-    await more.focus();
-    await page.keyboard.press(" ");
-    await expect(more).toHaveAttribute("aria-expanded", "false");
-    await expect(select(page, "Unidade pertencente")).toHaveCount(0);
+    expect(order).toEqual(["Família", "Unidade", "Categoria"]);
+    // Seleção por teclado aplica o filtro.
+    await select(page, "Família").focus();
+    await page.keyboard.press("ArrowDown");
+    await expect(select(page, "Família")).not.toHaveValue("");
+    // Foco visível chegando por teclado (Shift+Tab e Tab de volta ao campo).
+    await page.keyboard.press("Shift+Tab");
+    await page.keyboard.press("Tab");
+    await expect(select(page, "Família")).toBeFocused();
+    // O seletor compartilhado indica o foco pela borda (focus-visible:border-bone = #eeeeee).
+    await expect(select(page, "Família")).toHaveCSS("border-color", "rgb(238, 238, 238)");
   });
 
-  test("axe com Mais filtros aberto e período inválido (WCAG 2.2 AA)", async ({ page }) => {
-    await open(page, `/dashboard?${DASHBOARD_FILTERED_QUERY}`);
-    await expectDashboardLoaded(page);
-    await page.getByLabel("Até", { exact: true }).fill("2020-01-01");
-    await expect(page.getByText(/Período não aplicado/)).toBeVisible();
+  test("axe com filtro aplicado (WCAG 2.2 AA)", async ({ page }) => {
+    await open(page);
+    await expectPanelsLoaded(page, "USER");
+    await select(page, "Família").selectOption("TI");
+    await expect(page.locator("[data-equipment-panel][aria-busy=true]")).toHaveCount(0, { timeout: 20_000 });
     await waitForAnimations(page);
     const results = await new AxeBuilder({ page }).withTags(AXE_TAGS).analyze();
     expect(results.violations, JSON.stringify(results.violations, null, 2)).toEqual([]);
@@ -380,16 +323,17 @@ test.describe("teclado e acessibilidade", () => {
   for (const width of [320, 768]) {
     test(`${width}px: filtros sem rolagem horizontal, alvos >= 24px`, async ({ page }) => {
       await page.setViewportSize({ width, height: 900 });
-      await open(page, `/dashboard?${DASHBOARD_FILTERED_QUERY}`);
-      await expectDashboardLoaded(page);
-      // < 768px a barra é recolhível (fechada por padrão): abre para medir os campos.
-      await openMobileFilters(page);
+      await open(page);
+      await expectPanelsLoaded(page, "USER");
+      await select(page, "Família").selectOption("TI");
       const { scroll, inner } = await page.evaluate(() => ({
         scroll: document.documentElement.scrollWidth,
         inner: window.innerWidth,
       }));
       expect(scroll).toBeLessThanOrEqual(inner);
-      for (const control of await filters(page).locator("select:visible, input:visible, button:visible").all()) {
+      const controls = await filters(page).locator("select:visible, input:visible, button:visible").all();
+      expect(controls.length).toBeGreaterThanOrEqual(4);
+      for (const control of controls) {
         const box = await control.boundingBox();
         expect(box!.height).toBeGreaterThanOrEqual(24);
         expect(box!.x + box!.width).toBeLessThanOrEqual(width);

@@ -53,6 +53,36 @@ _TEMPLATES: dict[str, dict[str, str]] = {
             "</body></html>"
         ),
     },
+    # Redefinicao de senha enviada PELO BACKEND (nao pelo template do
+    # Supabase): o link aponta para a nossa pagina com `token_hash`, que so e
+    # consumido no clique do usuario. Ver
+    # docs/deploy/PLANO_ACAO_RESET_SENHA_2026-10-27.md.
+    "recovery": {
+        "subject": "SISPAT-AGU: redefinicao de senha",
+        "text": (
+            "Ola, {{ recipient_name }}.\n\n"
+            "Um administrador solicitou a redefinicao da senha da sua conta no SISPAT-AGU.\n"
+            "Criar nova senha: {{ action_url }}\n\n"
+            "Sua senha atual continua valendo ate voce concluir a troca.\n"
+            "O link e pessoal e de uso unico, com validade limitada: use sempre o\n"
+            "e-mail MAIS RECENTE, porque um novo pedido invalida o link anterior.\n\n"
+            "Se nao reconhece este pedido, ignore esta mensagem: nenhuma senha muda\n"
+            "sem o seu clique. Nunca compartilhe este link.\n"
+        ),
+        "html": (
+            '<!doctype html><html lang="pt-BR"><body>'
+            "<p>Ola, {{ recipient_name }}.</p>"
+            "<p>Um administrador solicitou a redefinicao da senha da sua conta no "
+            "SISPAT-AGU.</p>"
+            '<p><a href="{{ action_url }}" rel="noopener noreferrer">Criar nova senha</a></p>'
+            "<p>Sua senha atual continua valendo ate voce concluir a troca. O link e "
+            "pessoal e de uso unico, com validade limitada: use sempre o e-mail mais "
+            "recente, porque um novo pedido invalida o link anterior.</p>"
+            "<p><small>Se nao reconhece este pedido, ignore esta mensagem: nenhuma senha "
+            "muda sem o seu clique. Nunca compartilhe este link.</small></p>"
+            "</body></html>"
+        ),
+    },
     "invite": {
         "subject": "SISPAT-AGU: convite de acesso",
         "text": (
@@ -126,7 +156,7 @@ def render_email(
     ctx.setdefault("paragraphs", [])
     ctx.setdefault("action_url", "")
     ctx.setdefault("action_label", "Abrir")
-    if template == "invite" and not ctx["action_url"]:
+    if template in ("invite", "recovery") and not ctx["action_url"]:
         raise TemplateError("Contexto invalido.")
     try:
         subject = spec["subject"].replace("{title}", ctx.get("title", ""))

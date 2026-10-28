@@ -1,6 +1,7 @@
 # Históricos de migração (Supabase x Alembic)
 
-Atualizado em 2026-10-20.
+Atualizado em 2026-10-27 (Onda 5: entradas 0016-0018 e estado do carimbo no fim do
+arquivo; os parágrafos de estado abaixo são históricos).
 
 > **Estado atual (2026-10-20):** `alembic_version` = `0011_dashboard_charts_prefs`
 > (head), carimbado no deploy da VPS com `alembic stamp` (sem DDL). O esquema
@@ -197,3 +198,127 @@ algum (o Supabase e unico: dev = prod); so com autorizacao, executar o espelho e
 `alembic stamp 0015_asset_tech_classification`. Downgrade remove apenas o que criou.
 O CHECK de tamanho de `dashboard_layout` (1024) nao mudou (15 ids cabem). Detalhes:
 `docs/architecture/dashboard-api.md`.
+
+## Estado do carimbo e numeração (Onda 5, 2026-10-27)
+
+> **`alembic_version` do banco = `0018_equipment_classification`**, definido por
+> `UPDATE` MANUAL (informado pelo responsável; não foi verificado nesta rodada). O
+> DDL das revisões 0016, 0017 e 0018 foi aplicado pelos espelhos `.sql` no SQL Editor.
+> **NUNCA rodar `alembic upgrade` (nem `upgrade head`) sobre este banco**: o DDL já foi
+> aplicado à mão e a regra do projeto é não executar migração em produção sem
+> autorização explícita. Recompor o carimbo, se preciso, é sempre `alembic stamp
+> <revisão>` (sem DDL). O carimbo em 0018 NÃO prova que 0013-0016 estejam
+> no esquema: confira com as consultas de verificação de cada entrada antes de confiar.
+> A divergência de numeração é esperada: o ID Alembic e o prefixo do espelho `.sql`
+> diferem (0016 -> `sql/0019`, 0017 -> `sql/0020`, 0018 -> `sql/0021`).
+
+Backup antes de qualquer reaplicação ou downgrade (sem credenciais no comando; a URL de
+conexão vem de variável de ambiente local, nunca versionada):
+
+```bash
+pg_dump "$SUPABASE_DB_URL" --schema=public --format=custom \
+  --file=sispat_public_$(date -u +%Y%m%dT%H%M%SZ).dump
+```
+
+Verificação do carimbo: `SELECT version_num FROM alembic_version;` (esperado
+`0018_equipment_classification`).
+
+## Alembic 0016 – chave alfanumérica do patrimônio (`sispat_alnum_key`)
+
+`0016_asset_search_key` (arquivo `backend/migrations/versions/0016_asset_search_key.py`;
+espelho `backend/migrations/sql/0019_asset_search_key.sql`; depende de
+`0015_asset_tech_classification`, da função `public.sispat_unaccent` da 0014 e da
+extensão `pg_trgm`). Aditiva e idempotente, sem alterar dados nem tabelas:
+
+- função `public.sispat_alnum_key(text)` (`IMMUTABLE`, `PARALLEL SAFE`, `STRICT`,
+  `search_path = extensions, pg_catalog`): minúsculas, sem acento e sem
+  pontuação/espaços;
+- índice GIN trigram funcional `ix_assets_patrimony_key_trgm` sobre
+  `sispat_alnum_key(patrimony_number)`.
+- **NÃO cria a coluna `search_key`** (a busca usa a função/índice funcional, nada é
+  persistido em `assets`).
+
+Uso: `GET /assets?q=` casa `AGU-123`, `12.345`, `AB 123` com `AGU123`, `12345`, `AB-123`.
+O backend chama a função: o DDL precisa existir ANTES do deploy do backend.
+Rollback: `alembic downgrade 0015_asset_tech_classification` (ou, no SQL Editor,
+`DROP INDEX IF EXISTS public.ix_assets_patrimony_key_trgm; DROP FUNCTION IF EXISTS
+public.sispat_alnum_key(text);`). Perde apenas índice e função. Backup: `pg_dump` acima.
+Os cabeçalhos do arquivo e do espelho ainda dizem "PENDENTE DE APLICAÇÃO" (texto de
+quando foram escritos); o estado atual é o desta seção, a confirmar com:
+
+```sql
+SELECT proname FROM pg_proc WHERE proname = 'sispat_alnum_key';
+SELECT indexname FROM pg_indexes WHERE indexname = 'ix_assets_patrimony_key_trgm';
+```
+
+## Alembic 0017 – `user_dashboard_preferences` (APLICADA 2026-10-27)
+
+`0017_dashboard_panel_prefs` (`versions/0017_dashboard_panel_prefs.py`; espelho
+`sql/0020_dashboard_panel_prefs.sql`; depende de 0016). **Aplicada manualmente no
+Supabase em 2026-10-27, com autorização explícita**, pelo SQL Editor. Cria a tabela
+NOVA `user_dashboard_preferences` (PK/FK `user_id` -> `users(id)` `ON DELETE CASCADE`,
+`panels jsonb NOT NULL DEFAULT '[]'`, `version integer NOT NULL DEFAULT 1`,
+`created_at`/`updated_at` `timestamptz`), com quatro CHECKs
+(`ck_user_dashboard_preferences_panels_array`, `_panels_count` <= 32 itens,
+`_panels_size` <= 2048 bytes, `_version` >= 1). **RLS habilitado SEM políticas
+(deny-all)** e `REVOKE ALL` de `anon`/`authenticated` (condicional à existência das
+roles). Também migra `user_preferences.dashboard_layout` para a tabela nova pelos cinco
+ids com correspondente (`kpis`, `tech_summary`, `tech_units`, `units`, `tech_category`);
+os outros dez são descartados; `INSERT ... ON CONFLICT (user_id) DO NOTHING`. Resultado
+registrado na aplicação: 0 linhas inseridas. O DDL está CONGELADO.
+Rollback: `alembic downgrade 0016_asset_search_key` (remove só a tabela; a coluna
+`user_preferences.dashboard_layout` permanece). Só com autorização, após `pg_dump`.
+
+Verificação:
+
+```sql
+SELECT relrowsecurity FROM pg_class WHERE oid = 'public.user_dashboard_preferences'::regclass; -- true
+SELECT count(*) FROM pg_policies WHERE tablename = 'user_dashboard_preferences';              -- 0
+SELECT conname FROM pg_constraint
+WHERE conrelid = 'public.user_dashboard_preferences'::regclass AND contype = 'c';             -- 4 CHECKs
+```
+
+## Alembic 0018 – classificação de equipamentos (APLICADA 2026-10-27, SEM backfill)
+
+`0018_equipment_classification` (`versions/0018_equipment_classification.py`; espelho
+`sql/0021_equipment_classification.sql`; depende de 0017; HEAD no código). DDL aplicado
+no Supabase em 2026-10-27 pelo espelho, com autorização; `alembic_version` carimbado em
+0018 (ver acima). Aditiva e idempotente, sem backfill:
+
+- **6 colunas** em `assets`, todas `text NULL` sem default: `equipment_family`,
+  `equipment_category`, `classification_confidence`, `classification_rule`,
+  `classification_rules_version`, `category_override`;
+- **6 CHECKs** (o código tem seis, não cinco): `ck_assets_equipment_family`,
+  `ck_assets_equipment_category` (categoria só na família correta),
+  `ck_assets_classification_confidence` (ALTA/BAIXA), `ck_assets_category_override` (as
+  20 categorias), `ck_assets_classification_rule_len` (1..64, sem espaços nas pontas) e
+  `ck_assets_classification_rules_version_len` (1..16). Os quatro primeiros espelham as
+  tuplas de `app.services.asset_classification`; o teste
+  `test_asset_classification_migration.py` garante a igualdade;
+- índice parcial `ix_assets_equipment_active` em `(equipment_family, equipment_category,
+  unit_id) WHERE deleted_at IS NULL AND equipment_category IS NOT NULL`;
+- nenhuma tabela nova (RLS/REVOKE de `assets` já vêm da 0004).
+
+Estado dos dados: colunas todas NULL até o backfill/1ª importação; ver
+`docs/architecture/classificacao-patrimonial.md` ("Decisão pendente").
+Rollback: `alembic downgrade 0017_dashboard_panel_prefs` (ou o `DOWNGRADE_SQL` do arquivo
+no SQL Editor): remove índice, CHECKs e as 6 colunas — PERDE a classificação e, sobretudo,
+os overrides manuais do ADM (`category_override`; só ficam os registros em `audit_logs`). Faça
+`pg_dump` antes e nunca em produção sem autorização.
+
+Verificação:
+
+```sql
+SELECT column_name FROM information_schema.columns
+WHERE table_schema = 'public' AND table_name = 'assets'
+  AND column_name IN ('equipment_family','equipment_category','classification_confidence',
+                      'classification_rule','classification_rules_version','category_override'); -- 6 linhas
+SELECT conname FROM pg_constraint
+WHERE conrelid = 'public.assets'::regclass AND conname LIKE 'ck_assets_%'
+  AND conname IN ('ck_assets_equipment_family','ck_assets_equipment_category',
+                  'ck_assets_classification_confidence','ck_assets_category_override',
+                  'ck_assets_classification_rule_len','ck_assets_classification_rules_version_len'); -- 6 linhas
+SELECT indexname FROM pg_indexes WHERE indexname = 'ix_assets_equipment_active';                 -- 1 linha
+SELECT count(*) FILTER (WHERE equipment_category IS NULL) AS sem_classificacao,
+       count(*) AS total FROM public.assets WHERE deleted_at IS NULL;   -- antes do backfill: sem = total
+```
