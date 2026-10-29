@@ -107,6 +107,24 @@ def build_engine():
     return engine
 
 
+_JA_LOGOU = object()
+"""Sentinela do default de `World.user(last_login_at=...)`.
+
+Por que o default é "já logou agora" e não `None`: `require_auth` grava
+`users.last_login_at` UMA VEZ POR SESSÃO e, nessa única vez, também insere a
+linha `LOGIN` em `audit_logs` (ver `app.services.login_tracking_service`). Um
+mundo em que todo usuário sintético NUNCA logou faria a PRIMEIRA requisição
+de cada teste carregar esse par de escritas, quebrando as invariantes que
+vários testes verificam — simetria de consultas entre alvo alheio/inexistente
+(AUD-14-07) e "leitura bem-sucedida não gera auditoria" — por um motivo que
+não tem nada a ver com o que eles testam (o registro depende SÓ do ator,
+nunca do alvo, então não é oráculo de IDOR).
+
+Testes do próprio registro de login passam `last_login_at=None` para pedir
+explicitamente um usuário que nunca logou (ver `test_last_login_tracking.py`).
+"""
+
+
 class World:
     """Fábrica de dados sintéticos sobre o SQLite."""
 
@@ -159,7 +177,7 @@ class World:
         email: str | None = None,
         version: int = 1,
         avatar: str | None = None,
-        last_login_at: datetime | None = None,
+        last_login_at: Any = _JA_LOGOU,
         created_at: datetime | None = None,
         sessions_revoked_at: datetime | None = None,
     ) -> uuid.UUID:
@@ -174,7 +192,9 @@ class World:
                     active=active,
                     version=version,
                     avatar_object_key=avatar,
-                    last_login_at=last_login_at,
+                    last_login_at=(
+                        datetime.now(timezone.utc) if last_login_at is _JA_LOGOU else last_login_at
+                    ),
                     created_at=created_at or datetime.now(timezone.utc),
                     sessions_revoked_at=sessions_revoked_at,
                 )

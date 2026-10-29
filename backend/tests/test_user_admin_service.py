@@ -155,6 +155,14 @@ def test_filtros_de_perfil_unidade_e_ativo(world, scene):
 
 def test_ordenacao_e_paginacao(world, scene):
     now = datetime.now(timezone.utc)
+    # O mundo sintético nasce com todos "já logados" (ver `_JA_LOGOU` em
+    # `test_user_admin_db.py`); aqui os demais voltam a NUNCA ter logado, para
+    # que a ordenação por `last_login_at` siga exercitando o `nulls_last`.
+    for user_id in (
+        scene.actor, scene.user_b, scene.user_ab, scene.orphan,
+        scene.pending_a, scene.pending_b,
+    ):
+        world.set(user_id, last_login_at=None)
     world.set(scene.user_a, last_login_at=now - timedelta(days=1))
     world.set(scene.other_adm, last_login_at=now)
     with world.session() as db:

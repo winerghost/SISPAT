@@ -82,6 +82,18 @@ CLAIM `amr` (suposição documentada, validar em homologação):
     numérico/booleano, lista gigante) é tratado como "sem informação":
     `has_recent_totp` responde False (falha fechada).
 
+ÚLTIMO LOGIN (`users.last_login_at`):
+    Depois de TODAS as negações (excluído, inativo, sessão revogada) e antes
+    de popular `flask.g`, `require_auth` registra o último login do usuário
+    (`_record_login_best_effort` -> `app.services.login_tracking_service`). O
+    instante gravado é o do PRIMEIRO fator da sessão (`min` dos `timestamp`
+    do claim `amr`, o mesmo parser da defesa de revogação), que é estável
+    entre refreshes — logo o `UPDATE` condicional grava ~1 vez por LOGIN, não
+    por requisição, e uma única linha `LOGIN` vai para `audit_logs`. Sem
+    `amr` utilizável, cai para `now()` com janela mínima de 15 min. O
+    registro é MELHOR-ESFORÇO: qualquer falha é apenas logada (só a classe do
+    erro) e a autenticação segue normalmente.
+
 ALGORITMOS (HS256 legado + ES256/JWKS):
     Ver `_decode_supabase_jwt` e `app.auth.jwks`. O projeto atual assina com
     ES256 (JWKS público). O segredo HS256 legado continua aceito enquanto
@@ -111,6 +123,11 @@ from app.auth.jwks import get_signing_key
 from app.config.settings import get_settings
 from app.database.session import get_db_session
 from app.models.rbac import Role, RolePermission, User, UserRole
+from app.services.login_tracking_service import (
+    record_login,
+    resolve_login_instant,
+    should_record_login,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -352,6 +369,46 @@ def _load_user_with_roles_and_permissions(
         return user, role_codes, permission_codes
 
 
+def _record_login_best_effort(user: Any, claims: dict[str, Any], aal: str) -> None:
+    """Atualiza `users.last_login_at` (~1x por sessão) sem nunca falhar.
+
+    Chamado DEPOIS de todas as negações (excluído/inativo/sessão revogada):
+    só um acesso efetivamente autenticado registra login. Ver
+    `app.services.login_tracking_service` para a semântica, o dedupe por
+    sessão e a linha `LOGIN` em `audit_logs`.
+
+    Três salvaguardas, nesta ordem:
+        1. `isinstance(user, User)`: o objeto pode não ser uma instância do
+           ORM (dezenas de testes injetam um `SimpleNamespace` no lugar de
+           `_load_user_with_roles_and_permissions`) — nesse caso não se toca
+           no banco;
+        2. pré-checagem em memória: no caso comum (mesma sessão já
+           registrada) nenhuma sessão de banco é aberta;
+        3. `except Exception`: autenticação NUNCA falha por causa deste
+           registro; loga só a CLASSE do erro (nunca token, claims ou e-mail).
+    """
+    if not isinstance(user, User):
+        return
+    try:
+        when, min_interval = resolve_login_instant(claims)
+        if not should_record_login(getattr(user, "last_login_at", None), when, min_interval):
+            return
+        with get_db_session() as db:
+            recorded = record_login(
+                db, user.id, when, min_interval_seconds=min_interval, aal=aal
+            )
+        if recorded:
+            # Coerência na MESMA requisição (ex.: `GET /api/v1/me` devolve o
+            # login atual). A instância está destacada da sessão, então isto
+            # não gera nenhuma escrita extra.
+            user.last_login_at = when
+    except Exception as exc:  # noqa: BLE001 - registro é melhor-esforço
+        logger.warning(
+            "last_login_at não registrado para o usuário autenticado (%s).",
+            exc.__class__.__name__,
+        )
+
+
 def require_auth(view_func: F) -> F:
     """Decorator que exige um JWT Supabase válido no header `Authorization`.
 
@@ -452,11 +509,16 @@ def require_auth(view_func: F) -> F:
             logger.info("Usuário %s com JWT anterior à revogação de sessões; acesso negado.", user.id)
             _auth_failed("session_revoked", actor_user_id=getattr(user, "id", None))
 
+        session_aal = _extract_session_aal(claims)
+        # Último LOGIN (não "última atividade"): melhor-esforço, depois de
+        # TODAS as negações acima. Ver `_record_login_best_effort`.
+        _record_login_best_effort(user, claims, session_aal)
+
         g.current_user = user
         g.current_user_roles = role_codes
         g.current_user_permissions = permission_codes
         g.current_user_claims = claims
-        g.current_session_aal = _extract_session_aal(claims)
+        g.current_session_aal = session_aal
 
         return view_func(*args, **kwargs)
 

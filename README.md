@@ -458,6 +458,18 @@ Tela **Administração → Usuários** (ADM com MFA/AAL2) e **Configurações �
   escopo de quem executa (`target_out_of_scope`).
 - **Sessões:** "encerrar sessões", desativar e reset de MFA gravam
   `users.sessions_revoked_at`; o backend recusa JWTs emitidos antes disso.
+- **Último acesso (2026-10-29):** a coluna "Último acesso" da lista e o campo
+  `last_login_at` de `GET /api/v1/me` passaram a ser alimentados de fato —
+  `require_auth` grava `users.last_login_at` **uma vez por sessão** (instante do
+  primeiro fator de autenticação, lido do claim `amr`) e insere uma linha `LOGIN`
+  em `audit_logs` na mesma transação. É *último login*, não *última atividade*;
+  gravar é melhor-esforço e nunca derruba a autenticação. **Sem migração** (a
+  coluna existe desde a `0001`, só ninguém a escrevia). Antes disso a trilha
+  registrava apenas falhas de autenticação (`AUTH_FAILED`) e nenhum acesso
+  bem-sucedido. Não houve backfill a partir do Supabase Auth — os
+  `last_sign_in_at` existentes vinham do scanner de antivírus de e-mail, não de
+  pessoas (ver `docs/architecture/estrategia-auditoria.md`, seções 2.2.1 e 2.2.2);
+  logo, contas antigas seguem como "Nunca" até o próximo login real.
 - **Reset de MFA:** exige que o ADM tenha confirmado o TOTP há no máximo 5 minutos
   (claim `amr`; validar o formato num projeto de homologação).
 - **Redefinição de senha:** `PASSWORD_RESET_REDIRECT_URL` deve estar em

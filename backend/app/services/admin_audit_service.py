@@ -85,6 +85,10 @@ CHANGE_KEYS = (
     "sessions_revoked_at",
     "invite_superseded",
     "removed_factors",
+    # Nível de garantia da sessão na linha `LOGIN` (`entity_type="auth"`, ver
+    # `app.services.login_tracking_service`): "aal1"/"aal2", nunca um valor
+    # vindo do cliente.
+    "aal",
     "unit_id",
     "from_unit_id",
     "to_unit_id",

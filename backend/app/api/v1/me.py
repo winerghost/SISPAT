@@ -20,6 +20,11 @@ IMPORTANTE — `mfa_required` não autoriza nada:
 Exige apenas `require_auth` (qualquer usuário autenticado pode consultar o
 próprio estado).
 
+`last_login_at` (ISO UTC ou `null`): último LOGIN da conta, gravado pelo
+próprio `require_auth` (ver `app.services.login_tracking_service`). Está aqui
+para o TITULAR do dado poder notar um acesso que não foi dele (LGPD art. 18,
+II); não é "última atividade" e não autoriza nada.
+
 Foto de perfil do PRÓPRIO usuário (Etapa 2; contrato em
 `docs/architecture/modulo-configuracoes.md`):
     - `PUT /api/v1/me/avatar` (multipart, campo `file`, até 2 MiB) e
@@ -53,7 +58,7 @@ from app.integrations.supabase_storage_client import SupabaseStorageClient
 from app.security.rate_limit import rate_limit
 from app.services.avatar_service import AvatarError, process_avatar
 from app.services.preferences_service import PreferencesService, PreferencesVersionConflictError
-from app.services.user_admin_service import UserAdminError, UserAdminService
+from app.services.user_admin_service import UserAdminError, UserAdminService, iso_utc
 
 me_bp = Blueprint("me", __name__)
 
@@ -89,6 +94,12 @@ def get_me():
                 "mfa_required": _ROLE_REQUIRING_MFA in role_codes,
                 # UA-FE-01: só o booleano; a URL vem de GET /me/avatar-url.
                 "has_avatar": getattr(user, "avatar_object_key", None) is not None,
+                # Transparência ao TITULAR (LGPD art. 18, II): o próprio
+                # usuário vê o último login da conta — é o dado que permite
+                # notar uso indevido. Gravado por `require_auth` (ver
+                # `app.services.login_tracking_service`); ISO UTC ou null
+                # (null = nenhum login registrado desde a implantação).
+                "last_login_at": iso_utc(getattr(user, "last_login_at", None)),
             }
         ),
         200,

@@ -101,6 +101,17 @@ usuários ativos).
 - `auth_user_id` separado de `id`: desacopla a identidade interna de negócio do
   identificador do provedor de autenticação, permitindo trocar/migrar provedor sem
   renumerar todas as FKs do sistema.
+- `last_login_at` é escrita **somente** por `require_auth`
+  (`backend/app/auth/supabase_auth.py` →
+  `backend/app/services/login_tracking_service.py`), uma vez por sessão, com o
+  instante do primeiro fator de autenticação (claim `amr` do JWT). É *último
+  login*, não *última atividade*. `NULL` = nenhum login registrado desde
+  2026-10-29, quando a gravação passou a existir (a coluna existe desde esta
+  migração `0001`, mas antes nenhum ponto do backend a escrevia). A exclusão
+  lógica de conta zera o valor junto com a anonimização
+  (`backend/app/services/user_deletion_service.py`). Detalhes, semântica e
+  pendência de LGPD: `docs/architecture/estrategia-auditoria.md`, seções 2.2.1,
+  2.2.2 e 6.4.1.
 
 ---
 

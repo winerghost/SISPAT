@@ -236,6 +236,13 @@ class UserDeletionService(UserAdminService):
         target.phone = None
         target.avatar_object_key = None
         target.auth_user_id = None
+        # Dado COMPORTAMENTAL (quando a pessoa acessou o sistema): numa linha
+        # anonimizada ele seria re-identificável cruzando com
+        # `audit_logs.actor_user_id`, que é preservado de propósito. Como
+        # `require_auth` passou a gravar `last_login_at`
+        # (`app.services.login_tracking_service`), a anonimização também o
+        # apaga. A trilha de `audit_logs` (append-only) não é tocada.
+        target.last_login_at = None
         self._bump_version(target)
         self._db.add(target)
 

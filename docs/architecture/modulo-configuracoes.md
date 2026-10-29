@@ -130,6 +130,23 @@ Todo `version` é o `users.version` atual; divergência → 409 `version_conflic
 
 - `role`: `"ADM" | "USER" | "RH" | null`. `null` significa sem perfil, ou seja, acesso revogado.
 - `last_login_at` e `deactivated_at`: ISO UTC ou `null`.
+- **`last_login_at` — quem grava, quando e com qual semântica.** Quem grava é
+  `require_auth` (`backend/app/auth/supabase_auth.py` →
+  `backend/app/services/login_tracking_service.py`), **uma vez por sessão** e só
+  depois de todas as negações (excluído, inativo, sessão revogada). O instante é o
+  do **primeiro fator de autenticação da sessão** (`min` dos `timestamp` do claim
+  `amr` do JWT), estável entre refreshes do access token; sem `amr` utilizável, cai
+  em `now()` com janela mínima de 15 min. É **último LOGIN, não última atividade**:
+  navegar pelo sistema na mesma sessão não move o valor. Gravar é melhor-esforço —
+  falhar nunca derruba a autenticação. Cada gravação efetiva também insere uma
+  linha `LOGIN` em `audit_logs` (`entity_type='auth'`, `result='SUCESSO'`,
+  `new_values={"aal": ...}`), na mesma transação; ver
+  [`estrategia-auditoria.md`](./estrategia-auditoria.md), seção 2.2.1.
+  `null` significa **nenhum login registrado desde 2026-10-29** (data em que a
+  gravação passou a existir) — a tela mostra "Nunca". Não houve backfill a partir
+  do Supabase Auth: o motivo está na seção 2.2.2 do mesmo documento. Sem migração:
+  a coluna `users.last_login_at` já existia na `0001`; a anonimização de conta
+  (`user_deletion_service`) zera o valor.
 
 ### `GET /api/v1/users` (`users.manage`)
 
@@ -229,12 +246,54 @@ Corpo (`extra="forbid"`):
 - Armazenamento no bucket **privado** `avatars` do Supabase Storage (o bucket ainda não foi criado em produção). Sem bucket ou com o Storage fora do ar → 503 `storage_unavailable`; o resto do sistema segue funcionando.
 - `GET /api/v1/me` passa a incluir `"has_avatar": bool`, para o header decidir se pede `GET /api/v1/me/avatar-url`. A URL nunca vem no `/me`.
 
+### `GET /api/v1/me` (qualquer usuário autenticado, só `require_auth`)
+
+Única fonte de verdade do frontend sobre a identidade da sessão atual
+(`backend/app/api/v1/me.py`):
+
+```json
+{
+  "id": "uuid",
+  "name": "…",
+  "email": "…",
+  "roles": ["ADM"],
+  "permissions": ["assets.read", "…"],
+  "current_aal": "aal2",
+  "mfa_required": true,
+  "has_avatar": false,
+  "last_login_at": "ISO UTC ou null"
+}
+```
+
+- `current_aal`: `"aal1" | "aal2"` da sessão atual (claim `aal`; qualquer valor
+  inesperado é tratado como `aal1`).
+- `mfa_required`: **dica de roteamento**, nunca autorização — é `true` sempre que
+  `ADM` estiver em `roles`, mesmo com a sessão já em `aal2`. A autorização real é
+  `require_aal2` no backend.
+- `last_login_at`: ISO UTC ou `null`. É o **último login do titular** com a mesma
+  semântica e a mesma origem descritas no objeto `UserSummary` acima; está no
+  payload para que o próprio titular possa notar um acesso que não foi dele (LGPD
+  art. 18, II) e **não autoriza nada**.
+  Limitação conhecida: porque a gravação ocorre no primeiro acesso da sessão, o
+  valor devolvido é o início da **sessão atual** — o titular não vê o acesso
+  penúltimo (pendência registrada em
+  [`estrategia-auditoria.md`](./estrategia-auditoria.md), seção 6.4.1).
+
 ### Notas de implementação (Etapa 2)
 
 - Código: `backend/app/services/user_admin_service.py` (regras), `avatar_service.py` (imagem),
   `integrations/supabase_storage_client.py`, rotas finas em `api/v1/users.py`, `units.py`,
   `me.py` e `user_admin_http.py`. Testes: `backend/tests/test_user_admin_*.py` e
   `test_avatar_*.py`.
+- **Último acesso (2026-10-29):** `backend/app/services/login_tracking_service.py`
+  grava `users.last_login_at` com um `UPDATE` condicional e insere a linha `LOGIN`
+  de auditoria só quando o `UPDATE` afeta a linha (`rowcount > 0`) — 1 por sessão,
+  não por requisição. O `UPDATE` **não** incrementa `users.version` (um login não
+  pode causar 409 no PATCH que um ADM tenha em tela). Chamada em
+  `app/auth/supabase_auth.py` (`_record_login_best_effort`); `"aal"` entrou na
+  allowlist `CHANGE_KEYS` de `app/services/admin_audit_service.py` para a linha
+  aparecer na API de auditoria. Sem migração Alembic (coluna já existia na `0001`).
+  Testes: `backend/tests/test_last_login_tracking.py`.
 - **PATCH e permissões:** o decorator exige `users.manage`; depois da validação do corpo e
   antes de qualquer consulta, `role` exige `users.assign_role` e `unit_ids` exige
   `users.assign_unit` (403 `forbidden`, auditado). Sem `role` nem `unit_ids` → 400
