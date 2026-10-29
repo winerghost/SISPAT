@@ -259,7 +259,7 @@ function EquipmentPanel({ panel, size, filters }: { panel: PanelCatalogItem; siz
             </p>
           </div>
         ) : (
-          <PanelView data={query.data} label={panel.label} />
+          <PanelView data={query.data} label={panel.label} panelId={panel.id} filters={filters} />
         )}
 
         {panel.exportable && query.isSuccess && !isPanelEmpty(query.data) ? (

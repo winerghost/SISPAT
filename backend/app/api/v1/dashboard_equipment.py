@@ -3,6 +3,7 @@
 Rotas registradas no `dashboard_bp` (prefixo `/api/v1/dashboard`):
 
     GET /dashboard/panels/<panel_id>/data    leitura (`reports.read`)
+    GET /dashboard/panels/<panel_id>/records leitura dos bens de uma barra (`reports.read`)
     GET /dashboard/panels/<panel_id>/export  CSV/XLSX das tabelas (`exports.create`)
     GET /dashboard/classificacao/revisao          fila OUTROS+BAIXA (ADM + AAL2, `reports.read`)
     GET /dashboard/classificacao/revisao/export   CSV/XLSX da fila (ADM + AAL2, `exports.create`)
@@ -29,6 +30,7 @@ from app.api.v1.dashboard import (
     dashboard_bp,
 )
 from app.api.v1.dashboard_schemas import (
+    LocatedRecordsQuery,
     PanelDataOut,
     PanelDataQuery,
     PanelExportQuery,
@@ -49,6 +51,7 @@ from app.database.session import get_db_session
 from app.security.rate_limit import rate_limit
 from app.services import dashboard_classification_service as classification
 from app.services import dashboard_equipment_service as equipment
+from app.services import dashboard_located_service as located
 from app.services.report_service import ReportError
 
 
@@ -89,6 +92,26 @@ def get_panel_data(panel_id: str):
     except equipment.PanelNotFoundError as exc:
         return _panel_not_found(exc, "dashboard.panel_data")
     return _no_store(PanelDataOut.model_validate(data).model_dump())
+
+
+@dashboard_bp.route("/dashboard/panels/<panel_id>/records", methods=["GET"])
+@require_auth
+@require_aal2_for_adm
+@require_permission("reports.read")
+@rate_limit(admin_rate_limit_key, limit=DASHBOARD_READ_LIMIT, window_seconds=WINDOW)
+def get_panel_records(panel_id: str):
+    try:
+        # Painel sem registros/proibido/inexistente: 404 idêntico ANTES de validar a query.
+        located.authorize_records_panel(panel_id, _current_roles())
+    except equipment.PanelNotFoundError as exc:
+        return _panel_not_found(exc, "dashboard.panel_records")
+    try:
+        query = parse_query(LocatedRecordsQuery, request.args, context="dashboard.panel_records")
+    except BadRequest as exc:
+        return validation_error(exc)
+    with get_db_session() as db:
+        payload = located.located_records(db, g.current_user.id, _current_roles(), panel_id, query)
+    return _no_store(payload)
 
 
 @dashboard_bp.route("/dashboard/panels/<panel_id>/export", methods=["GET"])

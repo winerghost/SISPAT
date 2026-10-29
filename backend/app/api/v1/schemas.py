@@ -241,6 +241,18 @@ class DeactivateRequest(VersionRequest):
     reason: str | None = Field(default=None, max_length=1000)
 
 
+class DeleteUserRequest(VersionRequest):
+    """Corpo de `POST /api/v1/users/<id>/delete` (exclusão lógica).
+
+    `confirm_text` é o e-mail EXATO do alvo, digitado pelo ADM (confirmação
+    forte de operação irreversível). A comparação é feita no serviço, só
+    DEPOIS de confirmar o escopo do alvo; o valor nunca é ecoado na resposta.
+    `max_length` = 320 (limite prático de um endereço de e-mail).
+    """
+
+    confirm_text: str = Field(min_length=3, max_length=320)
+
+
 class DashboardChartsPatch(_StrictModel):
     """`dashboard_charts` parcial: allowlist FECHADA por painel.
 

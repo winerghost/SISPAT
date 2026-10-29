@@ -162,6 +162,8 @@ EXPECTED_POLICY: dict[tuple[str, str], tuple[str, str | None]] = {
     # fila de revisão de classificação (só ADM + AAL2) e exportações.
     ("/api/v1/dashboard/panels/<panel_id>/data", "GET"): (READ, "reports.read"),
     ("/api/v1/dashboard/panels/<panel_id>/data", "HEAD"): (READ, "reports.read"),
+    ("/api/v1/dashboard/panels/<panel_id>/records", "GET"): (READ, "reports.read"),
+    ("/api/v1/dashboard/panels/<panel_id>/records", "HEAD"): (READ, "reports.read"),
     ("/api/v1/dashboard/panels/<panel_id>/export", "GET"): (READ, "exports.create"),
     ("/api/v1/dashboard/panels/<panel_id>/export", "HEAD"): (READ, "exports.create"),
     ("/api/v1/dashboard/classificacao/revisao", "GET"): (ADMIN, "reports.read"),
@@ -177,6 +179,8 @@ EXPECTED_POLICY: dict[tuple[str, str], tuple[str, str | None]] = {
     ("/api/v1/users/<uuid:user_id>/deactivate", "POST"): (ADMIN, "users.deactivate"),
     ("/api/v1/users/<uuid:user_id>/activate", "POST"): (ADMIN, "users.activate"),
     ("/api/v1/users/<uuid:user_id>/revoke-sessions", "POST"): (ADMIN, "users.revoke_sessions"),
+    # Exclusão lógica + anonimização (permissão dedicada, semeada pela 0019).
+    ("/api/v1/users/<uuid:user_id>/delete", "POST"): (ADMIN, "users.delete"),
     ("/api/v1/users/<uuid:user_id>/password-reset", "POST"): (ADMIN, "users.reset_password"),
     ("/api/v1/users/<uuid:user_id>/mfa-reset", "POST"): (ADMIN, "users.reset_mfa"),
     ("/api/v1/users/<uuid:user_id>/audit", "GET"): (ADMIN, "audit.read"),

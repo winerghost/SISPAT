@@ -3,14 +3,16 @@
 Ambas: `require_auth -> require_aal2_for_adm -> require_permission(...) -> rate_limit`
 (USER/RH/ADM; AAL2 só para ADM, como as demais leituras compartilhadas).
 
-- `GET /reports`: catálogo (permissão `reports.read`); colunas conforme o perfil.
+- `GET /reports`: catálogo (permissão `reports.read`); colunas conforme o perfil e
+  opções dos filtros dinâmicos (`bond_status`) conforme o ESCOPO DE UNIDADE do ator.
 - `GET /reports/<kind>/export?format=csv|xlsx&...` com `kind` em
   `assets | movements | inventory-items` (permissão `exports.create`). Filtros e
   ordenação por allowlist (`report_schemas`), `columns=a,b` opcional (allowlist do catálogo, 400 `invalid_columns`), escopo de unidade sempre, bens
   excluídos fora (`include_deleted=true` só ADM -> senão 403 + evento), no máximo
   `MAX_EXPORT_ROWS` linhas (acima: 413), toda célula passa por `csv_safety`, auditoria
   `REPORT_EXPORTED` na mesma transação. Corpo = arquivo (`attachment`, `no-store`).
-  `kind` desconhecido, unidade/inventário alheios, inexistentes ou malformados => 404 igual.
+  `kind` desconhecido, unidade/inventário/sala/responsável alheios, inexistentes ou
+  malformados => 404 igual.
 
 Regras em `app.services.report_service`; contrato em `docs/architecture/reports-api.md`.
 """
@@ -68,7 +70,7 @@ def list_reports_endpoint():
     except BadRequest as exc:
         return validation_error(exc)
     with get_db_session() as db:
-        payload = _service(db).catalog()
+        payload = _service(db).catalog(g.current_user.id)
     response = jsonify(payload)
     response.headers["Cache-Control"] = "no-store"
     return response, 200

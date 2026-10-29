@@ -15,6 +15,13 @@ ESCOPO (anti-IDOR/BOLA):
     `not_found`; `_load_scoped_target` executa SEMPRE as mesmas 4 consultas
     (sem retorno antecipado), para não haver oráculo de tempo (AUD-14-07).
 
+EXCLUSÃO LÓGICA (migração 0019): TODA consulta de usuário deste serviço
+    filtra `users.deleted_at IS NULL` — listagem, `_load_scoped_target`
+    (logo, todas as mutações e o histórico), `_load_self`, a revalidação do
+    ator e a contagem do último ADM. Usuário excluído responde o MESMO 404 de
+    alvo inexistente. A exclusão propriamente dita (lógica + anonimização
+    irreversível) vive em `app.services.user_deletion_service`.
+
 ESCOPO TOTAL PARA PRIVILÉGIO (UA-SCOPE-01, negar por padrão):
     Promover a ADM, rebaixar um ADM, desativar um ADM e `mfa-reset` exigem
     que TODAS as unidades do alvo (vínculos + convites pendentes) estejam no
@@ -341,7 +348,10 @@ class UserAdminService:
         Executa SEMPRE 4 consultas, na mesma ordem, para qualquer alvo.
         """
         actor_units = get_accessible_unit_ids(actor_id, self._db)
-        stmt = select(User).where(User.id == target_id)
+        # Usuário logicamente excluído (0019) NÃO existe para a API: mesmo
+        # 404 de alvo inexistente/alheio/malformado, em TODAS as rotas que
+        # passam por aqui (ver `app.services.user_deletion_service`).
+        stmt = select(User).where(User.id == target_id, User.deleted_at.is_(None))
         if for_update:
             stmt = stmt.with_for_update()
         target = self._db.execute(stmt).scalar_one_or_none()
@@ -379,6 +389,7 @@ class UserAdminService:
                 Role.code == ADM,
                 Role.active.is_(True),
                 User.active.is_(True),
+                User.deleted_at.is_(None),
             )
             .first()
         )
@@ -435,7 +446,12 @@ class UserAdminService:
             self._db.query(UserRole.user_id)
             .join(Role, Role.id == UserRole.role_id)
             .join(User, User.id == UserRole.user_id)
-            .filter(Role.code == ADM, Role.active.is_(True), User.active.is_(True))
+            .filter(
+                Role.code == ADM,
+                Role.active.is_(True),
+                User.active.is_(True),
+                User.deleted_at.is_(None),
+            )
             .all()
         )
         admin_ids = {row[0] for row in rows}
@@ -486,7 +502,8 @@ class UserAdminService:
         if not actor_units:
             return empty
 
-        conditions: list[Any] = [self._scope_clause(actor_units)]
+        # Excluído logicamente nunca aparece em listagem (0019).
+        conditions: list[Any] = [User.deleted_at.is_(None), self._scope_clause(actor_units)]
         if query.q:
             conditions.append(
                 or_(
@@ -934,7 +951,7 @@ class UserAdminService:
         return AvatarService(self._db, storage)
 
     def _load_self(self, user_id: uuid.UUID, *, for_update: bool = False) -> User:
-        stmt = select(User).where(User.id == user_id)
+        stmt = select(User).where(User.id == user_id, User.deleted_at.is_(None))
         if for_update:
             stmt = stmt.with_for_update()
         user = self._db.execute(stmt).scalar_one_or_none()

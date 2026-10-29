@@ -5,9 +5,23 @@ Orquestra o fluxo administrativo de convite/ativação/revogação descrito em
 completo), sempre em conjunto com o Supabase Auth
 (`app.integrations.supabase_admin_client.SupabaseAdminClient`).
 
+ENTREGA DO E-MAIL (corrigida em 2026-10-28; ver
+`docs/deploy/PLANO_ACAO_USUARIOS_CONVITE_2026-10-28.md` §1):
+    O convite NÃO é mais enviado pelo Supabase
+    (`invite_user_by_email` -> template do painel): o
+    `{{ .ConfirmationURL }}` daquele template é um GET de uso único em
+    `/auth/v1/verify`, consumido por scanners de antivírus de e-mail segundos
+    após o envio (a pessoa vê "link expirado" e o scanner fica com tokens
+    válidos da conta). `create_invite` usa
+    `SupabaseAdminClient.generate_invite_token_hash` (que cria o usuário no
+    Auth e NÃO envia nada) + `app.services.invite_delivery`, que monta
+    `<ativar-conta>?token_hash=...&type=invite` e envia por SMTP próprio. O
+    token nunca passa por este serviço: `deliver_invite` devolve apenas o
+    `auth_user_id` e um código curto de resultado.
+
 DECISÃO DE DESIGN CENTRAL (fixada, não revisar sem atualizar esta docstring):
-    Quando um convite é criado, a chamada a
-    `SupabaseAdminClient.invite_user_by_email(...)` retorna o `auth_user_id`
+    Quando um convite é criado, a entrega
+    (`app.services.invite_delivery.deliver_invite`) retorna o `auth_user_id`
     do usuário recém-criado no Supabase Auth. Nesse exato momento -- ainda
     dentro de `create_invite` --, este serviço cria IMEDIATAMENTE a linha
     correspondente em `users` (`active=True`), SEM NENHUMA linha em
@@ -36,8 +50,8 @@ DECISÃO DE DESIGN CENTRAL (fixada, não revisar sem atualizar esta docstring):
     `POST /api/v1/users/activate-invite`.
 
 Resolução da URL de ativação (`redirect_to`):
-    `SupabaseAdminClient.invite_user_by_email` exige um `redirect_to` que já
-    esteja na allow-list `settings.invite_allowed_redirect_urls_list` (ver
+    `SupabaseAdminClient.generate_invite_token_hash` exige um `redirect_to`
+    que já esteja na allow-list `settings.invite_allowed_redirect_urls_list` (ver
     `app.integrations.supabase_admin_client`). Este serviço não introduz uma
     nova variável de ambiente para "a" URL de ativação (fora do escopo desta
     tarefa alterar `Settings` além de `invite_ttl_days`) -- em vez disso,
@@ -61,7 +75,8 @@ Gestão de transação:
     `with get_db_session() as db: ...`; o `commit()` adicional (sem nada
     pendente) feito por aquele `with` ao final é inofensivo (no-op).
 
-    Limitação documentada: a chamada a `SupabaseAdminClient.invite_user_by_email`
+    Limitação documentada: a chamada a
+    `SupabaseAdminClient.generate_invite_token_hash` (e o envio do e-mail)
     ocorre ANTES do commit da transação local. Se o commit local falhar
     depois que o Supabase já criou o usuário convidado, o usuário convidado
     existe no Supabase Auth sem uma linha local correspondente em `users`
@@ -89,6 +104,7 @@ from app.models.audit import AuditLog
 from app.models.invites import Invite, InviteUnit
 from app.models.rbac import Role, User, UserRole
 from app.models.units import Unit, UserUnitAccess
+from app.services.invite_delivery import OUTCOME_SENT, deliver_invite
 
 logger = logging.getLogger(__name__)
 
@@ -230,9 +246,11 @@ class InviteService:
                (`InviteValidationError`).
             3. Verifica convite `PENDENTE` já existente para o mesmo e-mail
                (case-insensitive) -- `InviteAlreadyPendingError` (API 409).
-            4. Chama `SupabaseAdminClient.invite_user_by_email` com a URL de
-               ativação configurada -- qualquer falha vira
-               `InviteServiceError` (API 502).
+            4. Entrega o convite por `app.services.invite_delivery`
+               (`generate_invite_token_hash` + e-mail enviado por este
+               backend) com a URL de ativação configurada -- qualquer falha,
+               inclusive e-mail desligado ou não entregue, vira
+               `InviteServiceError` (API 502) e NADA é criado localmente.
             5. Em uma transação: cria `users` (idempotente por
                `auth_user_id`/e-mail), `Invite` (`PENDENTE`,
                `expires_at=now()+invite_ttl_days`), `InviteUnit`s e um
@@ -318,9 +336,25 @@ class InviteService:
         email_clean = email.strip()
         name_clean = name.strip()
 
+        # O e-mail do convite é montado e enviado PELO BACKEND
+        # (`app.services.invite_delivery`): o link do template do Supabase
+        # (`{{ .ConfirmationURL }}` -> `/auth/v1/verify`) é gasto por scanner
+        # de antivírus antes do clique da pessoa. Com e-mail desligado nada
+        # seria entregue, então falha ANTES de criar o usuário no Auth.
+        if not getattr(self._settings, "email_enabled", False):
+            logger.error(
+                "invite_service.create_invite: EMAIL_ENABLED=false; o convite não pode "
+                "ser entregue (o e-mail é enviado por este backend)."
+            )
+            raise InviteServiceError("Não foi possível enviar o convite no momento.")
+
         try:
-            response = self._admin_client.invite_user_by_email(
-                email_clean, name_clean, redirect_to=activation_redirect_to
+            delivery = deliver_invite(
+                token_source=self._admin_client,
+                email=email_clean,
+                recipient_name=name_clean,
+                redirect_to=activation_redirect_to,
+                settings=self._settings,
             )
         except SupabaseAdminClientError as exc:
             logger.error(
@@ -332,7 +366,19 @@ class InviteService:
                 "Não foi possível enviar o convite no momento."
             ) from exc
 
-        invited_auth_user_id = response.get("id")
+        if delivery.outcome != OUTCOME_SENT:
+            # Nunca reportar sucesso sem entrega: sem e-mail o convidado não
+            # tem como ativar a conta. Nada é criado localmente; o usuário já
+            # criado no Auth é reaproveitado numa nova tentativa (ver
+            # docstring do módulo). `outcome` é um código curto, sem segredo.
+            logger.error(
+                "invite_service.create_invite: convite gerado no provedor, mas o e-mail "
+                "não foi entregue (%s).",
+                delivery.outcome,
+            )
+            raise InviteServiceError("Não foi possível enviar o convite no momento.")
+
+        invited_auth_user_id = delivery.auth_user_id
         if not invited_auth_user_id:
             logger.error(
                 "invite_service.create_invite: resposta da API Admin do Supabase sem "

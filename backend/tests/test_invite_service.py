@@ -22,12 +22,15 @@ Cobre explicitamente os cenários de segurança pedidos:
 """
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock
 
 import pytest
 
+from app.integrations.supabase_admin_client import SupabaseAdminClientError
+from app.models.audit import AuditLog
 from app.models.invites import Invite, InviteUnit
 from app.models.rbac import Role, User, UserRole
 from app.models.units import Unit
@@ -41,6 +44,8 @@ from app.services.invite_service import (
     LastAdminError,
     UserNotFoundError,
 )
+
+INVITE_TOKEN_HASH = "pkce_" + "e" * 40
 
 
 # ---------------------------------------------------------------------------
@@ -269,21 +274,43 @@ def test_create_invite_falha_se_primeira_url_nao_e_ativar_conta(urls):
 # ---------------------------------------------------------------------------
 
 
-def test_create_invite_sucesso_cria_user_invite_e_invite_units():
+def _scene_para_convite_novo():
+    """Banco mockado pronto para um convite de e-mail inedito."""
     unit = _make_unit()
-
     db, router = _make_db_mock()
-    unit_query = router.register(Unit)
-    unit_query.filter.return_value.all.return_value = [unit]
+    router.register(Unit).filter.return_value.all.return_value = [unit]
+    router.register(Invite).filter.return_value.first.return_value = None  # sem pendente
+    router.register(User).filter.return_value.first.return_value = None  # sem user local
+    return unit, db
 
-    invite_query = router.register(Invite)
-    invite_query.filter.return_value.first.return_value = None  # sem convite pendente
 
-    user_query = router.register(User)
-    user_query.filter.return_value.first.return_value = None  # sem usuário local ainda
+def _stub_delivery(monkeypatch, admin_client, *, status: str = "sent") -> list:
+    """CONVITE-LINK: o e-mail do convite e montado e enviado PELO BACKEND
+    (`app.services.invite_delivery`), porque o link do template do Supabase
+    (`{{ .ConfirmationURL }}` -> `/auth/v1/verify`) e gasto por scanner de
+    antivirus antes do clique da pessoa. Devolve a lista das mensagens -- e o
+    UNICO lugar em que o link de uso unico pode aparecer."""
+    from app.integrations.supabase_admin_client import GeneratedInvite
+    from app.services import invite_delivery
+    from app.services.email.sender import EmailResult
 
+    admin_client.generate_invite_token_hash.return_value = GeneratedInvite(
+        auth_user_id="auth-novo-usuario", token_hash=INVITE_TOKEN_HASH
+    )
+    sent: list = []
+
+    def fake_send(message, **_kwargs):
+        sent.append(message)
+        return EmailResult(status=status)
+
+    monkeypatch.setattr(invite_delivery, "send_email_safely", fake_send)
+    return sent
+
+
+def test_create_invite_sucesso_cria_user_invite_e_invite_units(monkeypatch):
+    unit, db = _scene_para_convite_novo()
     admin_client = MagicMock()
-    admin_client.invite_user_by_email.return_value = {"id": "auth-novo-usuario"}
+    sent = _stub_delivery(monkeypatch, admin_client)
 
     service = InviteService(db, admin_client, settings=_make_settings())
 
@@ -297,12 +324,124 @@ def test_create_invite_sucesso_cria_user_invite_e_invite_units():
 
     assert invite.status == "PENDENTE"
     assert invite.invited_auth_user_id == "auth-novo-usuario"
-    admin_client.invite_user_by_email.assert_called_once()
+    admin_client.generate_invite_token_hash.assert_called_once_with(
+        "novo@exemplo.com", "Novo Usuário", "https://app.exemplo.com/ativar-conta"
+    )
+    # O endpoint antigo (que deixa o Supabase enviar o template do painel)
+    # nunca e usado por este fluxo.
+    admin_client.invite_user_by_email.assert_not_called()
     db.commit.assert_called_once()
 
     added_types = [type(call.args[0]) for call in db.add.call_args_list]
     assert User in added_types
     assert Invite in added_types
+
+    # O link enviado aponta para a NOSSA pagina, com `type=invite`.
+    (message,) = sent
+    assert message.to == "novo@exemplo.com"
+    esperado = (
+        f"https://app.exemplo.com/ativar-conta?token_hash={INVITE_TOKEN_HASH}&type=invite"
+    )
+    assert esperado in message.text_body
+    assert "/auth/v1/verify" not in message.text_body
+
+
+def test_create_invite_nao_registra_o_token_em_auditoria_nem_em_log(monkeypatch, caplog):
+    """O token de uso unico so pode existir no corpo do e-mail: nunca em
+    `audit_logs`, nunca em log (nem em DEBUG), nunca no retorno."""
+    unit, db = _scene_para_convite_novo()
+    admin_client = MagicMock()
+    _stub_delivery(monkeypatch, admin_client)
+    service = InviteService(db, admin_client, settings=_make_settings())
+
+    with caplog.at_level(logging.DEBUG):
+        invite = service.create_invite(
+            invited_by_user_id=uuid.uuid4(),
+            email="novo@exemplo.com",
+            name="Novo Usuário",
+            intended_role_code="USER",
+            unit_ids=[unit.id],
+        )
+
+    assert INVITE_TOKEN_HASH not in caplog.text
+    assert "token_hash" not in caplog.text
+    audits = [
+        call.args[0] for call in db.add.call_args_list if isinstance(call.args[0], AuditLog)
+    ]
+    assert audits, "o convite precisa gerar evento de auditoria"
+    for audit in audits:
+        serializado = f"{audit.new_values} {audit.previous_values}"
+        assert INVITE_TOKEN_HASH not in serializado
+        assert "token_hash" not in serializado
+    assert INVITE_TOKEN_HASH not in repr(invite.__dict__)
+
+
+@pytest.mark.parametrize("status", ["disabled", "failed"])
+def test_create_invite_falha_se_o_e_mail_nao_foi_entregue(monkeypatch, status):
+    """Nunca reportar sucesso sem entrega: sem e-mail o convidado nao tem como
+    ativar a conta. Nada e criado localmente (sem commit)."""
+    unit, db = _scene_para_convite_novo()
+    admin_client = MagicMock()
+    _stub_delivery(monkeypatch, admin_client, status=status)
+    service = InviteService(db, admin_client, settings=_make_settings())
+
+    with pytest.raises(InviteServiceError) as exc:
+        service.create_invite(
+            invited_by_user_id=uuid.uuid4(),
+            email="novo@exemplo.com",
+            name="Novo Usuário",
+            intended_role_code="USER",
+            unit_ids=[unit.id],
+        )
+    assert str(exc.value) == "Não foi possível enviar o convite no momento."
+    db.commit.assert_not_called()
+
+
+def test_create_invite_com_e_mail_desligado_nao_cria_usuario_no_provedor(monkeypatch):
+    """Com `EMAIL_ENABLED=false` a falha e ANTES da rede: nao pode sobrar um
+    usuario criado no Supabase Auth sem convite nenhum."""
+    unit, db = _scene_para_convite_novo()
+    admin_client = MagicMock()
+    _stub_delivery(monkeypatch, admin_client)
+    settings = _make_settings()
+    settings.email_enabled = False
+    service = InviteService(db, admin_client, settings=settings)
+
+    with pytest.raises(InviteServiceError):
+        service.create_invite(
+            invited_by_user_id=uuid.uuid4(),
+            email="novo@exemplo.com",
+            name="Novo Usuário",
+            intended_role_code="USER",
+            unit_ids=[unit.id],
+        )
+    admin_client.generate_invite_token_hash.assert_not_called()
+    admin_client.invite_user_by_email.assert_not_called()
+    db.commit.assert_not_called()
+
+
+def test_create_invite_e_mail_ja_cadastrado_mantem_a_mensagem_antiga(monkeypatch):
+    """`generate_link` com `type=invite` falha para e-mail ja cadastrado, igual
+    ao `/auth/v1/invite`: a mensagem e o codigo vistos pelo ADM nao mudam."""
+    unit, db = _scene_para_convite_novo()
+    admin_client = MagicMock()
+    _stub_delivery(monkeypatch, admin_client)
+    admin_client.generate_invite_token_hash.side_effect = SupabaseAdminClientError(
+        "API Admin do Supabase respondeu com status HTTP 422 para POST "
+        "/auth/v1/admin/generate_link"
+    )
+    service = InviteService(db, admin_client, settings=_make_settings())
+
+    with pytest.raises(InviteServiceError) as exc:
+        service.create_invite(
+            invited_by_user_id=uuid.uuid4(),
+            email="novo@exemplo.com",
+            name="Novo Usuário",
+            intended_role_code="USER",
+            unit_ids=[unit.id],
+        )
+    assert str(exc.value) == "Não foi possível enviar o convite no momento."
+    db.commit.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

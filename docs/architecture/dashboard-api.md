@@ -11,7 +11,7 @@ endpoints de agregação abaixo vivem só na URL (sem migração). `GET /dashboa
 **Mapa deste documento (atualizado na Onda 5, 2026-10-27):** as seções "Política
 comum", "Filtros" e "Rotas" descrevem os endpoints de agregação ANTERIORES; "Painéis de
 Tecnologia" descreve `/dashboard/tecnologia/*` (vocabulário legado da 0015); as seções
-"Personalizar painéis" e "Dados dos 12 painéis" (Ondas 1-2) são o contrato VIGENTE do
+"Personalizar painéis" e "Dados dos painéis" (Ondas 1-2) são o contrato VIGENTE do
 dashboard de equipamentos. Regras de classificação, famílias e categorias:
 `docs/architecture/classificacao-patrimonial.md`. Limitações conhecidas: seção final
 "Limitações e lacunas conhecidas".
@@ -176,7 +176,7 @@ Rotas:
 Painéis de layout novos (`dashboard_layout`): `tech_summary`, `tech_category`,
 `tech_units`, `tech_status`, `tech_no_owner`, `tech_age` (ao fim da ordem padrão; 15 ids no
 total). O CHECK de tamanho de `dashboard_layout` (1024 bytes) comporta o pior caso (cerca de
-600 bytes): não foi alterado. **Substituído** pelo catálogo de 12 painéis (próxima seção):
+600 bytes): não foi alterado. **Substituído** pelo catálogo de 13 painéis (próxima seção):
 esses 15 ids só existem agora como entrada do mapa de migração.
 
 ## Personalizar painéis (`GET /dashboard/panels`, `PUT /dashboard/preferences`)
@@ -186,7 +186,7 @@ Substitui integralmente a personalização antiga de 15 ids em
 `PATCH /api/v1/me/preferences` só durante a transição; ver abaixo).
 
 **Catálogo e permissões vivem no BACKEND** (`app.services.dashboard_panels_service`):
-12 painéis, com rótulo, descrição, grupo, tamanhos admitidos (`P`/`M`/`G`),
+13 painéis, com rótulo, descrição, grupo, tamanhos admitidos (`P`/`M`/`G`),
 tamanho padrão e sinalização de exportação. O frontend nunca decide o que um
 perfil pode ver: ele pede o catálogo e desenha o que vier.
 
@@ -201,6 +201,7 @@ perfil pode ver: ele pede o catálogo e desenha o que vier.
 | `equipment_by_unit_table` | Equipamentos de TI por unidade | `tabela` | ADM/USER/RH | sim | M G | G |
 | `furniture_by_unit_table` | Mobiliário por unidade | `tabela` | ADM/USER/RH | sim | M G | G |
 | `equipment_by_unit_chart` | Equipamentos por unidade (barras agrupadas) | `grafico` | ADM/USER/RH | não | P M G | G |
+| `located_by_unit_chart` | Localização dos bens por unidade (barras SIM/NAO/DESCONHECIDO; clique lista os bens) | `grafico` | ADM/USER/RH | não | P M G | G |
 | `category_distribution` | Distribuição percentual por família/categoria | `distribuicao` | ADM/USER/RH | não | P M G | M |
 | `notebooks_without_docking` | Notebooks sem docking station, por unidade | `ranking` | ADM/USER | não | P M G | M |
 | `workstation_ratio` | Monitores por computador/notebook | `razao` | ADM/USER | não | P M G | P |
@@ -208,8 +209,14 @@ perfil pode ver: ele pede o catálogo e desenha o que vier.
 | `classification_overrides` | Últimas correções manuais de categoria | `lista` | ADM | não | M G | M |
 | `sync_status` | Última sincronização do Sheets e divergências | `status` | ADM | não | P M G | P |
 
-Total por perfil: **ADM 12, USER 9, RH 7**. Papel desconhecido/ausente -> nenhum
+Total por perfil: **ADM 13, USER 10, RH 8** (antes 12/9/7; Onda A acrescentou `located_by_unit_chart`, logo após `equipment_by_unit_chart`). Papel desconhecido/ausente -> nenhum
 painel (negar por padrão).
+
+**Histórico x catálogo vigente.** A migração `0017_dashboard_panel_prefs` (já aplicada,
+imutável) traz um instantâneo do catálogo de **12 painéis**, sem `located_by_unit_chart`; isso
+continua correto como histórico e `test_db_0017_mapa_espelha_o_servico` compara o mapa da 0017
+com o catálogo menos esse painel. O catálogo vigente (13) vive só em `PANEL_CATALOG`. O mapa
+dos 15 ids antigos (abaixo) também não muda: nenhum id antigo aponta para o painel novo.
 
 **Tela "Personalizar painéis"** (frontend, apresentação apenas):
 `frontend/src/components/features/dashboard/dashboard-layout-dialog.tsx`
@@ -277,7 +284,7 @@ cliente (o alvo é sempre o usuário do JWT; tentativa -> 400 + evento
 {"version": 3, "restore_default": true}
 ```
 
-Regras de `panels`: 1 a 12 itens, sem repetição; `id` da allowlist do catálogo
+Regras de `panels`: 1 a 13 itens (`MAX_PANELS = len(PANEL_CATALOG)`; o limite acompanha o catálogo), sem repetição; `id` da allowlist do catálogo
 (ids antigos como `kpis`/`tech_units` -> 400); `visible` booleano estrito;
 `size` na allowlist global **e** nos tamanhos admitidos do painel; ao menos um
 item visível. Painéis omitidos entram ao fim, visíveis, no tamanho padrão.
@@ -323,7 +330,7 @@ continua aceito em `PATCH /api/v1/me/preferences` (junto com densidade,
 escala e `dashboard_charts`) durante a transição — a tela nova deve usar
 apenas as rotas acima.
 
-## Dados dos 12 painéis, fila de revisão e override (ONDA 2)
+## Dados dos painéis, fila de revisão e override (ONDA 2)
 
 Código: `app/api/v1/dashboard_equipment.py` (rotas), `app/services/dashboard_equipment_service.py`
 (painéis), `app/services/dashboard_classification_service.py` (fila, override, exportações).
@@ -335,6 +342,7 @@ sobre `equipment_category`; a família efetiva é derivada da categoria.
 | Método | Rota | Acesso | Resposta |
 |---|---|---|---|
 | GET | `/dashboard/panels/<panel_id>/data` | `require_auth -> require_aal2_for_adm -> reports.read` | `{panel_id, tipo, dados, filtros_aplicados}` |
+| GET | `/dashboard/panels/<panel_id>/records` | idem (`reports.read`); só `located_by_unit_chart` | `{items,total,page,page_size,pages}` |
 | GET | `/dashboard/panels/<panel_id>/export` | idem, `exports.create` | CSV/XLSX (só `equipment_by_unit_table`, `furniture_by_unit_table`) |
 | GET | `/dashboard/classificacao/revisao` | `require_auth -> require_role(ADM) -> require_aal2 -> reports.read` | fila paginada |
 | GET | `/dashboard/classificacao/revisao/export` | idem, `exports.create` | CSV/XLSX da fila |
@@ -384,6 +392,84 @@ Exportações: auditadas (`DASHBOARD_EQUIPMENT_EXPORTED`, `DASHBOARD_REVIEW_QUEU
 célula via `csv_safety`. Limites: leituras `LIST_LIMIT` (1200/h); exportações
 `TECH_EXPORT_LIMIT` (30/h).
 
+## Painel `located_by_unit_chart` e seus registros (ONDA A)
+
+Código: `dashboard_equipment_service.located_by_unit_chart` / `located_unit_ranking` (dados) e
+`dashboard_located_service.py` (registros); rota em `dashboard_equipment.py`; query em
+`LocatedRecordsQuery` (`dashboard_schemas.py`).
+
+**Dados** (`GET /dashboard/panels/located_by_unit_chart/data`, filtros `unit_id|familia|categoria`):
+`tipo=grafico`, `dados = {series:[{id:SIM,label:"Localizados"},{id:NAO,label:"Não localizados"},
+{id:DESCONHECIDO,label:"Não informado"}], unidades:[{unidade, unit_id, total, valores:{SIM,NAO,DESCONHECIDO}}],
+total}`. Top 15 unidades por total (desempate por rótulo e `unit_id`) + "Outras" (`unit_id: null`)
+com a soma exata do resto; `total` fecha com o acervo ativo do escopo. Agrupa por `unit_id`
+(unidades de mesmo rótulo não são fundidas). Situação fora de SIM/NAO conta em `DESCONHECIDO`.
+Catálogo (`PANEL_CATALOG`): rótulo "Localização dos bens por unidade (gráfico)", grupo
+`graficos`, perfis ADM/USER/RH, tamanhos P/M/G, padrão G, `exportable=false` (não há rota de
+exportação para ele). Posição no layout padrão: 7ª, logo após `equipment_by_unit_chart` (6ª) e
+antes de `category_distribution`. Sem migração de banco.
+
+**Preferências (comportamento já implementado, regra de painéis ausentes):** quem já salvou
+preferências NÃO as perde; o painel novo entra ao FIM da lista efetiva, visível e no tamanho
+padrão (G). Quem nunca personalizou (sem linha, `version = 0`) vê o layout padrão do perfil, com
+o painel logo após `equipment_by_unit_chart`. Ninguém recebe o painel se o perfil não o permite
+(todos os três perfis o permitem).
+
+**Registros** (`GET /api/v1/dashboard/panels/located_by_unit_chart/records`):
+`require_auth -> require_aal2_for_adm -> require_permission("reports.read") -> rate_limit`.
+
+| Query | Regra |
+|---|---|
+| `unit_id` | OBRIGATÓRIO: UUID da unidade OU o literal `outras` (todas as unidades fora do top 15, reconstruído com os mesmos `familia`/`categoria`) |
+| `located` | opcional `SIM|NAO|DESCONHECIDO` (sem ele, as três situações) |
+| `familia`, `categoria` | opcionais, mesmas allowlists do painel (devem ser os do gráfico clicado) |
+| `page`, `page_size` | `page>=1`; `page_size` 50 (padrão), 100 ou 200 |
+| `sort` | `patrimony_number` (padrão), `description`, `located` e as variantes `-` |
+
+Resposta 200 (`no-store`): `{items:[{id, patrimony_number, description, unidade, sala, located,
+equipment_category (efetiva), classification_confidence}], total, page, page_size, pages}`; `sala`
+é o rótulo (ou `null`). Sem responsável, e-mail, telefone, CPF ou notas, para nenhum perfil.
+Erros: 400 `validation_error` (parâmetro desconhecido/repetido/inválido, sem eco do valor; campos
+privilegiados geram também o evento de mass assignment); 401/403 (token/AAL2/permissão); 404
+`not_found` para painel inexistente, malformado, proibido ao perfil OU sem registros (qualquer
+outro id de painel), idêntico entre si e com evento `ACCESS_DENIED`, avaliado ANTES da query.
+`unit_id` UUID alheio, inexistente ou sem bens devolve a MESMA página vazia (200, `total: 0`).
+Só bens ativos e no escopo de unidade. Leituras bem-sucedidas não são auditadas (só o acesso
+negado, pelo pipeline). `outras` com 15 unidades ou menos no escopo devolve página vazia (não há
+resto). A lista traz `classification_confidence`, mas a interface atual não a exibe.
+
+**Frontend** (`frontend/src/lib/dashboard-located-api.ts`,
+`components/features/dashboard/located-chart-view.tsx` e `located-records-sheet.tsx`;
+apresentação apenas, nada é somado nem estimado no cliente):
+- Clique numa barra (unidade + série) abre um painel lateral (`Sheet`) com a lista daquela
+  unidade e situação. Caminho por teclado: a tabela "Bens por unidade e situação" (cartões
+  abaixo de `lg`) tem um botão por contagem (foco visível, Enter/Espaço); o botão "Total" abre
+  todas as situações. Contagem 0 ou barra sem `unit_id` informado: só o número, sem botão.
+- Barra "Outras" (`unit_id: null` no dado) -> `unit_id=outras`; o cliente repassa só `familia`
+  e `categoria` ativos do painel e NUNCA o `unit_id` do filtro do painel.
+- O seletor "Situação" tem "Todas as situações" (o parâmetro `located` deixa de ser enviado) e
+  as três séries com os rótulos vindos do backend; "Ordenar por" cobre as 6 ordens da allowlist.
+  Paginação 50/100/200 (padrão 50); a página volta a 1 ao mudar situação, ordem ou tamanho.
+- Resposta fora do formato é rejeitada (`ContractError`, mensagem fixa e "Tentar novamente");
+  404 mostra "Esta lista não está disponível para o seu perfil." sem nova tentativa.
+- A lista NÃO tem link ao detalhe do bem: não existe rota de detalhe de patrimônio para
+  USER/RH (`/patrimonios` é uma lista). Ideia futura/pendência, não implementada.
+- Foco: antes de abrir, o foco vai ao botão equivalente da tabela; ao fechar (Esc/Fechar) volta
+  a ele.
+
+**Acessibilidade e design:** as 3 séries combinam cor e textura, nunca só cor (`SERIES_STYLES`):
+`SIM` verde sólido, `NAO` laranja listrado, `DESCONHECIDO` cinza pontilhado (tokens `green`,
+`orange` e `granite` de `chart-theme`). Há legenda, a tabela de dados visível e `caption`
+`sr-only`; cada botão tem sufixo `sr-only` ("bens ... em <unidade>: abrir lista"). O gráfico
+Nivo roda com `animate={false}` (sem animação de barras, logo nada a reduzir em
+`prefers-reduced-motion`); a entrada do painel usa o FadeIn padrão do dashboard. Testes:
+`backend/tests/test_dashboard_located.py` e `frontend/e2e/dashboard-located-functional.spec.ts`
+(inclui axe sobre o painel).
+
+**Deploy:** exige rebuild de backend e frontend, sem migração, sem DDL e sem backfill:
+`docker compose build backend frontend && docker compose up -d backend frontend`. Nada disto
+foi implantado até 2026-10-29.
+
 ## Limitações e lacunas conhecidas (Onda 5, 2026-10-27)
 
 1. **`notebooks_without_docking` é ESTIMATIVA.** Não existe vínculo notebook x docking no
@@ -407,7 +493,7 @@ célula via `csv_safety`. Limites: leituras `LIST_LIMIT` (1200/h); exportações
    fluxo auditado) ou outro override para a categoria desejada. Pendência de produto.
 4. `PUT /dashboard/preferences` usa a política READ (`reports.read`); ver a seção da rota.
 5. Os endpoints `/dashboard/tecnologia/*` e o vocabulário legado da 0015 continuam no código
-   e nenhum dos 12 painéis do catálogo os usa (o frontend ainda contém
+   e nenhum dos 13 painéis do catálogo os usa (o frontend ainda contém
    `dashboard-tech-panels.tsx`; se ele continua montado na tela não foi verificado nesta
    rodada — pendência de limpeza); as colunas `equipment_*` (0018) são
    independentes de `asset_category`/`tech_type` (0015).

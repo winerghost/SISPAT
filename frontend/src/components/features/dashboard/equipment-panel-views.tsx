@@ -8,6 +8,9 @@ import { AlertTriangle, ArrowRight } from "lucide-react";
 import { StatCard } from "@/components/dashboard/stat-card";
 import type { DashboardStat, MultiSeriesChartData } from "@/components/dashboard/types";
 import { LoadingSkeleton } from "@/components/ui/loading-skeleton";
+import { LOCATED_PANEL_ID } from "@/lib/dashboard-located-api";
+import { NO_PANEL_FILTERS, type PanelFilters } from "@/lib/dashboard-equipment-api";
+import { LocatedChartView } from "./located-chart-view";
 import type {
   CardsData,
   CategoryShare,
@@ -457,7 +460,20 @@ export function isPanelEmpty(data: PanelData): boolean {
   }
 }
 
-export function PanelView({ data, label }: { data: PanelData; label: string }) {
+export function PanelView({
+  data,
+  label,
+  panelId,
+  filters = NO_PANEL_FILTERS,
+}: {
+  data: PanelData;
+  label: string;
+  panelId?: string;
+  filters?: PanelFilters;
+}) {
+  if (data.tipo === "grafico" && panelId === LOCATED_PANEL_ID) {
+    return <LocatedChartView dados={data.dados} label={label} filters={filters} />;
+  }
   switch (data.tipo) {
     case "cartoes":
       return <CardsView dados={data.dados} label={label} />;

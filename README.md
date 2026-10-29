@@ -198,8 +198,9 @@ vhost).
 
 ### Catálogo de painéis do dashboard por perfil (2026-10-27)
 
-- **Catálogo novo de 12 painéis** (`app/services/dashboard_panels_service.py`),
-  com permissão por perfil **no backend** (ADM 12, USER 9, RH 7), rótulo,
+- **Catálogo novo de painéis** (`app/services/dashboard_panels_service.py`; eram 12
+  nesta data e hoje são 13, ver a seção da Onda D abaixo),
+  com permissão por perfil **no backend** (na época ADM 12, USER 9, RH 7), rótulo,
   tamanhos admitidos `P`/`M`/`G` e tamanho padrão. Substitui a allowlist
   antiga de 15 ids de `user_preferences.dashboard_layout`.
 - Rotas: `GET /api/v1/dashboard/panels` (catálogo do perfil + layout padrão +
@@ -230,7 +231,7 @@ vhost).
   ADM prevalece). Regras, listas de contexto e **como adicionar uma regra nova**
   (onde, ordem de prioridade, teste, medir o impacto com `flask classify-equipment`
   em dry-run): `docs/architecture/classificacao-patrimonial.md`.
-- **12 painéis** com permissão por perfil no backend (ADM 12, USER 9, RH 7), tela
+- **13 painéis** com permissão por perfil no backend (ADM 13, USER 10, RH 8), tela
   "Personalizar painéis" e dados em `/api/v1/dashboard/panels/<id>/data`; fila de
   revisão `/dashboard/classificacao` e `POST /assets/<id>/category-override` (ADM +
   AAL2). Contrato, mapa de migração dos 15 painéis antigos e limitações
@@ -253,6 +254,23 @@ vhost).
   PostgreSQL nem em Python 3.11+**.
 - Rebuild: backend + frontend (`docker compose build backend frontend && docker
   compose up -d backend frontend`), somente com autorização de implantação.
+
+### Painel de localização dos bens por unidade (Onda D, 2026-10-29)
+
+- **13º painel do catálogo**, `located_by_unit_chart` (gráfico de barras agrupadas
+  localizados / não localizados / não informado por unidade, top 15 + "Outras" com soma
+  exata). Catálogo agora: **ADM 13, USER 10, RH 8**. Posição padrão: logo após
+  `equipment_by_unit_chart`. Quem já salvou preferências o recebe ao fim da lista,
+  visível, tamanho G.
+- O clique numa barra (ou nos botões da tabela de dados, para teclado) abre a lista de bens
+  via `GET /api/v1/dashboard/panels/located_by_unit_chart/records` (somente leitura, sem
+  dado pessoal, escopo de unidade, paginação 50/100/200). Não há link ao detalhe do bem
+  (não existe rota de detalhe de patrimônio; ideia futura).
+- O instantâneo de 12 painéis da migração 0017 e o mapa dos 15 ids antigos continuam como
+  histórico. Contrato completo: `docs/architecture/dashboard-api.md`.
+- **Deploy:** sem migração, sem DDL, sem backfill. Rebuild de backend e frontend
+  (`docker compose build backend frontend && docker compose up -d backend frontend`),
+  somente com autorização. **Nada foi implantado.**
 
 ### Painéis de Tecnologia no dashboard (2026-10-22)
 
@@ -414,7 +432,7 @@ Movimentações (`/api/v1/movements`: solicitar, aprovar/rejeitar só ADM+AAL2, 
 
 APIs administrativas de leitura (ADM + AAL2, sem escrita): `GET /api/v1/admin/audit-logs[/<id>]` (`audit.read`; projeção em allowlist, sem PII/segredos, escopo de unidade, janela máx. 90 dias, grava `AUDIT_VIEWED`), `GET /api/v1/admin/roles` e `/permissions` (`roles.manage`), `GET /api/v1/admin/unit-access` (`users.manage`): [`docs/architecture/admin-read-api.md`](./docs/architecture/admin-read-api.md).
 
-Relatórios e exportações (`GET /api/v1/reports` catálogo; `GET /api/v1/reports/<assets|movements|inventory-items>/export?format=csv|xlsx`, permissões `reports.read`/`exports.create`, escopo de unidade, bens excluídos fora, máx. 10 000 linhas, células à prova de formula injection e número patrimonial sempre texto, auditoria `REPORT_EXPORTED`; XLSX sem dependência nova): [`docs/architecture/reports-api.md`](./docs/architecture/reports-api.md).
+Relatórios e exportações (`GET /api/v1/reports` catálogo; `GET /api/v1/reports/<assets|movements|inventory-items>/export?format=csv|xlsx`, permissões `reports.read`/`exports.create`, escopo de unidade, bens excluídos fora, máx. 10 000 linhas, células à prova de formula injection e número patrimonial sempre texto, auditoria `REPORT_EXPORTED`; XLSX sem dependência nova; o catálogo declara os filtros de lookup `unit`/`inventory`/`room`/`person` -- a tela monta `<select>` com as listas já limitadas ao escopo -- e as opções de `bond_status` saem dos valores distintos existentes no escopo do ator mais `__none__` para "sem vínculo", nunca de uma lista fixa): [`docs/architecture/reports-api.md`](./docs/architecture/reports-api.md).
 
 Inventários (`/api/v1/inventories`: campanhas de conferência por unidade; criar/iniciar/encerrar/cancelar só ADM+AAL2, conferir bens ADM/USER, resumo calculado no servidor; encerramento imutável; não altera `assets.located`) e locais (`GET /api/v1/locations`, somente leitura): [`docs/architecture/inventories-api.md`](./docs/architecture/inventories-api.md).
 
@@ -503,7 +521,7 @@ A IA é **consultiva e somente leitura**: nunca altera dados nem executa ações
 1. **Fase 1 (concluída):** banco de dados, modelagem e permissionamento.
 2. **Em andamento:** importação do Google Sheets, MFA/convite, UX e o módulo de
    Configurações (IA, Aparência, Gestão de Usuários) — ver `CLAUDE.md` (mantido localmente).
-   Dashboard de equipamentos (classificação patrimonial, 12 painéis, fila de revisão):
+   Dashboard de equipamentos (classificação patrimonial, 13 painéis, fila de revisão):
    Ondas 1-5 de 2026-10-27, com backfill e implantação pendentes (seção "Classificação
    patrimonial e painéis do dashboard (Onda 5)").
    Etapas 1 (IA), 2 (usuários) e 3 (Aparência: `/me/preferences`, cookie `sispat-ui`,

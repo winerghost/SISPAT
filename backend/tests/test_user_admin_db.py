@@ -67,6 +67,7 @@ ADMIN_PERMISSIONS = (
     "users.reset_password",
     "users.reset_mfa",
     "users.avatar.manage",
+    "users.delete",
     "audit.read",
 )
 

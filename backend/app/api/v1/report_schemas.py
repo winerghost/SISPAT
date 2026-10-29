@@ -5,13 +5,13 @@ desconhecido -> 400 auditado; nomes privilegiados como `role`/`deleted_at`
 geram `PRIVILEGE_ESCALATION_ATTEMPT`), parâmetro repetido -> 400 e nenhum valor
 enviado é ecoado. Filtros e ordenação são ALLOWLISTS fechadas.
 
-Identificadores de unidade/inventário chegam como TEXTO: malformado, inexistente
-ou alheio têm a MESMA resposta (404) no serviço, sem pista de formato.
+Identificadores de unidade, inventário, SALA e RESPONSÁVEL chegam como TEXTO:
+malformado, inexistente ou alheio têm a MESMA resposta (404) no serviço, sem
+pista de formato (o `<select>` da tela é conveniência, não validação).
 """
 from __future__ import annotations
 
 import re
-import uuid
 from datetime import date
 from typing import Literal, get_args
 
@@ -67,8 +67,10 @@ class AssetReportQuery(_ReportQuery):
     q: str | None = Field(default=None, max_length=100)
     unit_id: str | None = Field(default=None, min_length=1, max_length=64)
     owner_unit_id: str | None = Field(default=None, min_length=1, max_length=64)
-    room_id: uuid.UUID | None = None
-    responsible_person_id: uuid.UUID | None = None
+    # Sala/responsável chegam como TEXTO (como unidade/inventário): malformado,
+    # inexistente ou de unidade alheia têm a MESMA 404 no serviço, sem oráculo.
+    room_id: str | None = Field(default=None, min_length=1, max_length=64)
+    responsible_person_id: str | None = Field(default=None, min_length=1, max_length=64)
     located: LocatedStatus | None = None
     bond_status: str | None = Field(default=None, min_length=1, max_length=BOND_STATUS_MAX)
     include_deleted: Literal["true", "false"] = "false"

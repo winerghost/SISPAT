@@ -21,7 +21,13 @@ import { UserAccessForm } from "./user-access-form";
 import { UserAccountActions } from "./user-account-actions";
 import { userAuditQueryKey, UserAuditList } from "./user-audit-list";
 import { UserAvatar, userAvatarQueryKey } from "./user-avatar";
-import { CONFLICT_MESSAGE, isNotFound, userErrorMessage } from "./user-labels";
+import {
+  CONFLICT_MESSAGE,
+  isNotFound,
+  userDisplayEmail,
+  userDisplayName,
+  userErrorMessage,
+} from "./user-labels";
 
 // =============================================================================
 // Painel de detalhe do usuário (Sheet lateral) com quatro abas:
@@ -86,6 +92,33 @@ export function UserDetailSheet({ user: listUser, open, onOpenChange, currentUse
     invalidateList();
   }
 
+  /**
+   * Revogação total (`POST /users/<id>/revoke`): a resposta não traz o resumo,
+   * então recarregamos o detalhe (perfil/unidades/situação mudaram) e a lista.
+   */
+  function handleRevoked() {
+    setConflict(false);
+    void queryClient.invalidateQueries({ queryKey: userDetailQueryKey(userId) });
+    void queryClient.invalidateQueries({ queryKey: userAuditQueryKey(userId) });
+    invalidateList();
+  }
+
+  /**
+   * Exclusão lógica (`POST /users/<id>/delete`): o usuário sai da listagem,
+   * então o painel fecha e todo cache dele é descartado — inclusive a URL
+   * assinada do avatar. O resumo anonimizado devolvido pelo backend NÃO é
+   * guardado: não há mais nada para mostrar dessa pessoa aqui.
+   */
+  function handleDeleted() {
+    setConflict(false);
+    queryClient.removeQueries({ queryKey: userDetailQueryKey(userId) });
+    queryClient.removeQueries({ queryKey: userAvatarQueryKey(userId) });
+    queryClient.removeQueries({ queryKey: userAuditQueryKey(userId) });
+    invalidateList();
+    onOpenChange(false);
+    setSection("perfil");
+  }
+
   function handleAvatarChanged(hasAvatar: boolean) {
     queryClient.setQueryData<UserSummary>(userDetailQueryKey(userId), (prev) =>
       prev ? { ...prev, has_avatar: hasAvatar } : prev,
@@ -106,8 +139,8 @@ export function UserDetailSheet({ user: listUser, open, onOpenChange, currentUse
           setSection("perfil");
         }
       }}
-      title={user?.name ?? "Usuário"}
-      description={user?.email}
+      title={user ? userDisplayName(user) : "Usuário"}
+      description={user ? (userDisplayEmail(user) ?? undefined) : undefined}
     >
       {detail.isError && isNotFound(detail.error) ? (
         <div className="flex flex-col items-start gap-3">
@@ -126,7 +159,7 @@ export function UserDetailSheet({ user: listUser, open, onOpenChange, currentUse
       ) : user ? (
         <>
           <div className="flex flex-wrap items-center gap-3">
-            <UserAvatar userId={user.id} name={user.name} hasAvatar={user.has_avatar} size="md" />
+            <UserAvatar userId={user.id} name={userDisplayName(user)} hasAvatar={user.has_avatar} size="md" />
             <div className="flex flex-wrap gap-2">
               <Badge variant="outline">{user.role ?? "Sem perfil"}</Badge>
               <Badge variant={user.active ? "success" : "default"}>{user.active ? "Ativo" : "Inativo"}</Badge>
@@ -163,14 +196,16 @@ export function UserDetailSheet({ user: listUser, open, onOpenChange, currentUse
                 isSelf={isSelf}
                 onUpdated={handleUpdated}
                 onConflict={handleConflict}
+                onRevoked={handleRevoked}
+                onDeleted={handleDeleted}
               />
             ) : null}
             {section === "foto" ? (
               <AvatarManager
                 key={user.id}
-                name={user.name}
+                name={userDisplayName(user)}
                 hasAvatar={user.has_avatar}
-                subject={`a foto de ${user.name}`}
+                subject={`a foto de ${userDisplayName(user)}`}
                 urlQueryKey={userAvatarQueryKey(user.id)}
                 fetchUrl={() => getUserAvatarUrl(user.id)}
                 upload={(file) => uploadUserAvatar(user.id, file)}

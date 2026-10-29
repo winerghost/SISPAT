@@ -14,6 +14,7 @@ import requests
 
 from app.config.settings import Settings
 from app.integrations.supabase_admin_client import (
+    GeneratedInvite,
     InviteRedirectNotAllowedError,
     SupabaseAdminClient,
     SupabaseAdminClientError,
@@ -163,3 +164,178 @@ def test_sem_service_role_key_configurada_levanta_erro_sem_chamar_rede() -> None
             client.deactivate_user("auth-user-123")
 
     mock_request.assert_not_called()
+
+
+# --- generate_invite_token_hash: convite sem e-mail do Supabase --------------
+# CONVITE-LINK (docs/deploy/PLANO_ACAO_USUARIOS_CONVITE_2026-10-28.md §1): o
+# convite deixou de sair pelo template do painel, cujo `{{ .ConfirmationURL }}`
+# (`/auth/v1/verify`, uso unico) e consumido por scanner de antivirus de
+# e-mail segundos apos o envio -- gastando o token e recebendo, no fluxo
+# implicito, access/refresh token validos da conta.
+
+INVITE_TOKEN = "pkce_" + "d" * 40
+
+
+def _generate_link_payload(**overrides: object) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "id": "auth-user-convidado",
+        "email": "novo@exemplo.com",
+        "hashed_token": INVITE_TOKEN,
+        # Os dois campos abaixo sao SEGREDO e precisam ser descartados.
+        "action_link": "https://proj.supabase.co/auth/v1/verify?token=SEGREDO",
+        "email_otp": "123456",
+    }
+    payload.update(overrides)
+    return payload
+
+
+def test_generate_invite_devolve_id_e_hashed_token_sem_enviar_e_mail() -> None:
+    client = SupabaseAdminClient(settings=_make_settings())
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = _generate_link_payload()
+
+    with patch("requests.Session.request", return_value=mock_response) as mock_request:
+        result = client.generate_invite_token_hash(
+            email="novo@exemplo.com", name="Novo Usuário", redirect_to=ALLOWED_REDIRECT
+        )
+
+    assert result == GeneratedInvite(
+        auth_user_id="auth-user-convidado", token_hash=INVITE_TOKEN
+    )
+    method, url = mock_request.call_args.args
+    assert method == "POST"
+    assert url == "https://proj.supabase.co/auth/v1/admin/generate_link"
+    kwargs = mock_request.call_args.kwargs
+    assert kwargs["json"] == {
+        "type": "invite",
+        "email": "novo@exemplo.com",
+        "data": {"name": "Novo Usuário"},
+        "redirect_to": ALLOWED_REDIRECT,
+    }
+    # Nunca seguir redirect: o header `apikey` carrega a Service Role Key.
+    assert kwargs["allow_redirects"] is False
+    # O endpoint antigo (que dispara o e-mail do painel) nao e chamado.
+    assert "/auth/v1/invite" not in url
+
+
+def test_generate_invite_nao_expoe_o_token_no_repr() -> None:
+    """Se o objeto cair num log, num `assert` ou numa excecao, o segredo de
+    uso unico nao pode vazar."""
+    texto = repr(GeneratedInvite(auth_user_id="auth-1", token_hash=INVITE_TOKEN))
+    assert INVITE_TOKEN not in texto
+    assert "auth-1" in texto
+
+
+def test_generate_invite_redirect_fora_da_allow_list_nunca_chama_a_api() -> None:
+    client = SupabaseAdminClient(settings=_make_settings())
+
+    with patch("requests.Session.request") as mock_request:
+        with pytest.raises(InviteRedirectNotAllowedError):
+            client.generate_invite_token_hash(
+                email="novo@exemplo.com",
+                name="Novo Usuário",
+                redirect_to="https://site-nao-autorizado.com/ativar-conta",
+            )
+
+    mock_request.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "email",
+    ["sem-arroba", "a@b c", "", None],
+)
+def test_generate_invite_e_mail_malformado_nunca_chama_a_api(email: object) -> None:
+    client = SupabaseAdminClient(settings=_make_settings())
+
+    with patch("requests.Session.request") as mock_request:
+        with pytest.raises(SupabaseAdminClientError):
+            client.generate_invite_token_hash(
+                email=email,  # type: ignore[arg-type]
+                name="Novo Usuário",
+                redirect_to=ALLOWED_REDIRECT,
+            )
+
+    mock_request.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"hashed_token": None},
+        {"hashed_token": ""},
+        {"hashed_token": "curto"},
+        {"hashed_token": "a" * 40 + " &type=x"},
+        {"hashed_token": "<html>erro</html>"},
+    ],
+)
+def test_generate_invite_recusa_hashed_token_malformado(overrides: dict) -> None:
+    """Lixo (HTML de proxy, valor com separador de query) nunca pode virar o
+    `token_hash` de um link enviado por e-mail."""
+    client = SupabaseAdminClient(settings=_make_settings())
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = _generate_link_payload(**overrides)
+
+    with patch("requests.Session.request", return_value=mock_response):
+        with pytest.raises(SupabaseAdminClientError):
+            client.generate_invite_token_hash(
+                email="novo@exemplo.com", name="Novo Usuário", redirect_to=ALLOWED_REDIRECT
+            )
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [{"id": None}, {"id": ""}, {"id": "../outro-usuario"}, {"id": 123}],
+)
+def test_generate_invite_recusa_id_ausente_ou_malformado(overrides: dict) -> None:
+    """O `id` vira `users.auth_user_id` e e reusado em `/admin/users/{id}`
+    (ban, MFA): precisa ter formato de segmento de path seguro (CWE-22)."""
+    client = SupabaseAdminClient(settings=_make_settings())
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = _generate_link_payload(**overrides)
+
+    with patch("requests.Session.request", return_value=mock_response):
+        with pytest.raises(SupabaseAdminClientError):
+            client.generate_invite_token_hash(
+                email="novo@exemplo.com", name="Novo Usuário", redirect_to=ALLOWED_REDIRECT
+            )
+
+
+def test_generate_invite_nunca_loga_token_action_link_nem_email_otp(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    client = SupabaseAdminClient(settings=_make_settings())
+
+    ok = MagicMock()
+    ok.status_code = 200
+    ok.json.return_value = _generate_link_payload()
+
+    sem_token = MagicMock()
+    sem_token.status_code = 200
+    sem_token.json.return_value = _generate_link_payload(hashed_token="curto")
+
+    with caplog.at_level(logging.DEBUG, logger="app.integrations.supabase_admin_client"):
+        with patch("requests.Session.request", return_value=ok):
+            client.generate_invite_token_hash(
+                email="novo@exemplo.com", name="Novo Usuário", redirect_to=ALLOWED_REDIRECT
+            )
+        with patch("requests.Session.request", return_value=sem_token):
+            with pytest.raises(SupabaseAdminClientError) as exc:
+                client.generate_invite_token_hash(
+                    email="novo@exemplo.com",
+                    name="Novo Usuário",
+                    redirect_to=ALLOWED_REDIRECT,
+                )
+
+    assert "SEGREDO" not in str(exc.value) and INVITE_TOKEN not in str(exc.value)
+    for record in caplog.records:
+        message = record.getMessage()
+        assert INVITE_TOKEN not in message
+        assert "SEGREDO" not in message
+        assert "123456" not in message
+        assert SERVICE_ROLE_KEY_SENTINEL not in message

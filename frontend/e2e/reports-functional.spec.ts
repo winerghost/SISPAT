@@ -1,7 +1,8 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
 
-import { installMocks, seedSession, waitForHydration, type MockOptions, type MockState } from "./support/mocks";
+import { PERSON_IDS, ROOM_IDS } from "./support/catalog-mocks";
+import { installMocks, seedSession, UNITS, waitForHydration, type MockOptions, type MockState } from "./support/mocks";
 
 // =============================================================================
 // /relatorios — relatórios e exportações (CSV/XLSX).
@@ -60,6 +61,8 @@ async function setCol(page: Page, name: string, on: boolean) {
 }
 const columnsOf = (call: string) => new URL(call.replace("GET ", ""), "http://x").searchParams.get("columns");
 const filters = (page: Page) => page.getByRole("group", { name: "Filtros" });
+const lookupField = (page: Page, label: string) => filters(page).getByLabel(label, { exact: true });
+const optionTexts = (page: Page, label: string) => lookupField(page, label).locator("option").allInnerTexts();
 const form = (page: Page) => page.getByTestId("report-form");
 const outcome = (page: Page) => page.getByTestId("report-outcome");
 const exportButton = (page: Page, format = "CSV") => page.getByRole("button", { name: new RegExp(`^(Exportar|Gerando) ${format}`) });
@@ -71,7 +74,15 @@ test.describe("catálogo e formulário", () => {
     const group = page.getByRole("radiogroup", { name: "Escolha o relatório" });
     await expect(group.getByRole("radio")).toHaveCount(3);
     await expect(group.getByRole("radio", { name: /Patrimônios/ })).toBeChecked();
-    for (const label of ["Busca (número ou descrição)", "Unidade", "Unidade proprietária", "Localizado", "Vínculo"]) {
+    for (const label of [
+      "Busca (número ou descrição)",
+      "Unidade",
+      "Unidade proprietária",
+      "Sala",
+      "Responsável",
+      "Localizado",
+      "Vínculo",
+    ]) {
       await expect(filters(page).getByLabel(label, { exact: true })).toBeVisible();
     }
     await expect(form(page).getByLabel("Ordenar por")).toHaveValue("patrimony_number");
@@ -338,11 +349,13 @@ test.describe("filtros dos relatórios", () => {
 
   test("'Limpar filtros' também remove mensagens de validação", async ({ page }) => {
     const state = await open(page);
-    await filters(page).getByLabel("Sala (identificador)").fill("nao-e-uuid");
+    await pickReport(page, "movements");
+    await filters(page).getByLabel("Solicitada a partir de").fill("2026-05-10");
+    await filters(page).getByLabel("Solicitada até").fill("2026-05-01");
     await exportButton(page).click();
-    await expect(form(page).getByText("Informe um identificador (UUID) válido.")).toBeVisible();
+    await expect(form(page).getByText("A data final não pode ser anterior à inicial.")).toBeVisible();
     await form(page).getByRole("button", { name: "Limpar filtros" }).click();
-    await expect(form(page).getByText("Informe um identificador (UUID) válido.")).toHaveCount(0);
+    await expect(form(page).getByText("A data final não pode ser anterior à inicial.")).toHaveCount(0);
     expect(exportCalls(state)).toEqual([]);
   });
 
@@ -358,6 +371,200 @@ test.describe("filtros dos relatórios", () => {
   });
 });
 
+test.describe("filtros de sala, responsável e vínculo", () => {
+  // Contrato: o catálogo declara `room`/`person` (listas carregadas de
+  // `/v1/rooms` e `/v1/responsible-people`) e manda as opções de `bond_status`
+  // (valores existentes no escopo + a sentinela `__none__`). O escopo de
+  // unidade e o que entra em cada lista são decididos pelo BACKEND.
+  test("os três filtros são selects alimentados pelo backend, sem digitar UUID", async ({ page }) => {
+    const state = await open(page);
+    for (const label of ["Sala", "Responsável", "Vínculo"]) {
+      await expect(lookupField(page, label)).toBeEnabled();
+      expect(await lookupField(page, label).evaluate((el) => el.tagName)).toBe("SELECT");
+    }
+    const salas = await optionTexts(page, "Sala");
+    const pessoas = await optionTexts(page, "Responsável");
+    expect(salas[0]).toBe("Todas as salas");
+    expect(pessoas[0]).toBe("Todos os responsáveis");
+    expect(salas).toHaveLength(5); // 4 salas sintéticas (inclusive a inativa) + "Todas as salas"
+    expect(pessoas).toHaveLength(5);
+    expect(salas.slice(1, 3)).toEqual(["Almoxarifado Sintético", "Auditório Sintético"]);
+    // Nome vindo da planilha é TEXTO: o marcador XSS não executa nem vira HTML.
+    expect(salas.some((text) => text.includes('<img src=x onerror="window.__xss=1">'))).toBe(true);
+    expect(await page.evaluate(() => (window as unknown as { __xss?: number }).__xss)).toBeUndefined();
+    // As listas usam `page_size` aceito pelo backend (50/100/200).
+    const lookupCalls = state.calls.filter(
+      (c) => c.method === "GET" && (c.url.startsWith("/api/v1/rooms") || c.url.startsWith("/api/v1/responsible-people")),
+    );
+    expect(lookupCalls.length).toBeGreaterThanOrEqual(2);
+    for (const call of lookupCalls) {
+      expect(["50", "100", "200"]).toContain(new URL(call.url, "http://x").searchParams.get("page_size"));
+    }
+  });
+
+  test("vínculo: opções do catálogo em ordem alfabética e 'Sem vínculo' por último", async ({ page }) => {
+    await open(page);
+    expect(await optionTexts(page, "Vínculo")).toEqual([
+      "Todos os vínculos",
+      "Estagiario",
+      "Ocioso",
+      "Servidor",
+      "Terceirizado",
+      "Sem vínculo",
+    ]);
+  });
+
+  test("vínculo: opções dinâmicas são reordenadas na tela e lista vazia não é falha", async ({ page }) => {
+    // O backend manda os valores do escopo do ator; a tela não inventa opção.
+    await open(page, { role: "USER", reports: { bondStatusOptions: ["__none__", "Terceirizado", "Estagiario"] } });
+    expect(await optionTexts(page, "Vínculo")).toEqual([
+      "Todos os vínculos",
+      "Estagiario",
+      "Terceirizado",
+      "Sem vínculo",
+    ]);
+  });
+
+  test("vínculo sem opções (usuário sem unidade): campo utilizável, sem aviso de erro", async ({ page }) => {
+    const state = await open(page, { role: "USER", reports: { bondStatusOptions: [] } });
+    const vinculo = lookupField(page, "Vínculo");
+    await expect(vinculo).toBeEnabled();
+    expect(await optionTexts(page, "Vínculo")).toEqual(["Todos os vínculos"]);
+    const downloadPromise = page.waitForEvent("download");
+    await exportButton(page).click();
+    await downloadPromise;
+    const params = new URL(exportCalls(state)[0]!.replace("GET ", ""), "http://x").searchParams;
+    expect(params.get("bond_status")).toBeNull();
+  });
+
+  test("vínculo que saiu das opções é preservado e NÃO bloqueia a exportação", async ({ page }) => {
+    await page.clock.install();
+    const state = await open(page);
+    const vinculo = lookupField(page, "Vínculo");
+    await vinculo.selectOption("Servidor");
+    // Nova importação do Sheets muda os valores existentes no escopo.
+    state.reports.bondStatusOptions = ["Ocioso"];
+    await page.clock.fastForward("05:00");
+    await page.context().setOffline(true);
+    await page.context().setOffline(false);
+    await expect(vinculo.locator("option", { hasText: "Selecionado anteriormente" })).toHaveCount(1);
+    await expect(vinculo).toHaveValue("Servidor");
+    await exportButton(page).click();
+    // Sem validação no cliente: a decisão sobre o valor é do backend.
+    await expect(form(page).getByText("Escolha uma das opções.")).toHaveCount(0);
+    await expect.poll(() => exportCalls(state).length).toBeGreaterThan(0);
+    const params = new URL(exportCalls(state)[0]!.replace("GET ", ""), "http://x").searchParams;
+    expect(params.get("bond_status")).toBe("Servidor");
+  });
+
+  test("escolhas vão na query (inclusive __none__ para sem vínculo)", async ({ page }) => {
+    const state = await open(page);
+    await lookupField(page, "Sala").selectOption(ROOM_IDS.a);
+    await lookupField(page, "Responsável").selectOption(PERSON_IDS.a);
+    await lookupField(page, "Vínculo").selectOption("__none__");
+    const downloadPromise = page.waitForEvent("download");
+    await exportButton(page).click();
+    await downloadPromise;
+    const params = new URL(exportCalls(state)[0]!.replace("GET ", ""), "http://x").searchParams;
+    expect(params.get("room_id")).toBe(ROOM_IDS.a);
+    expect(params.get("responsible_person_id")).toBe(PERSON_IDS.a);
+    expect(params.get("bond_status")).toBe("__none__");
+    await expect(outcome(page)).toContainText("registro(s)");
+  });
+
+  test("salas homônimas de unidades diferentes ganham o código da unidade", async ({ page }) => {
+    await installMocks(page, { role: "USER" });
+    await seedSession(page, { role: "USER" });
+    const room = (id: string, unitId: string, name: string) => ({
+      id,
+      unit_id: unitId,
+      name,
+      description: null,
+      floor: null,
+      active: true,
+      source_record_id: null,
+      created_at: "2026-10-01T12:00:00+00:00",
+      updated_at: "2026-10-01T12:00:00+00:00",
+    });
+    // Resposta fora de ordem: a ordenação alfabética é feita na interface.
+    await page.route("**/api/v1/rooms**", async (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      await route.fulfill({
+        status: 200,
+        headers: { "content-type": "application/json", "access-control-allow-origin": "*" },
+        body: JSON.stringify({
+          total: 3,
+          page: 1,
+          page_size: 200,
+          rooms: [
+            room(ROOM_IDS.other, UNITS[1]!.id, "Sala 101"),
+            room(ROOM_IDS.a, UNITS[0]!.id, "Sala 101"),
+            room(ROOM_IDS.inactive, UNITS[0]!.id, "Arquivo Sintético"),
+          ],
+        }),
+      });
+    });
+    await page.goto(PATH);
+    await waitForHydration(page);
+    await expect(page.getByTestId("report-form")).toBeVisible();
+    expect(await optionTexts(page, "Sala")).toEqual([
+      "Todas as salas",
+      "Arquivo Sintético",
+      `Sala 101 (${UNITS[1]!.code})`,
+      `Sala 101 (${UNITS[0]!.code})`,
+    ]);
+  });
+
+  test("listas indisponíveis (403): aviso, campo desabilitado e relatório ainda exportável", async ({ page }) => {
+    const state = await open(page, { role: "USER", lookupListStatus: 403 });
+    await expect(form(page).getByText("Lista de salas indisponível para o seu perfil ou no momento.")).toBeVisible();
+    await expect(
+      form(page).getByText("Lista de responsáveis indisponível para o seu perfil ou no momento."),
+    ).toBeVisible();
+    await expect(lookupField(page, "Sala")).toBeDisabled();
+    await expect(lookupField(page, "Responsável")).toBeDisabled();
+    // O resto da tela continua: unidade, vínculo e a exportação.
+    await expect(lookupField(page, "Unidade")).toBeEnabled();
+    await lookupField(page, "Vínculo").selectOption("Servidor");
+    const downloadPromise = page.waitForEvent("download");
+    await exportButton(page).click();
+    await downloadPromise;
+    const params = new URL(exportCalls(state)[0]!.replace("GET ", ""), "http://x").searchParams;
+    expect(params.get("bond_status")).toBe("Servidor");
+    expect(params.get("room_id")).toBeNull();
+  });
+
+  test("valor escolhido que sai da lista fica como 'Selecionado anteriormente'", async ({ page }) => {
+    await page.clock.install();
+    const state = await open(page);
+    const sala = lookupField(page, "Sala");
+    await sala.selectOption(ROOM_IDS.a);
+    // A sala deixa de existir no escopo (inativada/removida pelo backend) e a
+    // lista é recarregada: o valor já escolhido não pode desaparecer calado.
+    state.rooms = state.rooms.filter((r) => r.id !== ROOM_IDS.a);
+    await page.clock.fastForward("05:00");
+    await page.context().setOffline(true);
+    await page.context().setOffline(false);
+    await expect(sala.locator("option", { hasText: "Selecionado anteriormente" })).toHaveCount(1);
+    await expect(sala).toHaveValue(ROOM_IDS.a);
+  });
+
+  for (const width of [320, 768, 1920]) {
+    test(`${width}px: os três selects sem overflow e sem violações axe`, async ({ page }) => {
+      await page.setViewportSize({ width, height: width < 768 ? 800 : 900 });
+      await open(page);
+      await expect(page.getByTestId("report-form")).toBeVisible();
+      for (const label of ["Sala", "Responsável", "Vínculo"]) {
+        await expect(lookupField(page, label)).toBeVisible();
+      }
+      await lookupField(page, "Sala").selectOption(ROOM_IDS.xss);
+      await lookupField(page, "Vínculo").selectOption("__none__");
+      await expectNoHorizontalOverflow(page);
+      expect(await axeViolations(page)).toEqual([]);
+    });
+  }
+});
+
 test.describe("validação de UX e erros", () => {
   test("intervalo de datas invertido bloqueia a exportação, sem chamar a API", async ({ page }) => {
     const state = await open(page);
@@ -370,12 +577,18 @@ test.describe("validação de UX e erros", () => {
     expect(exportCalls(state)).toEqual([]);
   });
 
-  test("UUID inválido em sala é recusado no cliente", async ({ page }) => {
-    const state = await open(page);
-    await filters(page).getByLabel("Sala (identificador)").fill("nao-e-uuid");
+  test("catálogo sem os tipos novos (contrato antigo): campo livre e UUID validado", async ({ page }) => {
+    const state = await open(page, { role: "USER", reports: { legacyFilterTypes: true } });
+    const sala = lookupField(page, "Sala");
+    await expect(sala).toHaveAttribute("type", "text");
+    await expect(form(page).getByText("UUID da sala, como exibido no cadastro.")).toBeVisible();
+    await sala.fill("nao-e-uuid");
     await exportButton(page).click();
     await expect(form(page).getByText("Informe um identificador (UUID) válido.")).toBeVisible();
     expect(exportCalls(state)).toEqual([]);
+    // Sem tipo de lookup declarado, a tela não pede as listas de apoio.
+    expect(state.calls.some((c) => c.url.startsWith("/api/v1/rooms"))).toBe(false);
+    expect(state.calls.some((c) => c.url.startsWith("/api/v1/responsible-people"))).toBe(false);
   });
 
   test("413: pede para refinar os filtros", async ({ page }) => {

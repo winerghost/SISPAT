@@ -9,8 +9,9 @@ Código: rotas `backend/app/api/v1/reports.py`, schemas `report_schemas.py`; ser
   USER/RH não (como as demais leituras compartilhadas). Catálogo = `reports.read`; arquivo =
   `exports.create` (ambas já semeadas para ADM, USER e RH; nenhuma migração).
 - Escopo de unidade sempre no banco (ADM sem bypass). `unit_id`, `owner_unit_id`,
-  `origin_unit_id`, `destination_unit_id`, `inventory_id` alheios, inexistentes ou malformados
-  => a MESMA `404 not_found` (+ evento `UNIT_SCOPE_DENIED`). `kind` desconhecido => mesma 404.
+  `origin_unit_id`, `destination_unit_id`, `inventory_id`, `room_id` e `responsible_person_id`
+  alheios, inexistentes ou malformados => a MESMA `404 not_found` (+ evento `UNIT_SCOPE_DENIED`);
+  nenhum deles ecoa o valor recebido. `kind` desconhecido => mesma 404.
 - Parâmetro não declarado => `400` (+ `MASS_ASSIGNMENT_REJECTED`; nomes privilegiados como `role`,
   `deleted_at`, `unit_ids` => `PRIVILEGE_ESCALATION_ATTEMPT`). Repetido/valor inválido => 400.
   Filtros e `sort` são allowlists; nada de SQL vindo do cliente; `q` usa LIKE escapado e, nos relatórios de patrimônios, a MESMA `asset_search_clause` da tela `/assets` (tokens AND; número, chave alfanumérica do número, descrição, `source_record_id`, nome do responsável e da sala via EXISTS correlacionado só a `assets`), garantindo paridade tela x exportação; o escopo de unidade continua aplicado antes e a neutralização de fórmulas (`csv_safety`) é inalterada.
@@ -42,11 +43,22 @@ Sem parâmetros. `200` (`Cache-Control: no-store`):
  "reports": [{"id": "assets|movements|inventory-items", "title": "...", "description": "...",
    "export_path": "/api/v1/reports/<id>/export", "formats": ["csv","xlsx"],
    "columns": [{"key": "...", "label": "..."}],
-   "filters": [{"name": "...", "type": "text|enum|uuid|unit|inventory|date", "options": [...], "max_length": 100}],
+   "filters": [{"name": "...", "type": "text|enum|uuid|unit|inventory|room|person|date", "options": [...], "max_length": 100}],
    "sorts": ["..."], "default_sort": "...", "include_deleted_allowed": false}]}
 ```
-`columns` já reflete o perfil (RH sem texto livre). Tipos `unit`/`inventory`: UUID de unidade
-(`GET /api/v1/units/accessible`) / inventário (`GET /api/v1/inventories`).
+`columns` já reflete o perfil (RH sem texto livre). Os tipos de LOOKUP recebem um UUID e a tela
+monta um `<select>` com a lista do cadastro correspondente, SEMPRE com escopo de unidade no backend:
+`unit` -> `GET /api/v1/units/accessible`; `inventory` -> `GET /api/v1/inventories`;
+`room` -> `GET /api/v1/rooms`; `person` -> `GET /api/v1/responsible-people`.
+
+`filters[].options` de `bond_status` (vínculo) é DINÂMICO e por ATOR: os valores distintos
+existentes nos bens do escopo (grafia mais frequente de cada grupo sem caixa, ordem alfabética
+estável; bens excluídos fora) -- a MESMA fonte de `GET /api/v1/assets/bond-statuses` --, mais
+`__none__` ("sem vínculo") no FIM da lista, só quando existe bem sem vínculo no escopo. Nada é
+codificado à mão: o vínculo vem da planilha do Google Sheets e muda a cada importação; um `enum`
+fixo envelheceria em silêncio. Escopo vazio => `options: []`. O catálogo é por usuário
+(`Cache-Control: no-store`). O `<select>` é conveniência de interface: o backend revalida o valor
+(um vínculo que saiu da lista continua aceito e simplesmente não casa nenhum bem).
 
 ### `GET /api/v1/reports/<kind>/export`
 `kind`: `assets | movements | inventory-items`. Params comuns: `format=csv|xlsx` (padrão `csv`),
@@ -68,7 +80,7 @@ não declarava o parâmetro (a interface só listava as colunas) e o serviço ex
 
 | kind | filtros | sort (padrão) |
 |---|---|---|
-| `assets` | `q` (<=100), `unit_id`, `owner_unit_id`, `room_id`, `responsible_person_id` (uuid), `located` (SIM/NAO/DESCONHECIDO), `bond_status` (`__none__` = sem vínculo) | `patrimony_number`, `description`, `created_at`, `updated_at`, `bond_status` (+ prefixo `-`); padrão `patrimony_number` |
+| `assets` | `q` (<=100), `unit_id`, `owner_unit_id`, `room_id`, `responsible_person_id` (UUID como texto; fora do escopo => 404), `located` (SIM/NAO/DESCONHECIDO), `bond_status` (opções do catálogo; `__none__` = sem vínculo) | `patrimony_number`, `description`, `created_at`, `updated_at`, `bond_status` (+ prefixo `-`); padrão `patrimony_number` |
 | `movements` | `status`, `movement_type`, `origin_unit_id`, `destination_unit_id`, `created_from`, `created_to` (AAAA-MM-DD, UTC) | `created_at`, `status` (+ `-`); padrão `-created_at` |
 | `inventory-items` | `inventory_id`, `unit_id`, `inventory_status`, `result` (ENCONTRADO/NAO_ENCONTRADO/DIVERGENTE), `checked_from`, `checked_to` | `checked_at`, `patrimony_number`, `result` (+ `-`); padrão `-checked_at` |
 

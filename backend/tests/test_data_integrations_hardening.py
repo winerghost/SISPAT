@@ -138,7 +138,31 @@ def test_operacoes_admin_rejeitam_auth_user_id_malicioso(user_id: object) -> Non
             client.list_mfa_factors(user_id)  # type: ignore[arg-type]
         with pytest.raises(InvalidIdentifierError):
             client.deactivate_user(user_id)  # type: ignore[arg-type]
+        # `delete_user` é a operação mais destrutiva do cliente (apaga a
+        # identidade no GoTrue): id malformado nunca chega à rede (CWE-22).
+        with pytest.raises(InvalidIdentifierError):
+            client.delete_user(user_id)  # type: ignore[arg-type]
     mock_request.assert_not_called()
+
+
+def test_delete_user_monta_url_exata_sem_soft_delete_nem_redirect() -> None:
+    """Exclusão de conta (`app.services.user_deletion_service`): apaga a
+    identidade no GoTrue para LIBERAR o e-mail; `should_soft_delete=false`
+    explícito (soft delete manteria o endereço ocupado)."""
+    client = SupabaseAdminClient(settings=_settings())
+    with patch("requests.Session.request", return_value=_ok(200)) as mock_request:
+        client.delete_user(_USER)
+    args, kwargs = mock_request.call_args
+    assert args == ("DELETE", f"https://proj.supabase.co/auth/v1/admin/users/{_USER}")
+    assert kwargs["json"] == {"should_soft_delete": False}
+    assert kwargs["allow_redirects"] is False
+
+
+def test_delete_user_propaga_falha_http_como_erro_do_cliente() -> None:
+    client = SupabaseAdminClient(settings=_settings())
+    with patch("requests.Session.request", return_value=_ok(500)):
+        with pytest.raises(SupabaseAdminClientError):
+            client.delete_user(_USER)
 
 
 def test_delete_mfa_factor_valido_monta_url_exata_sem_redirect() -> None:

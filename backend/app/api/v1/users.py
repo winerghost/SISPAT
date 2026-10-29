@@ -18,6 +18,11 @@ Endpoints deste módulo:
       /users/<id>`, `POST /users/<id>/{deactivate,activate,revoke-sessions,
       password-reset,mfa-reset}`, `GET /users/<id>/audit`,
       `PUT/DELETE /users/<id>/avatar` e `GET /users/<id>/avatar-url`.
+    - `POST /api/v1/users/<user_id>/delete`: exclusão LÓGICA + anonimização
+      irreversível (`ADM` + AAL2 + permissão `users.delete` + confirmação
+      pelo e-mail do alvo + `version`). Regra em
+      `app.services.user_deletion_service`; a linha de `users` NUNCA é
+      removida e o `audit_logs` do excluído é preservado.
       Todas: `require_auth -> require_role("ADM") -> require_aal2 ->
       require_permission(...) -> rate_limit` (fail-closed). Alvo fora do
       escopo de unidade, inexistente ou malformado => o MESMO 404 `not_found`.
@@ -69,6 +74,7 @@ from werkzeug.exceptions import BadRequest
 
 from app.api.v1.schemas import (
     DeactivateRequest,
+    DeleteUserRequest,
     InviteRequest,
     PageQuery,
     RevokeRequest,
@@ -108,6 +114,7 @@ from app.authorization.security_events import (
     EVENT_REVOKE_BLOCKED,
     EVENT_UNIT_SCOPE_DENIED,
     EVENT_USER_ACCESS_REVOKED,
+    EVENT_USER_DELETED,
     EVENT_USER_MFA_RESET,
     EVENT_USER_PRIVILEGE_CHANGED,
     EVENT_USER_PROVIDER_SYNC_FAILED,
@@ -140,6 +147,7 @@ from app.services.user_admin_service import (
     UserAdminError,
     UserAdminService,
 )
+from app.services.user_deletion_service import UserDeletionService
 
 logger = logging.getLogger(__name__)
 
@@ -156,6 +164,9 @@ _PASSWORD_RESET_PER_ADMIN = 20
 _PASSWORD_RESET_PER_TARGET = 5
 _MFA_RESET_LIMIT = 10
 _AVATAR_WRITE_LIMIT = 30
+# Exclusão (irreversível): limite baixo por ADM e por ALVO (UA-RL-01).
+_DELETE_LIMIT = 5
+_DELETE_PER_TARGET = 3
 
 # Reautenticação do reset de MFA: TOTP verificado na sessão há <= 5 min.
 _REAUTH_MAX_AGE_SECONDS = 300
@@ -513,6 +524,17 @@ def _service(db: Any, *, storage: bool = False) -> UserAdminService:
     )
 
 
+def _deletion_service(db: Any) -> UserDeletionService:
+    """Serviço da exclusão: precisa do Supabase Auth (MFA/ban) e do Storage
+    (remoção da foto), ambos usados só DEPOIS do commit (melhor esforço)."""
+    return UserDeletionService(
+        db,
+        admin_client=SupabaseAdminClient(),
+        storage=SupabaseStorageClient(),
+        request_id=get_request_id(),
+    )
+
+
 def _deny_missing_field_permission(actor: Any, permission: str):
     record_security_event(
         EVENT_ACCESS_DENIED,
@@ -651,6 +673,83 @@ def activate_user_endpoint(user_id: uuid.UUID):
                 details={"operation": "unban"},
             )
         return service_error_response(exc, actor_id=actor.id, target_id=user_id, context="users.activate")
+    return jsonify(result.summary), 200
+
+
+@users_bp.route("/<uuid:user_id>/delete", methods=["POST"])
+@require_auth
+@require_role("ADM")
+@require_aal2
+@require_permission("users.delete")
+@rate_limit(admin_rate_limit_key, limit=_DELETE_LIMIT, window_seconds=_WINDOW)
+def delete_user_endpoint(user_id: uuid.UUID):
+    """`POST /api/v1/users/<id>/delete` — exclusão LÓGICA + anonimização.
+
+    Corpo: `{"version": <int>, "confirm_text": "<e-mail exato do alvo>"}`
+    (`extra="forbid"`, sem nulos explícitos). POST (não DELETE) por padrão do
+    módulo e porque corpo em DELETE é removido por alguns proxies.
+
+    Respostas: 200 com o resumo (já anonimizado) do usuário; 409
+    `version_conflict`; 409 `self_change_forbidden` (autoexclusão); 409
+    `last_admin`; 400 `confirmation_mismatch`; 403 `target_out_of_scope`;
+    404 `not_found` IDÊNTICO para alvo inexistente, malformado, de outra
+    unidade ou já excluído (negação auditada); 429/503 do limite por alvo.
+
+    A linha de `users` NUNCA é removida e o `audit_logs` do excluído
+    (inclusive `actor_user_id`) é PRESERVADO — ver
+    `app.services.user_deletion_service`.
+    """
+    try:
+        body = parse_body(DeleteUserRequest, get_json_body(), context="users.delete")
+    except BadRequest as exc:
+        return validation_error(exc)
+    actor = g.current_user
+    try:
+        with get_db_session() as db:
+            result = _deletion_service(db).delete_user(
+                actor.id,
+                user_id,
+                version=body.version,
+                confirm_text=body.confirm_text,
+                consume_target_quota=make_target_quota(
+                    "delete",
+                    user_id,
+                    limit=_DELETE_PER_TARGET,
+                    window_seconds=_WINDOW,
+                ),
+            )
+    except UserAdminError as exc:
+        return service_error_response(
+            exc, actor_id=actor.id, target_id=user_id, context="users.delete"
+        )
+    if not result.provider_synced:
+        record_security_event(
+            EVENT_USER_PROVIDER_SYNC_FAILED,
+            severity=SEVERITY_MEDIUM,
+            actor_user_id=actor.id,
+            target_type="user",
+            target_id=user_id,
+            details={"operation": "delete"},
+        )
+    # Evento de segurança PRÓPRIO (a operação mais destrutiva do módulo),
+    # sem dado pessoal. O evento de NEGÓCIO homônimo é gravado pelo serviço
+    # dentro da transação, com o e-mail apenas MASCARADO.
+    record_security_event(
+        EVENT_USER_DELETED,
+        severity=SEVERITY_HIGH,
+        actor_user_id=actor.id,
+        target_type="user",
+        target_id=user_id,
+        # `operation` está na allowlist de `details` do
+        # `admin_audit_service.SECURITY_DETAIL_KEYS`, então aparece na tela de
+        # auditoria; as outras duas chaves ficam só na linha gravada.
+        details={
+            "operation": "delete",
+            "anonymized": True,
+            "provider_identity_removed": result.provider_synced,
+        },
+        result="SUCESSO",
+    )
     return jsonify(result.summary), 200
 
 

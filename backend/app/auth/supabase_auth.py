@@ -45,6 +45,15 @@ AAL (Authenticator Assurance Level) — `flask.g.current_session_aal`:
     frontend NUNCA decide isso por conta própria; esta leitura no backend,
     a partir do JWT assinado pelo Supabase, é a única fonte de verdade.
 
+USUÁRIO EXCLUÍDO (`users.deleted_at`, migração 0019):
+    A exclusão de usuário é LÓGICA + anonimização (ver
+    `app.services.user_deletion_service`): a linha permanece em `users`
+    porque o `audit_logs.actor_user_id` dela é preservado. `require_auth`
+    recusa com 401 (evento `AUTH_FAILED`, motivo `deleted_user`) qualquer JWT
+    de usuário com `deleted_at` preenchido — do mesmo modo que já recusa
+    `active=False` e sessão anterior à revogação. A consulta de usuário
+    também filtra `deleted_at IS NULL`.
+
 SESSÕES REVOGADAS (`users.sessions_revoked_at`, AUD-14-08):
     Depois de carregar o usuário, `require_auth` rejeita com 401 (evento
     `AUTH_FAILED`, motivo `session_revoked`) todo JWT emitido ANTES da
@@ -313,6 +322,9 @@ def _load_user_with_roles_and_permissions(
     with get_db_session() as db:
         stmt = (
             select(User)
+            # NÃO se filtra `deleted_at` aqui DE PROPÓSITO: a linha é
+            # carregada para que a negação seja auditada com o motivo exato
+            # (`deleted_user`, em `require_auth`), e não como `unknown_user`.
             .where(User.auth_user_id == auth_user_id)
             .options(
                 selectinload(User.role_links)
@@ -421,6 +433,17 @@ def require_auth(view_func: F) -> F:
             _auth_failed("unknown_user")
 
         user, role_codes, permission_codes = loaded
+        # Usuário logicamente EXCLUÍDO (migração 0019) nunca autentica: a
+        # linha continua existindo (a trilha de `audit_logs` dele é
+        # preservada), mas a conta deixou de existir para a API. Checado
+        # ANTES de `active`. Na prática a anonimização também apaga
+        # `auth_user_id` (a consulta acima nem casa e a resposta é 401
+        # `unknown_user`); esta checagem é a que vale para QUALQUER linha com
+        # `deleted_at` preenchido — sem ela um JWT ainda válido entraria.
+        if getattr(user, "deleted_at", None) is not None:
+            logger.info("Usuário %s está excluído (deleted_at); acesso negado.", user.id)
+            _auth_failed("deleted_user", actor_user_id=getattr(user, "id", None))
+
         if not user.active:
             logger.info("Usuário %s está inativo (active=False); acesso negado.", user.id)
             _auth_failed("inactive_user", actor_user_id=getattr(user, "id", None))

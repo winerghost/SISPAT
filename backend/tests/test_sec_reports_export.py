@@ -154,14 +154,21 @@ def test_sec_evento_de_escopo_nao_grava_valor_do_filtro_nem_token(api):
 
 
 def test_sec_filtros_de_sala_e_responsavel_alheios_nao_vazam(api):
+    """Sala/responsável de outra unidade => MESMA 404 de um id inexistente (sem oráculo)."""
     room_b = api.w.room(api.ub, "Sala B")
     person_b = api.w.person(api.ub, "Pessoa B")
     add_asset(api, api.ub, "B-1", room_id=room_b, responsible_person_id=person_b)
     add_asset(api, api.ua, "A-1")
-    for query in (f"?room_id={room_b}", f"?responsible_person_id={person_b}"):
-        rows = csv_rows(export(api, "assets", query, "ua"))
-        assert len(rows) == 1  # só cabeçalho: nada da unidade B
-        assert b"B-1" not in export(api, "assets", query, "ua").data
+    ghost = uuid.uuid4()
+    for query in (f"?room_id={room_b}", f"?responsible_person_id={person_b}",
+                  f"?room_id={ghost}", f"?responsible_person_id={ghost}"):
+        response = export(api, "assets", query, "ua")
+        assert response.status_code == 404
+        assert response.get_json() == NOT_FOUND
+        assert b"B-1" not in response.data and b"Pessoa B" not in response.data
+    assert types(api, "UNIT_SCOPE_DENIED")
+    dump = str(types(api, "UNIT_SCOPE_DENIED"))
+    assert str(room_b) not in dump and str(person_b) not in dump
 
 
 def test_sec_cabecalhos_do_arquivo_sem_cookie_e_nome_sem_entrada_do_usuario(api):

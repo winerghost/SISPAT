@@ -1,7 +1,9 @@
 // =============================================================================
 // Mocks SINTÉTICOS de `GET /api/v1/reports` e `GET /api/v1/reports/<kind>/export`
 // (contrato: docs/architecture/reports-api.md; catálogo espelha
-// backend/app/services/report_catalog.py). Dados fictícios. Imita as regras que
+// backend/app/services/report_catalog.py, inclusive os tipos de LOOKUP
+// `room`/`person` e as opções dinâmicas de `bond_status` do contrato de
+// 2026-10-28). Dados fictícios. Imita as regras que
 // a UI precisa explicar: ADM sem AAL2 => 403 AAL2_REQUIRED; RH sem colunas de
 // texto livre; `include_deleted` só ADM (senão 403); parâmetro não declarado =>
 // 400; unidade/inventário alheios ou malformados => 404; `q=limite` => 413
@@ -21,10 +23,27 @@ export interface ReportsMockState {
   exportDelayMs: number;
   /** Quantidade de linhas de dados do arquivo gerado. */
   rows: number;
+  /**
+   * Catálogo no contrato ANTIGO: `room_id`/`responsible_person_id` como `uuid`
+   * e `bond_status` como `text` livre (sem opções). Serve para provar que a
+   * tela degrada para campo livre enquanto o backend não anuncia os lookups.
+   */
+  legacyFilterTypes: boolean;
+  /** Substitui as opções de `bond_status` (dinâmicas por usuário; `[]` = sem unidade). */
+  bondStatusOptions: string[] | null;
 }
 
 export function defaultReportsState(partial: Partial<ReportsMockState> = {}): ReportsMockState {
-  return { catalogStatus: null, exportStatus: null, retryAfter: 90, exportDelayMs: 0, rows: 3, ...partial };
+  return {
+    catalogStatus: null,
+    exportStatus: null,
+    retryAfter: 90,
+    exportDelayMs: 0,
+    rows: 3,
+    legacyFilterTypes: false,
+    bondStatusOptions: null,
+    ...partial,
+  };
 }
 
 interface ReportsHandlerState {
@@ -33,6 +52,8 @@ interface ReportsHandlerState {
   reports: ReportsMockState;
   unitDetails: Record<string, { id: string }>;
   inventories: { id: string }[];
+  rooms: { id: string }[];
+  people: { id: string }[];
 }
 
 interface Col {
@@ -52,6 +73,15 @@ interface Def {
 
 const MOVEMENT_STATUS = ["PENDENTE", "APROVADA", "REJEITADA", "CONCLUIDA", "CANCELADA"];
 
+/**
+ * Opções de `bond_status` como o backend as manda (contrato de 2026-10-28):
+ * valores DISTINTOS existentes no escopo de unidade do ator (vêm da planilha,
+ * não são um enum fixo), em ordem alfabética, com a sentinela `__none__`
+ * ("Sem vínculo") no FIM e só quando existe bem sem vínculo. Usuário sem
+ * unidade recebe `[]` (lista vazia legítima, não falha).
+ */
+export const BOND_STATUS_OPTIONS = ["Estagiario", "Ocioso", "Servidor", "Terceirizado", "__none__"];
+
 const DEFS: Def[] = [
   {
     id: "assets",
@@ -70,10 +100,10 @@ const DEFS: Def[] = [
       { name: "q", type: "text", max_length: 100 },
       { name: "unit_id", type: "unit" },
       { name: "owner_unit_id", type: "unit" },
-      { name: "room_id", type: "uuid" },
-      { name: "responsible_person_id", type: "uuid" },
+      { name: "room_id", type: "room" },
+      { name: "responsible_person_id", type: "person" },
       { name: "located", type: "enum", options: ["SIM", "NAO", "DESCONHECIDO"] },
-      { name: "bond_status", type: "text", max_length: 64 },
+      { name: "bond_status", type: "enum", options: BOND_STATUS_OPTIONS, max_length: 64 },
     ],
     sorts: ["patrimony_number", "-patrimony_number", "description", "-description", "created_at", "-created_at"],
     default_sort: "patrimony_number",
@@ -124,7 +154,21 @@ const DEFS: Def[] = [
   },
 ];
 
-export function reportsCatalog(role: "ADM" | "USER" | "RH") {
+/** Contrato antigo: sala/responsável como UUID livre e vínculo como texto. */
+function legacyFilters(filters: Def["filters"]): Def["filters"] {
+  return filters.map((filter) => {
+    if (filter.type === "room" || filter.type === "person") return { name: filter.name, type: "uuid" };
+    if (filter.name === "bond_status") return { name: filter.name, type: "text", max_length: 64 };
+    return filter;
+  });
+}
+
+function withOptions(filters: Def["filters"], bondStatusOptions: string[] | null): Def["filters"] {
+  if (!bondStatusOptions) return filters;
+  return filters.map((f) => (f.name === "bond_status" ? { ...f, options: bondStatusOptions } : f));
+}
+
+export function reportsCatalog(role: "ADM" | "USER" | "RH", legacy = false, bondStatusOptions: string[] | null = null) {
   return {
     generated_at: "2026-10-21T12:00:00+00:00",
     max_rows: 10000,
@@ -136,7 +180,7 @@ export function reportsCatalog(role: "ADM" | "USER" | "RH") {
       export_path: `/api/v1/reports/${def.id}/export`,
       formats: ["csv", "xlsx"],
       columns: def.columns.filter((c) => role !== "RH" || !c.internal).map(({ key, label }) => ({ key, label })),
-      filters: def.filters,
+      filters: legacy ? legacyFilters(def.filters) : withOptions(def.filters, bondStatusOptions),
       sorts: def.sorts,
       default_sort: def.default_sort,
       include_deleted_allowed: role === "ADM",
@@ -187,7 +231,9 @@ export async function handleReports(args: {
     await route.fulfill({
       status: 200,
       headers: cors(corsHeaders, { "content-type": "application/json", "cache-control": "no-store" }),
-      body: JSON.stringify(reportsCatalog(state.role)),
+      body: JSON.stringify(
+        reportsCatalog(state.role, state.reports.legacyFilterTypes, state.reports.bondStatusOptions),
+      ),
     });
     return true;
   }
@@ -222,7 +268,10 @@ export async function handleReports(args: {
   for (const filter of def.filters) {
     const value = url.searchParams.get(filter.name);
     if (value === null) continue;
-    if (filter.type === "enum" && !(filter.options ?? []).includes(value)) {
+    const options = filter.name === "bond_status" && state.reports.bondStatusOptions
+      ? state.reports.bondStatusOptions
+      : (filter.options ?? []);
+    if (filter.type === "enum" && !options.includes(value)) {
       await err(route, corsHeaders, 400, "validation_error");
       return true;
     }
@@ -235,6 +284,15 @@ export async function handleReports(args: {
       return true;
     }
     if (filter.type === "inventory" && !state.inventories.some((i) => i.id === value)) {
+      await err(route, corsHeaders, 404, "not_found");
+      return true;
+    }
+    // Sala/responsável inexistente, malformado ou de unidade alheia: o MESMO 404.
+    if (filter.type === "room" && !state.rooms.some((r) => r.id === value)) {
+      await err(route, corsHeaders, 404, "not_found");
+      return true;
+    }
+    if (filter.type === "person" && !state.people.some((p) => p.id === value)) {
       await err(route, corsHeaders, 404, "not_found");
       return true;
     }

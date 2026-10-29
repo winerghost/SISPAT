@@ -28,10 +28,35 @@ export const OTHERS_KEY = "__outros__";
 export const MAX_LABELED_MARKS = 16;
 export const MAX_TICK_CHARS = 12;
 
+/** Textura da série (além da cor): a cor nunca é a única pista (WCAG 1.4.1). */
+export type SeriesPattern = "solid" | "lines" | "dots";
+
+/** Estilo fixo de uma série (cor semântica + textura), por chave ORIGINAL da série. */
+export interface SeriesStyle {
+  color: string;
+  pattern?: SeriesPattern;
+}
+
+/** Miniatura da textura na legenda (CSS puro; mesma leitura das barras). */
+export function patternSwatchStyle(color: string, pattern: SeriesPattern | undefined, ground: string) {
+  if (pattern === "lines") {
+    return { backgroundImage: `repeating-linear-gradient(-45deg, ${color} 0 2px, ${ground} 2px 4px)`, backgroundColor: color };
+  }
+  if (pattern === "dots") {
+    return {
+      backgroundImage: `radial-gradient(circle, ${ground} 0 1px, transparent 1.4px)`,
+      backgroundSize: "4px 4px",
+      backgroundColor: color,
+    };
+  }
+  return { backgroundColor: color };
+}
+
 export interface LegendItem {
   key: string;
   label: string;
   color: string;
+  pattern?: SeriesPattern;
   opacity?: number;
   /** Valor formatado ao lado do rótulo (pizza/barras). */
   valueText?: string;
@@ -148,6 +173,7 @@ export function ChartShell({
 }: ChartShellProps) {
   const titleId = useId();
   const cls = chartClasses(theme);
+  const palette = chartPalette(theme);
   const toggle = (key: string) => onSelectKey?.(selectedKey === key ? null : key);
   const { ref, width } = useElementWidth<HTMLDivElement>();
 
@@ -187,11 +213,20 @@ export function ChartShell({
         {legend.map((item) => {
           const content = (
             <>
-              <span
-                aria-hidden="true"
-                className="h-2 w-2 shrink-0 rounded-full"
-                style={{ backgroundColor: item.color, opacity: item.opacity }}
-              />
+              {item.pattern ? (
+                <span
+                  aria-hidden="true"
+                  data-legend-pattern={item.pattern}
+                  className="h-3 w-3 shrink-0 rounded-[2px]"
+                  style={{ ...patternSwatchStyle(item.color, item.pattern, palette.ground), opacity: item.opacity }}
+                />
+              ) : (
+                <span
+                  aria-hidden="true"
+                  className="h-2 w-2 shrink-0 rounded-full"
+                  style={{ backgroundColor: item.color, opacity: item.opacity }}
+                />
+              )}
               <span className={cn("text-body-sm", cls.legendLabel)}>{item.label}</span>
               {item.valueText !== undefined && (
                 <span className={cn("text-body-sm tabular-nums", cls.legendValue)}>{item.valueText}</span>
@@ -391,6 +426,11 @@ export interface AnimatedSeriesChartProps {
    * barras sem ação. A alternativa por teclado fica no painel (botões).
    */
   onMarkClick?: (categoryKey: string, seriesKey: string) => void;
+  /**
+   * Cor semântica + textura por chave de série (ex.: SIM/NAO/DESCONHECIDO).
+   * Ausente = paleta categórica na ordem. Mantenha o objeto ESTÁVEL (constante de módulo).
+   */
+  seriesStyles?: Readonly<Record<string, SeriesStyle>>;
 }
 
 export interface SeriesModelSeries {
@@ -400,25 +440,31 @@ export interface SeriesModelSeries {
   /** Chave interna (s0, s1...) — nunca o texto do backend. */
   dataKey: string;
   color: string;
+  pattern?: SeriesPattern;
 }
 
 export function useSeriesModel(
   data: MultiSeriesChartData,
   palette: ChartPalette,
   valueFormatter: (n: number) => string,
+  styles?: Readonly<Record<string, SeriesStyle>>,
 ) {
   return useMemo(() => {
-    const series: SeriesModelSeries[] = data.series.map((s, i) => ({
-      ...s,
-      dataKey: `s${i}`,
-      color: palette.categorical[i % palette.categorical.length]!,
-    }));
+    const series: SeriesModelSeries[] = data.series.map((s, i) => {
+      const style = styles?.[s.key];
+      return {
+        ...s,
+        dataKey: `s${i}`,
+        color: style?.color ?? palette.categorical[i % palette.categorical.length]!,
+        pattern: style?.pattern,
+      };
+    });
     const valueOf = (s: SeriesModelSeries, categoryKey: string): number | null => {
       const value = s.values[categoryKey];
       return typeof value === "number" && Number.isFinite(value) ? value : null;
     };
     const labelOf = new Map(data.categories.map((c) => [c.key, c.label]));
-    const legend: LegendItem[] = series.map((s) => ({ key: s.key, label: s.label, color: s.color }));
+    const legend: LegendItem[] = series.map((s) => ({ key: s.key, label: s.label, color: s.color, pattern: s.pattern }));
     const table = (rowHeader: string): TableSpec => ({
       rowHeader,
       columns: series.map((s) => s.label),
@@ -444,7 +490,7 @@ export function useSeriesModel(
         )
         .join("; ")}.`;
     return { series, legend, table, summary, valueOf, labelOf };
-  }, [data, palette, valueFormatter]);
+  }, [data, palette, valueFormatter, styles]);
 }
 
 export function hasMarks(data: MultiSeriesChartData): boolean {

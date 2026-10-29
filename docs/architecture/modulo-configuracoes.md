@@ -182,6 +182,7 @@ Corpo (`extra="forbid"`):
 | `POST /users/<uuid>/password-reset` (sem corpo) | `users.reset_password` | E-mail de recuperação via Supabase (`redirect_to` da allowlist). → `{"result": "sent" \| "unavailable"}`. O ADM nunca vê link nem senha. Limite de 5/h por alvo |
 | `POST /users/<uuid>/mfa-reset` (sem corpo) | `users.reset_mfa` | Exige **reautenticação**: a sessão do ADM precisa ter verificado TOTP há ≤ 5 min (claim `amr`), senão 403 `REAUTH_REQUIRED`. Remove todos os fatores do alvo. → `{"removed_factors": n}`. Evento HIGH. Não se aplica a si mesmo (409 `self_change_forbidden`) |
 | `POST /users/<uuid>/revoke` (rota existente) | `users.revoke_access` | Mantida por compatibilidade: agora também desativa e encerra sessões |
+| `POST /users/<uuid>/delete` (corpo `{"version", "confirm_text"}`) | `users.delete` | Exclusão LÓGICA + anonimização irreversível: `deleted_at/by`, `anonymized_at`, `active=false`, `sessions_revoked_at=now`, papéis/unidades removidos, convite PENDENTE → REVOGADO, foto apagada do bucket e identidade APAGADA no Supabase Auth (libera o e-mail para reconvite). `audit_logs` preservado (`actor_user_id` intacto). `confirm_text` = e-mail exato do alvo. 400 `confirmation_mismatch`, 409 `self_change_forbidden`/`version_conflict`/`last_admin`, 404 idêntico para inexistente/alheio/já excluído. Limite 5/h por ADM e 3/h por alvo. Evento HIGH `USER_DELETED`. → `UserSummary` anonimizado + `deleted_at` |
 
 **Sessões revogadas:** `require_auth` rejeita com 401 todo JWT cujo `iat` seja anterior a
 `users.sessions_revoked_at`.

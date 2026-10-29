@@ -6,8 +6,8 @@ export const FILTER_LABEL: Record<string, string> = {
   q: "Busca (número ou descrição)",
   unit_id: "Unidade",
   owner_unit_id: "Unidade proprietária",
-  room_id: "Sala (identificador)",
-  responsible_person_id: "Responsável (identificador)",
+  room_id: "Sala",
+  responsible_person_id: "Responsável",
   located: "Localizado",
   bond_status: "Vínculo",
   status: "Situação",
@@ -23,13 +23,47 @@ export const FILTER_LABEL: Record<string, string> = {
   checked_to: "Conferido até",
 };
 
+/**
+ * Dica do campo LIVRE (input). Só aparece enquanto o catálogo declarar o filtro
+ * como `uuid`/`text`: quando o backend anuncia `room`/`person`/opções, o
+ * controle passa a ser um <select> e a dica deixa de ser usada.
+ */
 export const FILTER_HINT: Record<string, string> = {
   room_id: "UUID da sala, como exibido no cadastro.",
   responsible_person_id: "UUID do responsável, como exibido no cadastro.",
   bond_status: "Texto exato do vínculo.",
 };
 
+/** Opção "sem filtro" dos selects de opções fixas (lookups têm a sua, por tipo). */
+const ALL_OPTION_LABEL: Record<string, string> = {
+  bond_status: "Todos os vínculos",
+};
+
+export function allOptionLabel(name: string): string {
+  return ALL_OPTION_LABEL[name] ?? "Todos";
+}
+
+/** Sentinela do backend (`asset_service.BOND_STATUS_NONE`): `bond_status` nulo. */
+export const FILTER_NONE_VALUE = "__none__";
+
+/**
+ * Filtros cujas opções são VALORES DE DADOS (vêm da planilha e mudam a cada
+ * importação), não um domínio ordenado: ordem alfabética estável, com a
+ * sentinela "sem vínculo" sempre no fim. Os demais `enum` mantêm a ordem do
+ * catálogo, que é semântica (PENDENTE -> APROVADA -> ...).
+ */
+const DATA_OPTION_FILTERS = new Set(["bond_status"]);
+
+export function orderedOptions(name: string, options: readonly string[]): string[] {
+  if (!DATA_OPTION_FILTERS.has(name)) return [...options];
+  return [...options].sort((a, b) => {
+    if (a === FILTER_NONE_VALUE || b === FILTER_NONE_VALUE) return a === b ? 0 : a === FILTER_NONE_VALUE ? 1 : -1;
+    return optionLabel(a).localeCompare(optionLabel(b), "pt-BR", { sensitivity: "base" }) || a.localeCompare(b);
+  });
+}
+
 export const OPTION_LABEL: Record<string, string> = {
+  __none__: "Sem vínculo",
   SIM: "Sim",
   NAO: "Não",
   DESCONHECIDO: "Desconhecido",

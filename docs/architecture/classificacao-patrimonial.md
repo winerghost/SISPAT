@@ -15,7 +15,7 @@ revisão), `backend/app/cli.py`. Migração: `0018_equipment_classification` (ve
   categorias; alimenta só `/dashboard/tecnologia/*` e `flask classify-assets`.
 - **Vigente (0018):** `assets.equipment_family`, `equipment_category`,
   `classification_confidence`, `classification_rule`, `classification_rules_version` e
-  `category_override`. Alimenta os 12 painéis, a fila de revisão e o override. Os dois
+  `category_override`. Alimenta os painéis de equipamentos (13 no catálogo; `located_by_unit_chart` usa só os filtros `familia`/`categoria` e a categoria efetiva), a fila de revisão e o override. Os dois
   vocabulários não se sobrescrevem.
 
 Todas as colunas são `text NULL` sem default: `NULL` = "não classificado/informado"; o motor

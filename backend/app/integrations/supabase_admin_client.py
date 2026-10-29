@@ -9,7 +9,12 @@ armazena esses segredos — apenas orquestra chamadas administrativas.
 
 Operações suportadas (todas sobre `{settings.supabase_url}/auth/v1/...`):
     - `invite_user_by_email`: convida um novo usuário por e-mail
-      (`POST /auth/v1/invite`).
+      (`POST /auth/v1/invite`), deixando o Supabase enviar a mensagem. NÃO é
+      mais usado pelo fluxo de convite — ver o aviso na docstring do método.
+    - `generate_invite_token_hash`: cria o usuário convidado e o token de
+      convite SEM enviar e-mail (`POST /auth/v1/admin/generate_link`,
+      `type=invite`) para que a entrega seja feita por
+      `app.services.invite_delivery`. É o caminho em uso.
     - `list_mfa_factors`: lista os fatores MFA cadastrados de um usuário
       (lidos do payload de `GET /auth/v1/admin/users/{id}`), usada tanto
       pelo fluxo de autorremoção (`app.api.v1.security`) quanto por um
@@ -18,6 +23,11 @@ Operações suportadas (todas sobre `{settings.supabase_url}/auth/v1/...`):
       (procedimento de recuperação administrativa).
     - `deactivate_user` / `ban_user`: desativa/revoga o acesso de um usuário
       (bane o usuário no GoTrue); `unban_user` desfaz o banimento.
+    - `delete_user`: APAGA a identidade no GoTrue
+      (`DELETE /auth/v1/admin/users/{id}`), liberando o e-mail para um
+      convite futuro. Usado apenas pela exclusão de conta
+      (`app.services.user_deletion_service`); no banco do projeto a exclusão
+      continua sendo LÓGICA + anonimização, com `audit_logs` preservado.
     - `send_password_recovery`: dispara o e-mail de recuperação de senha
       enviado PELO PRÓPRIO Supabase (`POST /auth/v1/recover`); o link nunca
       passa por este backend. NÃO é mais usado pelo fluxo de redefinição —
@@ -54,6 +64,7 @@ from __future__ import annotations
 
 import logging
 import re
+from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import quote, urlparse
 
@@ -120,6 +131,24 @@ def is_safe_supabase_base_url(base: str, settings: Any) -> bool:
             or (parsed.scheme == "http" and hostname in _LOCAL_DEV_HOSTS and not is_production)
         )
     )
+
+
+@dataclass(frozen=True)
+class GeneratedInvite:
+    """Resultado de `generate_invite_token_hash`.
+
+    `auth_user_id` é o `id` do usuário criado/encontrado no Supabase Auth —
+    é ele que `app.services.invite_service` grava como `users.auth_user_id`.
+
+    `token_hash` é SEGREDO DE USO ÚNICO e fica FORA do `repr` (`field(
+    repr=False)`): se este objeto cair num log, numa mensagem de exceção ou
+    num `assert` de teste, o token não é exposto. Só
+    `app.services.invite_delivery` pode lê-lo, e apenas para montar o corpo
+    do e-mail.
+    """
+
+    auth_user_id: str
+    token_hash: str = field(repr=False)
 
 
 class SupabaseAdminClientError(Exception):
@@ -270,6 +299,17 @@ class SupabaseAdminClient:
     def invite_user_by_email(self, email: str, name: str, redirect_to: str) -> dict[str, Any]:
         """Convida um novo usuário por e-mail (`POST /auth/v1/invite`).
 
+        ATENÇÃO — NÃO USE NO FLUXO DE CONVITE. O e-mail gerado aqui usa o
+        template do painel (`{{ .ConfirmationURL }}`), cujo link de uso único
+        em `/auth/v1/verify` é consumido por scanners de antivírus de e-mail
+        antes do clique da pessoa (provado nos logs do projeto em 2026-10-27
+        às 18:54:43) e que, no fluxo implícito, entrega access/refresh token
+        válidos ao scanner. Use `generate_invite_token_hash` +
+        `app.services.invite_delivery`. Mantido apenas porque o endpoint
+        continua sendo o único caminho em que o link NUNCA passa por este
+        backend, caso um dia o template do painel seja corrigido — mesma
+        decisão tomada para `send_password_recovery`.
+
         ANTES de qualquer chamada de rede, valida que `redirect_to` está na
         lista `settings.invite_allowed_redirect_urls_list` (URLs
         previamente autorizadas) — se não estiver, levanta
@@ -370,6 +410,42 @@ class SupabaseAdminClient:
         """Bane o usuário no Supabase Auth (alias explícito de `deactivate_user`)."""
         self.deactivate_user(auth_user_id)
 
+    def delete_user(self, auth_user_id: str) -> None:
+        """APAGA o usuário no Supabase Auth (`DELETE /auth/v1/admin/users/{id}`).
+
+        Usado SÓ pela exclusão de conta do SISPAT
+        (`app.services.user_deletion_service`), que é lógica + anonimização no
+        banco do projeto: a linha de `users` e todo o `audit_logs` continuam
+        preservados AQUI; o que é apagado é a identidade no provedor de
+        autenticação.
+
+        Por que apagar em vez de banir (`deactivate_user`): o GoTrue mantém o
+        e-mail ocupado enquanto a conta existir, mesmo banida, e
+        `generate_invite_token_hash` RECUSA e-mail já cadastrado. Sem o DELETE,
+        o e-mail de quem foi excluído nunca poderia ser reconvidado (502 para o
+        ADM). Apagar o usuário libera o endereço e, de uma vez, destrói
+        sessões/refresh tokens, identidades e fatores MFA dele (tudo pertence à
+        linha removida), o que torna desnecessário chamar
+        `delete_all_mfa_factors` antes.
+
+        `should_soft_delete: false` é explícito para nunca depender do padrão
+        de uma versão específica do GoTrue (soft delete manteria o e-mail
+        ocupado, anulando o propósito desta chamada).
+
+        O `auth_user_id` é validado por allowlist e codificado antes de entrar
+        no path (`_safe_path_segment`, CWE-22): id com `..`/`/`/vazio levanta
+        `InvalidIdentifierError` SEM chamar a rede — sem isso um segmento
+        malicioso poderia virar outra rota administrativa do GoTrue.
+        Qualquer falha é relançada como `SupabaseAdminClientError`; quem chama
+        decide (na exclusão é melhor esforço pós-commit: a exclusão local
+        NUNCA é desfeita por falha do provedor).
+        """
+        self._request(
+            "DELETE",
+            f"/auth/v1/admin/users/{_safe_path_segment(auth_user_id, 'auth_user_id')}",
+            json_body={"should_soft_delete": False},
+        )
+
     def unban_user(self, auth_user_id: str) -> None:
         """Remove o banimento (`ban_duration: "none"`, valor do GoTrue para desbanir)."""
         self._request(
@@ -377,6 +453,86 @@ class SupabaseAdminClient:
             f"/auth/v1/admin/users/{_safe_path_segment(auth_user_id, 'auth_user_id')}",
             json_body={"ban_duration": "none"},
         )
+
+    def generate_invite_token_hash(
+        self, email: str, name: str, redirect_to: str
+    ) -> GeneratedInvite:
+        """Cria o usuário convidado e o token de convite SEM enviar e-mail algum.
+
+        Usa `POST /auth/v1/admin/generate_link` com `type: "invite"`: o GoTrue
+        cria o usuário no Auth (como `/auth/v1/invite` faria), gera o token e
+        DEVOLVE o `hashed_token` ao chamador, sem disparar mensagem. A entrega
+        passa a ser deste backend (`app.services.invite_delivery`), com um link
+        que aponta para a nossa própria página — e NÃO para `/auth/v1/verify`.
+
+        POR QUE NÃO `/auth/v1/invite` (ver
+        `docs/deploy/PLANO_ACAO_USUARIOS_CONVITE_2026-10-28.md` §1): o e-mail
+        do Supabase usa `{{ .ConfirmationURL }}`, que é um GET de USO ÚNICO em
+        `/auth/v1/verify`. Scanners de antivírus de e-mail abrem esse link
+        automaticamente 2–4 s após o envio: gastam o token (a pessoa vê
+        "link expirado") e, no fluxo implícito, RECEBEM access/refresh token
+        válidos da conta. Mesmo defeito já corrigido no reset de senha.
+
+        Comportamento preservado: como `/auth/v1/invite`, `generate_link` com
+        `type=invite` FALHA para e-mail já cadastrado (o GoTrue responde 4xx,
+        que `_request` converte em `SupabaseAdminClientError`) — a mensagem e o
+        código que o ADM recebe continuam vindo de `invite_service`.
+
+        Devolve `GeneratedInvite` com o `id` do usuário no Auth e o
+        `hashed_token`. O `action_link` e o `email_otp` da resposta são
+        descartados e NUNCA logados, auditados ou devolvidos a quem chamou a
+        rota. O `token_hash` é SEGREDO DE USO ÚNICO: o chamador não pode
+        registrá-lo em log, auditoria nem resposta HTTP.
+        """
+        if redirect_to not in self._settings.invite_allowed_redirect_urls_list:
+            logger.warning(
+                "supabase_admin_client: geração de link de convite com redirect_to "
+                "fora da allow-list; chamada bloqueada."
+            )
+            raise InviteRedirectNotAllowedError(
+                "A URL de redirecionamento informada não está na lista de URLs "
+                "previamente autorizadas."
+            )
+        if not isinstance(email, str) or not _EMAIL_SHAPE_RE.fullmatch(email):
+            raise SupabaseAdminClientError("E-mail inválido para convite de usuário.")
+        response = self._request(
+            "POST",
+            "/auth/v1/admin/generate_link",
+            # `redirect_to` aqui só compõe o `action_link` que descartamos; o
+            # link enviado é montado por `invite_delivery`. Mantido para o
+            # GoTrue validar o destino também do lado dele.
+            json_body={
+                "type": "invite",
+                "email": email,
+                "data": {"name": name},
+                "redirect_to": redirect_to,
+            },
+        )
+        payload = self._json_object(response, "geração de link de convite")
+        token_hash = payload.get("hashed_token")
+        if not isinstance(token_hash, str) or not _TOKEN_HASH_SHAPE_RE.fullmatch(token_hash):
+            # Nunca logar `payload`: ele carrega `action_link` e `email_otp`.
+            logger.error(
+                "supabase_admin_client: resposta de generate_link (convite) sem "
+                "hashed_token válido."
+            )
+            raise SupabaseAdminClientError(
+                "A API Admin do Supabase não devolveu um token de convite válido."
+            )
+        auth_user_id = payload.get("id")
+        # Mesmo formato exigido para segmento de path: este id é reusado em
+        # `/admin/users/{id}` (ban, MFA) por outras operações.
+        if not isinstance(auth_user_id, str) or not _SAFE_PATH_SEGMENT_RE.fullmatch(
+            auth_user_id
+        ):
+            logger.error(
+                "supabase_admin_client: resposta de generate_link (convite) sem 'id' "
+                "de usuário em formato válido."
+            )
+            raise SupabaseAdminClientError(
+                "A API Admin do Supabase não devolveu o usuário convidado."
+            )
+        return GeneratedInvite(auth_user_id=auth_user_id, token_hash=token_hash)
 
     def generate_recovery_token_hash(self, email: str, redirect_to: str) -> str:
         """Cria o token de recuperação de senha SEM enviar e-mail algum.

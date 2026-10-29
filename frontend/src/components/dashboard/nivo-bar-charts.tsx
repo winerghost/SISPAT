@@ -70,10 +70,11 @@ function BarSeriesChart({
   theme = "screen",
   className,
   onMarkClick,
+  seriesStyles,
 }: AnimatedSeriesChartProps & { mode: BarMode }) {
   const palette = chartPalette(theme);
   const cls = chartClasses(theme);
-  const model = useSeriesModel(data, palette, valueFormatter);
+  const model = useSeriesModel(data, palette, valueFormatter, seriesStyles);
   if (!hasMarks(data)) return null;
 
   const horizontal = mode === "horizontal";
@@ -107,6 +108,14 @@ function BarSeriesChart({
   const seriesKeyOf = new Map(model.series.map((s) => [s.dataKey, s.key]));
   const catLabel = (key: string | number) => model.labelOf.get(String(key)) ?? String(key);
   const n = data.series.length;
+  // Texturas (listras/pontos na cor do fundo sobre a cor da série): distinguem as séries sem depender de cor.
+  const patterned = model.series.filter((s) => s.pattern === "lines" || s.pattern === "dots");
+  const patternDefs = patterned.map((s) =>
+    s.pattern === "lines"
+      ? { id: `pat-${s.dataKey}`, type: "patternLines", background: "inherit", color: palette.ground, rotation: -45, lineWidth: 2, spacing: 5 }
+      : { id: `pat-${s.dataKey}`, type: "patternDots", background: "inherit", color: palette.ground, size: 1.6, padding: 2.4, stagger: true },
+  );
+  const patternFill = patterned.map((s) => ({ match: { id: s.dataKey }, id: `pat-${s.dataKey}` }));
 
   const Tooltip = ({ id, value, indexValue, color }: BarTooltipProps<BarDatum>) => (
     <TooltipBox
@@ -169,6 +178,7 @@ function BarSeriesChart({
             valueScale={{ type: "linear", min: 0, max: ticks[ticks.length - 1], nice: false }}
             indexScale={{ type: "band", round: true }}
             colors={({ id }) => colorOf.get(String(id)) ?? palette.neutral}
+            {...(patterned.length > 0 ? { defs: patternDefs, fill: patternFill } : {})}
             borderRadius={4}
             borderWidth={stacked ? 1 : 0}
             borderColor={palette.ground}

@@ -288,6 +288,60 @@ def asset_filter_clauses(query: Any) -> list[Any]:
     return clauses
 
 
+def bond_status_options(db: Session, actor_id: Any) -> list[dict[str, Any]]:
+    """Opções do filtro "Vínculo": grupos sem caixa dos bens NO ESCOPO do ator.
+
+    Fonte ÚNICA de `GET /assets/bond-statuses` e das opções anunciadas no
+    catálogo de relatórios (`report_service`): o valor NUNCA é codificado à mão
+    -- vem da planilha (entrada não confiável) e muda a cada importação.
+
+    Só bens não excluídos e COM vínculo. `value` = grafia mais frequente do
+    grupo (desempate alfabético); no máximo `BOND_STATUS_GROUPS_MAX` grupos (os
+    primeiros em ordem alfabética sem caixa). Duas consultas agregadas, sem
+    carregar bens. Escopo vazio => lista vazia (negar por padrão).
+    """
+    key = func.lower(Asset.bond_status)
+    base = (
+        Asset.deleted_at.is_(None),
+        Asset.bond_status.is_not(None),
+        asset_scope_clause(actor_id, db),
+    )
+    keys = [
+        row[0] for row in db.execute(
+            select(key).where(*base).group_by(key).order_by(key).limit(BOND_STATUS_GROUPS_MAX)
+        ).all()
+    ]
+    if not keys:
+        return []
+    groups: dict[str, dict[str, int]] = {}
+    rows = db.execute(
+        select(key, Asset.bond_status, func.count(Asset.id))
+        .where(*base, key.in_(keys))
+        .group_by(key, Asset.bond_status)
+    ).all()
+    for group_key, spelling, count in rows:
+        groups.setdefault(group_key, {})[spelling] = int(count)
+    items = []
+    for spellings in groups.values():
+        value = min(spellings, key=lambda s: (-spellings[s], s))
+        items.append({"value": value, "count": sum(spellings.values())})
+    items.sort(key=lambda item: (item["value"].casefold(), item["value"]))
+    return items
+
+
+def has_assets_without_bond_status(db: Session, actor_id: Any) -> bool:
+    """Existe bem SEM vínculo no escopo do ator? (define se `__none__` é oferecido)."""
+    return db.execute(
+        select(Asset.id)
+        .where(
+            Asset.deleted_at.is_(None),
+            Asset.bond_status.is_(None),
+            asset_scope_clause(actor_id, db),
+        )
+        .limit(1)
+    ).first() is not None
+
+
 class _Lookups:
     """Nomes de unidade/sala/local/responsável dos bens listados (lote)."""
 
@@ -496,36 +550,12 @@ class AssetService:
         }
 
     def bond_statuses(self, actor_id: Any) -> dict[str, Any]:
-        """Opções do filtro "Vínculo": grupos sem caixa dos bens NO ESCOPO.
+        """Opções do filtro "Vínculo" (contagens só dos bens no escopo).
 
-        Só bens não excluídos e com vínculo. `value` = grafia mais frequente do
-        grupo (desempate alfabético); no máximo `BOND_STATUS_GROUPS_MAX` grupos
-        (os primeiros em ordem alfabética sem caixa). Duas consultas agregadas,
-        sem carregar bens.
+        Regra e consultas em `bond_status_options` (fonte única compartilhada
+        com o catálogo de relatórios).
         """
-        key = func.lower(Asset.bond_status)
-        base = (Asset.deleted_at.is_(None), Asset.bond_status.is_not(None), self._scope(actor_id))
-        keys = [
-            row[0] for row in self._db.execute(
-                select(key).where(*base).group_by(key).order_by(key).limit(BOND_STATUS_GROUPS_MAX)
-            ).all()
-        ]
-        if not keys:
-            return {"items": []}
-        groups: dict[str, dict[str, int]] = {}
-        rows = self._db.execute(
-            select(key, Asset.bond_status, func.count(Asset.id))
-            .where(*base, key.in_(keys))
-            .group_by(key, Asset.bond_status)
-        ).all()
-        for group_key, spelling, count in rows:
-            groups.setdefault(group_key, {})[spelling] = int(count)
-        items = []
-        for spellings in groups.values():
-            value = min(spellings, key=lambda s: (-spellings[s], s))
-            items.append({"value": value, "count": sum(spellings.values())})
-        items.sort(key=lambda item: (item["value"].casefold(), item["value"]))
-        return {"items": items}
+        return {"items": bond_status_options(self._db, actor_id)}
 
     def get(self, actor_id: Any, asset_id: uuid.UUID, *, include_deleted: bool = False) -> dict[str, Any]:
         asset = self._load(actor_id, asset_id, include_deleted=include_deleted)

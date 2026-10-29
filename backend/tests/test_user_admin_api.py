@@ -69,6 +69,7 @@ TARGET_ROUTES = [
     ("POST", "/deactivate", {"version": 1}, False),
     ("POST", "/activate", {"version": 1}, False),
     ("POST", "/revoke-sessions", None, False),
+    ("POST", "/delete", {"version": 1, "confirm_text": "alvo@exemplo.invalid"}, False),
     ("POST", "/password-reset", None, False),
     ("POST", "/mfa-reset", None, False),
     ("GET", "/audit", None, False),

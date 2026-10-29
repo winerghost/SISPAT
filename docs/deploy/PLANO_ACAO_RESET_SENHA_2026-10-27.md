@@ -189,3 +189,30 @@ e 36/36 com `--workers=1` (contenção do `next dev`; os 2 `toHaveURL` de `:202`
 6. Negativos: reabrir o mesmo link (deve dizer "recuperação", não "convite");
    conferir no Histórico do alvo que `USER_PASSWORD_RESET_SENT` não traz link,
    e-mail nem `redirect_to`.
+
+## 7. Implantacao e validacao em producao (2026-10-28)
+
+Plano B implantado na VPS e **validado com envio real**: o link chegou como
+`/ativar-conta?token_hash=...&type=recovery`, nao houve `verify` antes do
+clique da pessoa e a troca de senha funcionou. Causa raiz encerrada.
+
+SMTP em uso: Gmail (`smtp.gmail.com:587`, starttls, senha de app).
+`EMAIL_FROM` precisa ser **identico** ao `EMAIL_USER` — o Gmail recusa enviar
+com From de outro dominio, e a validacao do boot nao pega isso (o endereco e
+sintaticamente valido). Foi o unico erro de configuracao no deploy.
+
+Residuo conhecido: para caixas `@agu.gov.br` a mensagem **demora** a chegar
+(filtro institucional diante de remetente Gmail pessoal); para Gmail e
+imediata. O atraso nao e mais fatal — o token so e consumido no clique —, mas
+passa a existir um risco NOVO e diferente: se a mensagem demorar mais que o
+"Email OTP Expiration" do projeto, o link expira de verdade. Nesse cenario
+aumentar esse prazo FAZ sentido (antes nao fazia, porque o scanner gastava o
+token em segundos). Decisao do responsavel em 2026-10-28: usar contas Gmail
+para acesso ao sistema.
+
+Verificacao de que o codigo certo esta no ar (o `COPY app` do build vem do
+cache se o `git pull` nao trouxe nada):
+
+```
+docker compose exec backend python -c "import inspect, app.services.user_admin_service as m; print('deliver_password_reset' in inspect.getsource(m))"
+```

@@ -14,7 +14,17 @@ import { ApiError, apiClient, requestFile } from "@/lib/api-client";
 import { formatRetryAfter } from "@/lib/api-errors";
 
 export type ReportFormat = "csv" | "xlsx";
-export type ReportFilterType = "text" | "enum" | "uuid" | "unit" | "inventory" | "date";
+// Tipos de LOOKUP (lista carregada da API, select nativo) declarados pelo
+// catálogo do backend: unidade, inventário, sala e pessoa responsável. Os
+// demais tipos (`text`/`uuid`/`date`) continuam em controle livre; `enum` (ou
+// qualquer filtro que traga `options`) vira select de opções fixas.
+export const REPORT_LOOKUP_TYPES = ["unit", "inventory", "room", "person"] as const;
+export type ReportLookupType = (typeof REPORT_LOOKUP_TYPES)[number];
+export type ReportFilterType = "text" | "enum" | "uuid" | "date" | ReportLookupType;
+
+export function isReportLookupType(type: string): type is ReportLookupType {
+  return (REPORT_LOOKUP_TYPES as readonly string[]).includes(type);
+}
 
 export interface ReportColumn {
   key: string;
@@ -100,7 +110,11 @@ export function validateReportFilters(def: ReportDef, filters: Record<string, st
     if (!value) continue;
     if (filter.type === "date" && !isValidIsoDate(value)) errors[filter.name] = "Informe uma data válida.";
     if (filter.type === "uuid" && !UUID_RE.test(value)) errors[filter.name] = "Informe um identificador (UUID) válido.";
-    if (filter.type === "enum" && !(filter.options ?? []).includes(value)) errors[filter.name] = "Escolha uma das opções.";
+    // Valor FORA da lista de opções não é erro de UX e não bloqueia o envio: as
+    // opções de `bond_status` são dinâmicas (valores distintos no escopo do
+    // ator, mudam a cada importação) e as de lookup vêm de outra chamada. O
+    // controle preserva a escolha ("Selecionado anteriormente") e quem decide
+    // se o valor vale é o BACKEND, que revalida tudo e aplica o escopo.
     if ((filter.type === "text" || filter.type === "uuid") && filter.max_length && value.length > filter.max_length) {
       errors[filter.name] = `Use no máximo ${filter.max_length} caracteres.`;
     }

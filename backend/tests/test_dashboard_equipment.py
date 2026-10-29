@@ -193,8 +193,8 @@ def test_paineis_negados_geram_evento_de_seguranca(api):
     assert denied[0]["details"] == denied[1]["details"]  # indistinguíveis também no log
 
 
-def test_catalogo_cobre_os_12_paineis():
-    assert set(des.PANEL_BUILDERS) == set(PANEL_IDS) and len(PANEL_IDS) == 12
+def test_catalogo_cobre_os_13_paineis():
+    assert set(des.PANEL_BUILDERS) == set(PANEL_IDS) and len(PANEL_IDS) == 13
 
 
 # --- contrato de consulta -------------------------------------------------------------
@@ -551,7 +551,7 @@ def test_rotas_novas_decorators_e_sem_parametro_do_cliente():
     src = (ROOT / "backend/app/api/v1/dashboard_equipment.py").read_text(encoding="utf-8")
     assert "request.args.get" not in src and "request.json" not in src
     routes = re.findall(r"@dashboard_bp\.route\(\"([^\"]+)\"[^\n]*\)\n((?:@[^\n]+\n)+)def", src)
-    assert len(routes) == 4
+    assert len(routes) == 5
     for path, decorators in routes:
         names = [re.match(r"@(\w+)", d).group(1) for d in decorators.strip().split("\n")]
         if "classificacao" in path:

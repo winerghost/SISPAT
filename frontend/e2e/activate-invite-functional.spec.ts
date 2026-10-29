@@ -20,6 +20,11 @@ import { waitForAnimations } from "./support/screens";
 test.use({ viewport: { width: 1366, height: 768 } });
 
 const AXE_TAGS = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"];
+
+// Mesmo padrão de users-functional.spec.ts:31-33: o `next dev` compila cada
+// rota na 1ª visita; só a navegação para uma rota ainda não compilada (aqui
+// /login, no fim da redefinição) usa este limite. Não é defeito de produto.
+const FIRST_COMPILE_TIMEOUT = 45_000;
 const GOOD = `/ativar-conta?token_hash=${VALID_INVITE_TOKEN_HASH}&type=invite`;
 
 function verifyCalls(state: { calls: { method: string; url: string }[] }) {
@@ -96,7 +101,8 @@ test.describe("ativação por token_hash", () => {
     const state = await installMocks(page, { role: "USER" });
     await page.goto("/ativar-conta?token_hash=abc&type=magiclink");
     await waitForHydration(page);
-    await expect(page.getByText("Este link de convite é inválido")).toBeVisible();
+    // `type` desconhecido => modo neutro (F3): a tela não afirma que é convite.
+    await expect(page.getByText("Este link é inválido ou já expirou.")).toBeVisible();
     expect(verifyCalls(state)).toEqual([]);
     expect(page.url()).not.toContain("token_hash");
   });
@@ -104,6 +110,15 @@ test.describe("ativação por token_hash", () => {
   test("#error=access_denied&error_code=otp_expired mostra a mensagem amigável", async ({ page }) => {
     await installMocks(page, { role: "USER" });
     await page.goto("/ativar-conta#error=access_denied&error_code=otp_expired&error_description=x");
+    await waitForHydration(page);
+    // Sem `type` no link o texto é neutro (F3); com `type=invite` ele fala de convite.
+    await expect(page.getByText("Este link já foi usado ou expirou.")).toBeVisible();
+    expect(page.url()).not.toContain("error");
+  });
+
+  test("#error=...&type=invite: mensagem de convite (texto por modo)", async ({ page }) => {
+    await installMocks(page, { role: "USER" });
+    await page.goto("/ativar-conta#error=access_denied&error_code=otp_expired&error_description=x&type=invite");
     await waitForHydration(page);
     await expect(page.getByText("Este link de convite já foi usado ou expirou.")).toBeVisible();
     expect(page.url()).not.toContain("error");
@@ -199,7 +214,7 @@ test.describe("recuperação de senha (type=recovery)", () => {
     expect(state.calls.some((c) => c.url.startsWith("/auth/v1/logout"))).toBe(true);
     await expect(page.getByText(/não é mais válido|Não foi possível/)).toHaveCount(0);
     // Redireciona sozinho para o login.
-    await expect(page).toHaveURL(/\/login$/, { timeout: 15_000 });
+    await expect(page).toHaveURL(/\/login$/, { timeout: FIRST_COMPILE_TIMEOUT });
   });
 
   test("botão 'Ir para o login' leva ao login sem esperar", async ({ page }) => {
@@ -211,7 +226,7 @@ test.describe("recuperação de senha (type=recovery)", () => {
     await page.getByLabel("Confirmar senha").fill("senha-sintetica-456");
     await page.getByRole("button", { name: "Redefinir senha" }).click();
     await page.getByRole("link", { name: "Ir para o login" }).click();
-    await expect(page).toHaveURL(/\/login$/);
+    await expect(page).toHaveURL(/\/login$/, { timeout: FIRST_COMPILE_TIMEOUT });
   });
 
   test("link de recuperação expirado/usado: mensagem própria, sem detalhes do erro", async ({ page }) => {
@@ -274,13 +289,21 @@ test.describe("unitário: mapeador de erros do Supabase Auth", () => {
       [{ code: "weak_password", status: 422, message: "Password should be at least 6" }, "weak_password"],
       [{ code: "same_password", status: 422 }, "same_password"],
       [{ code: "insufficient_aal", status: 401 }, "mfa_required"],
-      [{ code: "session_not_found", status: 403 }, "expired"],
-      [{ name: "AuthSessionMissingError", status: 400 }, "expired"],
+      // F4: cada causa tem destino próprio (antes tudo virava "expired").
+      [{ code: "session_not_found", status: 403 }, "session_lost"],
+      [{ name: "AuthSessionMissingError", status: 400 }, "session_lost"],
       [{ code: "otp_expired", status: 403 }, "expired"],
-      [{ status: 401 }, "expired"],
+      [{ code: "access_denied", status: 403 }, "link_invalid"],
+      [{ code: "bad_jwt", status: 401 }, "link_invalid"],
+      // Anti-enumeração: `user_not_found` não pode ter mensagem própria.
+      [{ code: "user_not_found", status: 400 }, "generic"],
+      [{ status: 401 }, "session_lost"],
+      [{ name: "AuthRetryableFetchError", status: 0 }, "network"],
       [{ code: "over_request_rate_limit", status: 429 }, "rate_limited"],
       [{ status: 400, message: "algo sem código" }, "generic"],
-      [{ code: "codigo_desconhecido", status: 500 }, "generic"],
+      // 5xx é falha de servidor/transporte (retentável), não "código desconhecido".
+      [{ code: "codigo_desconhecido", status: 500 }, "network"],
+      [{ code: "codigo_desconhecido", status: 400 }, "generic"],
       [new Error("boom"), "generic"],
       [null, "generic"],
       ["texto", "generic"],
@@ -390,7 +413,7 @@ test.describe("erros ao definir a senha (mensagens fixas)", () => {
     await expect(page.getByText(/detalhe-interno-vazado/)).toHaveCount(0);
   });
 
-  test("sessão perdida (session_not_found): vira link expirado, peça novo", async ({ page }) => {
+  test("sessão perdida (session_not_found): mensagem de sessão, nunca 'expirou' (F4)", async ({ page }) => {
     await installMocks(page, {
       role: "USER",
       userUpdateErrors: [{ status: 403, error_code: "session_not_found", msg: "x" }],
@@ -399,7 +422,8 @@ test.describe("erros ao definir a senha (mensagens fixas)", () => {
     await waitForHydration(page);
     await page.getByRole("button", { name: "Continuar" }).click();
     await fillAndSubmit(page, "Ativar conta");
-    await expect(page.getByText("Este link de convite já foi usado ou expirou.")).toBeVisible();
+    await expect(page.getByText("A validação deste link não está mais ativa.")).toBeVisible();
+    await expect(page.getByText("já foi usado ou expirou")).toHaveCount(0);
   });
 
   test("token, hash e senha nunca em console, DOM ou storage", async ({ page }) => {
@@ -511,7 +535,7 @@ test.describe("link expirado e entradas inesperadas", () => {
     await seedSession(page, { role: "USER", aal: "aal2", hasVerifiedFactor: false });
     await page.goto("/ativar-conta");
     await waitForHydration(page);
-    await expect(page.getByText("é inválido ou já expirou", { exact: false })).toBeVisible();
+    await expect(page.getByText("Este link é inválido ou já expirou.")).toBeVisible();
     await expect(page.getByLabel("Nova senha")).toHaveCount(0);
     expect(putCalls(state)).toHaveLength(0);
   });

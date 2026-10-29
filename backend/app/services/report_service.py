@@ -4,9 +4,14 @@ Rotas finas em `app/api/v1/reports.py`; consultas em `report_repository`;
 formatos em `report_export`; catálogo em `report_catalog`.
 
 REGRAS
-- Escopo de unidade sempre (ADM sem bypass). Unidade/inventário informado como
-  filtro que seja alheio, inexistente ou malformado => `ReportNotFoundError`
-  (MESMA 404, sem oráculo).
+- Escopo de unidade sempre (ADM sem bypass). Unidade, inventário, SALA ou
+  RESPONSÁVEL informado como filtro que seja alheio, inexistente ou malformado
+  => `ReportNotFoundError` (MESMA 404, sem oráculo). O `<select>` da tela é
+  conveniência: a validação é inteiramente aqui.
+- Catálogo por ATOR: filtros `enum` marcados com `OPTIONS_SOURCE_KEY` têm as
+  opções resolvidas no banco, dentro do escopo de unidade (`bond_status`:
+  valores distintos dos bens visíveis + `__none__` quando há bem sem vínculo).
+  Nenhuma opção é codificada à mão -- o vínculo vem da planilha e muda.
 - Exclusão lógica respeitada: bens com `deleted_at` ficam fora; `include_deleted`
   só vale para ADM (a rota nega e audita os demais; aqui há defesa em profundidade).
 - Perfil RH: colunas de texto livre (observações/motivo) não são consultadas.
@@ -31,11 +36,20 @@ from sqlalchemy.orm import Session
 from app.authorization.rbac import apply_unit_scope, units_outside_scope
 from app.models.audit import AuditLog
 from app.models.inventory import Inventory
+from app.models.people import ResponsiblePerson
+from app.models.units import Room
 from app.services import report_export as export
 from app.services import report_repository as repo
+from app.services.asset_service import (
+    BOND_STATUS_NONE,
+    bond_status_options,
+    has_assets_without_bond_status,
+)
 from app.services.report_catalog import (
     EXPORT_FORMATS,
     MAX_EXPORT_ROWS,
+    OPTIONS_BOND_STATUS,
+    OPTIONS_SOURCE_KEY,
     REPORTS,
     visible_columns,
 )
@@ -114,7 +128,34 @@ class ReportService:
 
     # -- catálogo ------------------------------------------------------------
 
-    def catalog(self) -> dict[str, Any]:
+    def _dynamic_options(self, actor_id: Any, source: str) -> list[str]:
+        """Opções de um filtro `enum` dinâmico, SEMPRE no escopo de unidade do ator.
+
+        `bond_status`: valores distintos (grafia mais frequente de cada grupo sem
+        caixa) dos bens visíveis -- fonte única com `GET /assets/bond-statuses`
+        --, em ordem alfabética estável, mais `__none__` ("sem vínculo") no FIM,
+        só quando existe bem sem vínculo no escopo. Nada é codificado à mão: a
+        planilha é a origem do valor e muda a cada importação.
+        """
+        if source != OPTIONS_BOND_STATUS:  # defesa: catálogo e serviço fora de sincronia
+            raise ReportError()
+        options = [item["value"] for item in bond_status_options(self._db, actor_id)]
+        if has_assets_without_bond_status(self._db, actor_id):
+            options.append(BOND_STATUS_NONE)
+        return options
+
+    def _filters(self, actor_id: Any, report: Any) -> list[dict[str, Any]]:
+        """Filtros do catálogo (cópias: os dicts do módulo nunca são mutados)."""
+        resolved = []
+        for spec in report.filters:
+            flt = dict(spec)
+            source = flt.pop(OPTIONS_SOURCE_KEY, None)
+            if source is not None:
+                flt["options"] = self._dynamic_options(actor_id, source)
+            resolved.append(flt)
+        return resolved
+
+    def catalog(self, actor_id: Any) -> dict[str, Any]:
         reports = []
         for report in REPORTS.values():
             reports.append({
@@ -125,7 +166,7 @@ class ReportService:
                 "formats": list(EXPORT_FORMATS),
                 "columns": [{"key": c.key, "label": c.label}
                             for c in visible_columns(report, can_view_internal=self._can_view_internal)],
-                "filters": list(report.filters),
+                "filters": self._filters(actor_id, report),
                 "sorts": list(report.sorts),
                 "default_sort": report.default_sort,
                 "include_deleted_allowed": report.supports_deleted and self._is_adm,
@@ -148,13 +189,24 @@ class ReportService:
         return parsed
 
     def _scoped_inventory(self, actor_id: Any, raw: Any) -> uuid.UUID | None:
+        return self._scoped_row(actor_id, raw, Inventory, Inventory.unit_id)
+
+    def _scoped_room(self, actor_id: Any, raw: Any) -> uuid.UUID | None:
+        """Sala do filtro: fora do escopo, inexistente ou malformada => MESMA 404."""
+        return self._scoped_row(actor_id, raw, Room, Room.unit_id)
+
+    def _scoped_person(self, actor_id: Any, raw: Any) -> uuid.UUID | None:
+        """Responsável do filtro (dado pessoal): alheio/inexistente => MESMA 404."""
+        return self._scoped_row(actor_id, raw, ResponsiblePerson, ResponsiblePerson.unit_id)
+
+    def _scoped_row(self, actor_id: Any, raw: Any, model: Any, unit_column: Any) -> uuid.UUID | None:
         if raw is None:
             return None
         parsed = _parse_uuid(raw)
         found = None
         if parsed is not None:
             found = apply_unit_scope(
-                self._db.query(Inventory.id).filter(Inventory.id == parsed), Inventory.unit_id,
+                self._db.query(model.id).filter(model.id == parsed), unit_column,
                 actor_id, self._db,
             ).first()
         if found is None:
@@ -205,7 +257,8 @@ class ReportService:
             flt = repo.AssetFilters(
                 q=query.q, unit_id=self._scoped_unit(actor_id, query.unit_id),
                 owner_unit_id=self._scoped_unit(actor_id, query.owner_unit_id),
-                room_id=query.room_id, responsible_person_id=query.responsible_person_id,
+                room_id=self._scoped_room(actor_id, query.room_id),
+                responsible_person_id=self._scoped_person(actor_id, query.responsible_person_id),
                 located=query.located, bond=query.bond_status,
             )
             total, rows = repo.fetch_assets(self._db, actor_id, flt, **common)

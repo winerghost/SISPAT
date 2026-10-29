@@ -8,7 +8,7 @@
 
 import { ApiError } from "@/lib/api-client";
 import { rateLimitMessage } from "@/lib/api-errors";
-import type { UserRole } from "@/lib/users-api";
+import type { UserRole, UserSummary } from "@/lib/users-api";
 
 const DATE_TIME = new Intl.DateTimeFormat("pt-BR", {
   timeZone: "America/Araguaina",
@@ -61,6 +61,8 @@ export const OPERATION_LABEL: Record<string, string> = {
   USER_AVATAR_REMOVED: "Foto removida",
   USER_INVITED: "Convite enviado",
   USER_ACCESS_REVOKED: "Acesso revogado",
+  REVOKE_ACCESS: "Acesso revogado",
+  USER_DELETED: "Usuário excluído (anonimizado)",
   LOGIN: "Entrada no sistema",
 };
 
@@ -70,7 +72,43 @@ export const CHANGE_FIELD_LABEL: Record<string, string> = {
   active: "Ativo",
   avatar: "Foto",
   sessions_revoked_at: "Sessões encerradas em",
+  deleted_at: "Excluído em",
+  anonymized_at: "Anonimizado em",
 };
+
+// -----------------------------------------------------------------------------
+// Exclusão lógica + anonimização
+// -----------------------------------------------------------------------------
+// Depois da exclusão a linha do usuário continua existindo (o `audit_logs`
+// referencia o `actor_user_id`), mas sem dado pessoal: o backend troca o nome
+// por um rótulo fixo e o e-mail por um endereço único e não roteável. A tela
+// NUNCA mostra esse endereço técnico — mostra o rótulo abaixo. O sinal usado é
+// `deleted_at`/`anonymized_at` do próprio payload, nunca o formato da string
+// (adivinhar o formato do e-mail anonimizado mascararia usuários legítimos).
+// -----------------------------------------------------------------------------
+
+/** Rótulo exibido no lugar do nome de um usuário excluído/anonimizado. */
+export const ANONYMIZED_USER_LABEL = "Usuário excluído";
+
+/** `true` quando o backend já marcou a linha como excluída/anonimizada. */
+export function isDeletedUser(user: Pick<UserSummary, "deleted_at" | "anonymized_at">): boolean {
+  return !!user.deleted_at || !!user.anonymized_at;
+}
+
+/** Nome a exibir: o rótulo anonimizado quando o usuário foi excluído. */
+export function userDisplayName(user: Pick<UserSummary, "name" | "deleted_at" | "anonymized_at">): string {
+  return isDeletedUser(user) ? ANONYMIZED_USER_LABEL : user.name;
+}
+
+/**
+ * E-mail a exibir, ou `null` para usuário excluído — o endereço anonimizado é
+ * ruído técnico e o original não existe mais em lugar nenhum.
+ */
+export function userDisplayEmail(
+  user: Pick<UserSummary, "email" | "deleted_at" | "anonymized_at">,
+): string | null {
+  return isDeletedUser(user) ? null : user.email;
+}
 
 const CODE = {
   versionConflict: "version_conflict",
@@ -85,6 +123,9 @@ const CODE = {
   unsupported: "unsupported_image",
   storage: "storage_unavailable",
   authProvider: "auth_provider_unavailable",
+  // Exclusão de usuário (contrato real de `POST /users/<id>/delete`).
+  confirmMismatch: "confirmation_mismatch",
+  rateLimitUnavailable: "rate_limit_unavailable",
 } as const;
 
 /** Código do backend normalizado (o contrato mistura `AAL2_REQUIRED` e `not_found`). */
@@ -108,6 +149,21 @@ export function isNotFound(error: unknown): boolean {
   return error instanceof ApiError && error.status === 404;
 }
 
+/** 400 — corpo recusado (campo extra, tipo inválido...). */
+export function isBadRequest(error: unknown): boolean {
+  return error instanceof ApiError && error.status === 400;
+}
+
+/** `400 confirmation_mismatch` — o `confirm_text` não é o e-mail do alvo. */
+export function isConfirmationMismatch(error: unknown): boolean {
+  return error instanceof ApiError && error.status === 400 && errorCode(error) === CODE.confirmMismatch;
+}
+
+/** 409 — autorrevogação, último ADM ou `version` divergente. */
+export function isConflict(error: unknown): boolean {
+  return error instanceof ApiError && error.status === 409;
+}
+
 export const CONFLICT_MESSAGE =
   "Outra pessoa alterou este usuário enquanto você editava. Os dados foram recarregados — revise e tente de novo.";
 
@@ -116,6 +172,13 @@ export const AAL2_MESSAGE =
 
 export const REAUTH_MESSAGE =
   "Por segurança, confirme o código do seu aplicativo autenticador antes de resetar a verificação em duas etapas de outra pessoa.";
+
+export const REAUTH_MESSAGE_DELETE =
+  "Por segurança, confirme o código do seu aplicativo autenticador antes de excluir definitivamente um usuário.";
+
+/** `400 confirmation_mismatch` do `POST /users/<id>/delete`. */
+export const DELETE_CONFIRM_MISMATCH =
+  "O e-mail digitado não confere com o do usuário. Nada foi excluído. Confira o endereço exato e tente de novo.";
 
 /**
  * Mensagem humana para qualquer erro da gestão de usuários / foto.
@@ -148,6 +211,10 @@ export function userErrorMessage(error: unknown, fallback: string): string {
   if (code === CODE.authProvider || error.status === 502) {
     return "O provedor de autenticação não respondeu. Nada foi alterado; tente novamente em instantes. Se persistir, avise o suporte.";
   }
+  if (code === CODE.rateLimitUnavailable) {
+    return "O controle de limite de requisições está indisponível. Por segurança a ação foi recusada e nada foi alterado; tente novamente em instantes.";
+  }
+  if (code === CODE.confirmMismatch) return DELETE_CONFIRM_MISMATCH;
   if (code === CODE.storage || (error.status === 503 && !code)) {
     return "O armazenamento de fotos está indisponível no momento. O restante do sistema continua funcionando.";
   }

@@ -64,7 +64,8 @@ test.describe("proteção de rotas sem sessão", () => {
     await page.goto("/ativar-conta");
     await waitForHydration(page);
     await expect(page).toHaveURL(/\/ativar-conta$/);
-    await expect(page.getByText("Este link de convite é inválido")).toBeVisible();
+    // Sem `type` na URL o texto é neutro (F3), nunca "convite".
+    await expect(page.getByText("Este link é inválido ou já expirou.")).toBeVisible();
   });
 });
 

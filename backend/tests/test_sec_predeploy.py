@@ -53,12 +53,22 @@ BASELINE_0001_USERS_COLUMNS = frozenset(
 COLUMNS_FROM_0005 = frozenset(
     {"version", "sessions_revoked_at", "avatar_object_key", "deactivated_at", "deactivated_by"}
 )
+# Colunas da exclusão lógica de usuário (migração 0019_user_soft_delete,
+# espelho sql/0022_user_soft_delete.sql). `require_auth` LÊ `deleted_at` para
+# recusar (401) o JWT de um usuário excluído, então estas colunas entram na
+# consulta de autenticação: aplicar o espelho `.sql` no banco é PRÉ-REQUISITO
+# de implantar a imagem nova do backend (mesma classe do PREDEPLOY-01). A
+# ordem está registrada no cabeçalho das duas migrações e no plano
+# docs/deploy/PLANO_ACAO_USUARIOS_CONVITE_2026-10-28.md §2/§6.
+COLUMNS_FROM_0019 = frozenset({"deleted_at", "deleted_by", "anonymized_at"})
 # Estado REAL de `users` em produção. A 0005 foi aplicada em produção
 # (verificação do coordenador em 2026-10-14, information_schema.columns;
 # registrado em docs/security/evidence/settings-module-etapa2.md). Se uma
 # migração futura adicionar colunas lidas por `require_auth`, atualize esta
 # constante SOMENTE depois de confirmar a aplicação em produção.
-PRODUCTION_USERS_COLUMNS = BASELINE_0001_USERS_COLUMNS | COLUMNS_FROM_0005
+PRODUCTION_USERS_COLUMNS = (
+    BASELINE_0001_USERS_COLUMNS | COLUMNS_FROM_0005 | COLUMNS_FROM_0019
+)
 
 
 def _token(**overrides: Any) -> str:
@@ -137,7 +147,9 @@ def test_query_de_autenticacao_seleciona_colunas_criadas_pela_0005():
     sql, columns = _auth_query_sql()
     assert "FROM users" in sql and "users.auth_user_id = %(auth_user_id_1)s" in sql
     assert COLUMNS_FROM_0005 <= columns, sorted(columns)
-    assert columns - set(BASELINE_0001_USERS_COLUMNS) == set(COLUMNS_FROM_0005)
+    assert columns - set(BASELINE_0001_USERS_COLUMNS) == set(
+        COLUMNS_FROM_0005 | COLUMNS_FROM_0019
+    )
 
 
 def test_0005_e_a_unica_migracao_que_cria_essas_colunas():
@@ -150,6 +162,23 @@ def test_0005_e_a_unica_migracao_que_cria_essas_colunas():
         source = (BACKEND_DIR / "migrations" / "versions" / f"{name}.py").read_text(encoding="utf-8")
         for column in COLUMNS_FROM_0005:
             assert not re.search(rf"users\b[^;]*ADD COLUMN[^;]*\b{column}\b", source, re.S | re.I)
+
+
+def test_0019_e_a_unica_migracao_que_cria_as_colunas_de_exclusao_logica():
+    """As colunas lidas por `require_auth` vêm SÓ da 0019 (e o espelho `.sql`
+    precisa estar aplicado antes do deploy do backend — ver COLUMNS_FROM_0019)."""
+    from importlib import import_module
+
+    m0019 = import_module("migrations.versions.0019_user_soft_delete")
+    for column in COLUMNS_FROM_0019:
+        assert f"ADD COLUMN IF NOT EXISTS {column} " in m0019.ADD_COLUMNS_SQL
+    mirror = (BACKEND_DIR / "migrations" / "sql" / "0022_user_soft_delete.sql").read_text(
+        encoding="utf-8"
+    )
+    for column in COLUMNS_FROM_0019:
+        assert f"ADD COLUMN IF NOT EXISTS {column} " in mirror
+    _sql, columns = _auth_query_sql()
+    assert "deleted_at" in columns  # é o que exige a ordem "migração antes do deploy"
 
 
 def test_autenticacao_compativel_com_schema_de_producao():
@@ -173,6 +202,10 @@ _USERS_0001_SQLITE = (
 _USERS_0005_SQLITE = _USERS_0001_SQLITE + (
     ", version INTEGER NOT NULL DEFAULT 1, sessions_revoked_at TEXT, avatar_object_key TEXT, "
     "deactivated_at TEXT, deactivated_by TEXT"
+)
+# + colunas da 0019 (exclusão lógica), lidas por `require_auth`.
+_USERS_0019_SQLITE = _USERS_0005_SQLITE + (
+    ", deleted_at TEXT, deleted_by TEXT, anonymized_at TEXT"
 )
 
 
@@ -215,10 +248,30 @@ def test_sem_a_0005_toda_requisicao_autenticada_vira_500_e_health_segue_200(capl
     assert health.status_code == 200 and health.get_json() == {"status": "ok"}
 
 
-def test_com_a_0005_aplicada_a_mesma_requisicao_volta_a_401_de_usuario_desconhecido():
-    """Controle positivo: com as colunas da 0005, a consulta roda e o fluxo
-    normal de autenticação responde 401 (usuário local inexistente)."""
+def test_sem_a_0019_toda_requisicao_autenticada_tambem_vira_500(caplog):
+    """Mesma classe do PREDEPLOY-01 para a 0019 (exclusão lógica): o SELECT de
+    `require_auth` lê `users.deleted_at`. Num banco com a 0005 mas SEM a 0019,
+    toda requisição autenticada vira 500 — por isso o espelho
+    `sql/0022_user_soft_delete.sql` tem de ser aplicado ANTES de subir a
+    imagem nova do backend (o healthcheck não detecta)."""
     engine = _sqlite_with_users(_USERS_0005_SQLITE)
+    client = create_app().test_client()
+    with _db_patched(engine), caplog.at_level("ERROR"):
+        me = client.get("/api/v1/me", headers=_bearer())
+        health = client.get("/api/health")
+    assert me.status_code == 500
+    assert me.get_json() == {
+        "error": {"code": "internal_error", "message": "Erro interno do servidor."}
+    }
+    assert "deleted_at" not in me.get_data(as_text=True)
+    assert "no such column: users.deleted_at" in caplog.text
+    assert health.status_code == 200
+
+
+def test_com_a_0005_e_a_0019_aplicadas_a_requisicao_volta_a_401_de_usuario_desconhecido():
+    """Controle positivo: com as colunas da 0005 e da 0019, a consulta roda e
+    o fluxo normal de autenticação responde 401 (usuário local inexistente)."""
+    engine = _sqlite_with_users(_USERS_0019_SQLITE)
     client = create_app().test_client()
     with _db_patched(engine):
         me = client.get("/api/v1/me", headers=_bearer())

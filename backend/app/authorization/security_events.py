@@ -63,6 +63,12 @@ EVENT_USER_MFA_RESET = "USER_MFA_RESET"
 EVENT_REAUTH_REQUIRED = "REAUTH_REQUIRED"
 EVENT_USER_ADMIN_BLOCKED = "USER_ADMIN_BLOCKED"
 EVENT_USER_PROVIDER_SYNC_FAILED = "USER_PROVIDER_SYNC_FAILED"
+# Exclusão de conta (lógica + anonimização irreversível): a operação mais
+# destrutiva do módulo, por isso evento PRÓPRIO e não um `USER_ACCESS_REVOKED`
+# com detalhe. Ver `app.services.user_deletion_service`; nenhum dado pessoal
+# entra nos detalhes (o e-mail só aparece MASCARADO, no evento de negócio
+# `USER_DELETED` do `audit_logs`).
+EVENT_USER_DELETED = "USER_DELETED"
 # E-mail (app.services.email): envio e teste administrativo.
 EVENT_EMAIL_SENT = "EMAIL_SENT"
 EVENT_EMAIL_FAILED = "EMAIL_FAILED"

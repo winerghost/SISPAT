@@ -421,6 +421,26 @@ class PanelDataQuery(_Query):
         return [name for name in type(self).model_fields if getattr(self, name) is not None]
 
 
+LocatedRecordsSort = Literal[
+    "patrimony_number", "-patrimony_number", "description", "-description", "located", "-located",
+]
+
+
+class LocatedRecordsQuery(_Query):
+    """Registros de uma barra de `located_by_unit_chart` (allowlists; 400 sem eco).
+
+    `unit_id`: UUID da unidade OU o literal `outras` (unidades fora do top N).
+    """
+
+    unit_id: uuid.UUID | Literal["outras"]
+    located: LocatedStatus | None = None
+    familia: FamiliaFiltro | None = None
+    categoria: EquipamentoCategoriaFiltro | None = None
+    page: PageNumber = 1
+    page_size: PageSize = DEFAULT_PAGE_SIZE
+    sort: LocatedRecordsSort = "patrimony_number"
+
+
 class PanelExportQuery(PanelDataQuery):
     format: ExportFormat = "csv"
 

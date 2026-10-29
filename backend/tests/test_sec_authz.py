@@ -48,6 +48,7 @@ ALL_ADMIN_PERMISSIONS = {
     "users.reset_password",
     "users.reset_mfa",
     "users.avatar.manage",
+    "users.delete",
     "audit.read",
 }
 
@@ -92,6 +93,12 @@ ADMIN_ENDPOINTS = [
     ("POST", f"/api/v1/users/{_TARGET_USER_ID}/deactivate", {"version": 1}, "users.deactivate"),
     ("POST", f"/api/v1/users/{_TARGET_USER_ID}/activate", {"version": 1}, "users.activate"),
     ("POST", f"/api/v1/users/{_TARGET_USER_ID}/revoke-sessions", None, "users.revoke_sessions"),
+    (
+        "POST",
+        f"/api/v1/users/{_TARGET_USER_ID}/delete",
+        {"version": 1, "confirm_text": "alvo@exemplo.invalid"},
+        "users.delete",
+    ),
     ("POST", f"/api/v1/users/{_TARGET_USER_ID}/password-reset", None, "users.reset_password"),
     ("POST", f"/api/v1/users/{_TARGET_USER_ID}/mfa-reset", None, "users.reset_mfa"),
     ("GET", f"/api/v1/users/{_TARGET_USER_ID}/audit", None, "audit.read"),

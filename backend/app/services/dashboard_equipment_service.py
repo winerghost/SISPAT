@@ -1,4 +1,4 @@
-"""Dados dos 12 painéis de equipamentos do dashboard (ONDA 2).
+"""Dados dos 13 painéis de equipamentos do dashboard (ONDA 2).
 
 Contrato: `docs/architecture/dashboard-api.md` ("Dados dos painéis").
 
@@ -219,6 +219,64 @@ def equipment_by_unit_chart(db: Any, actor_id: Any, filters: Any) -> dict[str, A
         "total": sum(r["total"] for r in rows),
     }
     return _envelope("equipment_by_unit_chart", "grafico", dados, filters)
+
+
+LOCATED_SERIES: tuple[tuple[str, str], ...] = (
+    ("SIM", "Localizados"),
+    ("NAO", "Não localizados"),
+    ("DESCONHECIDO", "Não informado"),
+)
+LOCATED_IDS = tuple(i for i, _ in LOCATED_SERIES)
+
+
+def located_unit_ranking(db: Any, actor_id: Any, where: tuple[Any, ...]) -> list[dict[str, Any]]:
+    """Unidades do escopo com a contagem por situação de localização.
+
+    Agrupa por `unit_id` (nunca funde unidades de mesmo rótulo); ordem
+    determinística `(-total, rótulo, unit_id)`, a mesma do gráfico e do
+    clique em "Outras".
+    """
+    rows = (
+        _active_assets(db, actor_id, Asset.unit_id, Asset.located, func.count(Asset.id), where=where)
+        .group_by(Asset.unit_id, Asset.located)
+        .all()
+    )
+    names = _unit_labels(db, sorted({r[0] for r in rows}, key=str))
+    per_unit: dict[Any, dict[str, int]] = {}
+    for unit_id, located, n in rows:
+        bucket = per_unit.setdefault(unit_id, {k: 0 for k in LOCATED_IDS})
+        bucket[located if located in bucket else "DESCONHECIDO"] += int(n)
+    items = [
+        {"unit_id": uid, "unidade": names[uid], "total": sum(v.values()), "valores": v}
+        for uid, v in per_unit.items()
+    ]
+    items.sort(key=lambda i: (-i["total"], i["unidade"], str(i["unit_id"])))
+    return items
+
+
+def located_by_unit_chart(db: Any, actor_id: Any, filters: Any) -> dict[str, Any]:
+    """Barras SIM/NAO/DESCONHECIDO por unidade; top N + "Outras" (soma exata)."""
+    ranking = located_unit_ranking(db, actor_id, filter_where(filters))
+    head, rest = ranking[:TOP_UNIDADES], ranking[TOP_UNIDADES:]
+    rows = [
+        {"unidade": i["unidade"], "unit_id": str(i["unit_id"]), "total": i["total"], "valores": i["valores"]}
+        for i in head
+    ]
+    if rest:
+        rows.append(
+            {
+                "unidade": OUTRAS_UNIDADES,
+                "unit_id": None,
+                "total": sum(i["total"] for i in rest),
+                "valores": {k: sum(i["valores"][k] for i in rest) for k in LOCATED_IDS},
+            }
+        )
+    dados = {
+        "series": [{"id": i, "label": label} for i, label in LOCATED_SERIES],
+        "unidades": rows,
+        "total": sum(r["total"] for r in rows),
+    }
+    return _envelope("located_by_unit_chart", "grafico", dados, filters)
 
 
 def category_distribution(db: Any, actor_id: Any, filters: Any) -> dict[str, Any]:
@@ -501,6 +559,7 @@ PANEL_BUILDERS: dict[str, Callable[[Any, Any, Any], dict[str, Any]]] = {
     "equipment_by_unit_table": _unit_table("equipment_by_unit_table", TI_CATEGORIES),
     "furniture_by_unit_table": _unit_table("furniture_by_unit_table", MOBILIARIO_CATEGORIES),
     "equipment_by_unit_chart": equipment_by_unit_chart,
+    "located_by_unit_chart": located_by_unit_chart,
     "category_distribution": category_distribution,
     "notebooks_without_docking": notebooks_without_docking,
     "workstation_ratio": workstation_ratio,

@@ -32,6 +32,13 @@ class User(TimestampMixin, Base):
         CheckConstraint(
             "phone IS NULL OR phone ~ '^[0-9]{10,13}$'", name="ck_users_phone_format"
         ).ddl_if(dialect="postgresql"),
+        # Exclusão lógica SEMPRE vem com anonimização (0019_user_soft_delete).
+        # O inverso não é exigido pela constraint: `anonymized_at` sozinho
+        # nunca é escrito pela aplicação.
+        CheckConstraint(
+            "deleted_at IS NULL OR anonymized_at IS NOT NULL",
+            name="ck_users_deleted_requires_anonymized",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -64,6 +71,29 @@ class User(TimestampMixin, Base):
     deactivated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     deactivated_by: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
+    # --- Exclusão LÓGICA + anonimização (migração 0019_user_soft_delete) ---
+    # A linha NUNCA é removida fisicamente: 4 FKs RESTRICT
+    # (`asset_movements.requested_by`, `import_previews.requested_by`,
+    # `inventories.created_by`, `invites.invited_by`) e o gatilho
+    # `trg_audit_logs_block_update_delete` (que recusa o UPDATE do
+    # `ON DELETE SET NULL` de `audit_logs.actor_user_id`) impedem o DELETE —
+    # e isso é deliberado: `audit_logs.actor_user_id` do excluído é
+    # PRESERVADO (trilha append-only). Ver
+    # `app.services.user_deletion_service`.
+    # `deleted_at` é lido em TODA consulta de usuário (listagens, escopo e
+    # `app.auth.supabase_auth.require_auth`): usuário excluído não existe
+    # para a API (404) e seu JWT recebe 401.
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    deleted_by: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    # Instante da anonimização irreversível de `name`/`email`/`phone`/
+    # `avatar_object_key`/`auth_user_id` (nenhuma cópia do dado removido é
+    # guardada em lugar algum).
+    anonymized_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
     )
 
     role_links: Mapped[list["UserRole"]] = relationship(

@@ -36,6 +36,7 @@ export const CATALOG: Entry[] = [
   { id: "equipment_by_unit_table", label: "Equipamentos de TI por unidade", description: "Tabela com exportação.", group: "tabelas", sizes: ["M", "G"], default_size: "G", exportable: true, roles: ALL },
   { id: "furniture_by_unit_table", label: "Mobiliário por unidade", description: "Tabela com exportação.", group: "tabelas", sizes: ["M", "G"], default_size: "G", exportable: true, roles: ALL },
   { id: "equipment_by_unit_chart", label: "Equipamentos por unidade (gráfico)", description: "Barras agrupadas.", group: "graficos", sizes: ["P", "M", "G"], default_size: "G", exportable: false, roles: ALL },
+  { id: "located_by_unit_chart", label: "Localização dos bens por unidade", description: "Barras por situação de localização; clique lista os bens.", group: "graficos", sizes: ["P", "M", "G"], default_size: "G", exportable: false, roles: ALL },
   { id: "category_distribution", label: "Distribuição por categoria", description: "Percentual por família e categoria.", group: "graficos", sizes: ["P", "M", "G"], default_size: "M", exportable: false, roles: ALL },
   { id: "notebooks_without_docking", label: "Notebooks sem docking", description: "Estimativa por unidade.", group: "analises", sizes: ["P", "M", "G"], default_size: "M", exportable: false, roles: ["ADM", "USER"] },
   { id: "workstation_ratio", label: "Monitores por computador", description: "Razão por posto.", group: "analises", sizes: ["P", "M", "G"], default_size: "P", exportable: false, roles: ["ADM", "USER"] },
@@ -60,6 +61,118 @@ const unitRow = (unidade: string, vals: Record<string, number>) => ({
   valores: vals,
 });
 
+// ---------------------------------------------------------------------------
+// Painel de localização (located_by_unit_chart): dados e registros SINTÉTICOS.
+// ---------------------------------------------------------------------------
+
+export const PFN_UNIT_ID = "60000000-0000-4000-8000-000000000001";
+export const CGU_UNIT_ID = "60000000-0000-4000-8000-000000000002";
+export const LOCATED_SERIES = [
+  { id: "SIM", label: "Localizados" },
+  { id: "NAO", label: "Não localizados" },
+  { id: "DESCONHECIDO", label: "Não informado" },
+];
+const LOCATED_COUNTS: { unidade: string; unit_id: string | null; v: Record<string, number> }[] = [
+  { unidade: "PFN-TO", unit_id: PFN_UNIT_ID, v: { SIM: 120, NAO: 12, DESCONHECIDO: 3 } },
+  { unidade: "CGU-TO", unit_id: CGU_UNIT_ID, v: { SIM: 5, NAO: 0, DESCONHECIDO: 2 } },
+  { unidade: "Outras", unit_id: null, v: { SIM: 4, NAO: 2, DESCONHECIDO: 0 } },
+];
+export const LOCATED_CHART = {
+  familia: "TI",
+  familia_label: "Tecnologia da Informação",
+  series: LOCATED_SERIES,
+  unidades: LOCATED_COUNTS.map((u) => ({
+    unidade: u.unidade,
+    unit_id: u.unit_id,
+    total: Object.values(u.v).reduce((a, b) => a + b, 0),
+    valores: u.v,
+  })),
+  total: 148,
+};
+
+interface LocatedMockRecord {
+  id: string;
+  patrimony_number: string;
+  description: string | null;
+  unidade: string;
+  sala: string | null;
+  located: string;
+  equipment_category: string | null;
+  classification_confidence: string | null;
+  group: string;
+}
+
+function makeLocatedRecords(): LocatedMockRecord[] {
+  const out: LocatedMockRecord[] = [];
+  let n = 0;
+  for (const u of LOCATED_COUNTS) {
+    for (const [located, count] of Object.entries(u.v)) {
+      for (let i = 0; i < count; i++) {
+        n += 1;
+        out.push({
+          id: `70000000-0000-4000-8000-${String(n).padStart(12, "0")}`,
+          patrimony_number: String(100000 + n),
+          description: `Bem sintético ${n}`,
+          unidade: u.unit_id === null ? `Unidade extra ${i % 2}` : u.unidade,
+          sala: i % 3 === 0 ? null : `Sala ${i % 5}`,
+          located,
+          equipment_category: i % 2 ? "NOTEBOOK" : "MONITOR",
+          classification_confidence: "ALTA",
+          group: u.unit_id ?? "outras",
+        });
+      }
+    }
+  }
+  return out;
+}
+
+export interface LocatedRecordsMock {
+  /** Status forçado (404/500...). */
+  status: number | null;
+  /** Sempre página vazia (200, total 0). */
+  empty: boolean;
+  /** Substitui a descrição dos registros (XSS). */
+  description?: string;
+  /** Query strings recebidas. */
+  calls: string[];
+}
+
+export function defaultLocatedRecordsMock(init: Partial<LocatedRecordsMock> = {}): LocatedRecordsMock {
+  return { status: null, empty: false, calls: [], ...init };
+}
+
+const LOCATED_DATA = makeLocatedRecords();
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/** Espelha o contrato de GET .../located_by_unit_chart/records (validação rígida, página vazia = 200). */
+export function locatedRecordsReply(query: URLSearchParams, mock: LocatedRecordsMock): { status: number; body: unknown } {
+  mock.calls.push(query.toString());
+  const bad = { status: 400, body: { error: { code: "validation_error", message: "SISPAT_BACKEND_MSG" } } };
+  if (mock.status) return { status: mock.status, body: { error: { code: "INTERNAL", message: "SISPAT_BACKEND_MSG" } } };
+  const allowed = new Set(["unit_id", "located", "familia", "categoria", "page", "page_size", "sort"]);
+  if ([...query.keys()].some((k) => !allowed.has(k))) return bad;
+  const unit = query.get("unit_id");
+  if (!unit || (unit !== "outras" && !UUID_RE.test(unit))) return bad;
+  const located = query.get("located");
+  if (located && !["SIM", "NAO", "DESCONHECIDO"].includes(located)) return bad;
+  const pageSize = Number(query.get("page_size") ?? 50);
+  const page = Number(query.get("page") ?? 1);
+  if (![50, 100, 200].includes(pageSize) || !Number.isInteger(page) || page < 1) return bad;
+  const sort = query.get("sort") ?? "patrimony_number";
+  if (!/^-?(patrimony_number|description|located)$/.test(sort)) return bad;
+  let rows = mock.empty ? [] : LOCATED_DATA.filter((r) => r.group === unit && (!located || r.located === located));
+  const field = sort.replace("-", "") as "patrimony_number" | "description" | "located";
+  rows = [...rows].sort((a, b) => String(a[field]).localeCompare(String(b[field])) * (sort.startsWith("-") ? -1 : 1));
+  const items = rows.slice((page - 1) * pageSize, page * pageSize).map(({ group: _g, ...r }) => ({
+    ...r,
+    description: mock.description ?? r.description,
+  }));
+  return {
+    status: 200,
+    body: { items, total: rows.length, page, page_size: pageSize, pages: Math.max(1, Math.ceil(rows.length / pageSize)) },
+  };
+}
+
 export function panelPayload(id: string): { tipo: string; dados: unknown } {
   switch (id) {
     case "kpi_workstations":
@@ -78,6 +191,8 @@ export function panelPayload(id: string): { tipo: string; dados: unknown } {
     }
     case "equipment_by_unit_chart":
       return { tipo: "grafico", dados: { familia: "TI", familia_label: "Tecnologia da Informação", series: TI_COLS, unidades: [unitRow("PFN-TO", { COMPUTADOR: 20, NOTEBOOK: 10, MONITOR: 31 }), unitRow("CGU-TO", { COMPUTADOR: 5, NOTEBOOK: 0, MONITOR: 7 })], total: 73 } };
+    case "located_by_unit_chart":
+      return { tipo: "grafico", dados: LOCATED_CHART };
     case "category_distribution":
       return { tipo: "distribuicao", dados: { total: 200, familias: [{ id: "TI", label: "Tecnologia da Informação", value: 150, percentual: 75.0 }, { id: "MOBILIARIO", label: "Mobiliário", value: 50, percentual: 25.0 }], categorias: [{ id: "COMPUTADOR", label: "Computador", familia: "TI", value: 100, percentual: 50.0 }, { id: "MESA", label: "Mesa", familia: "MOBILIARIO", value: 50, percentual: 25.0 }] } };
     case "notebooks_without_docking":
@@ -125,10 +240,12 @@ export interface PanelsMockState {
   payloadOverride?: Record<string, { tipo: string; dados: unknown }>;
   /** Chamadas recebidas (para asserções): método + caminho + query. */
   calls: { method: string; url: string; body?: unknown }[];
+  /** Registros do painel de localização. */
+  located: LocatedRecordsMock;
 }
 
 export function defaultPanelsMock(init: Partial<PanelsMockState> = {}): PanelsMockState {
-  return { version: 0, panels: null, catalogStatus: null, dataStatus: {}, putStatus: null, delayDataMs: 0, calls: [], ...init };
+  return { version: 0, panels: null, catalogStatus: null, dataStatus: {}, putStatus: null, delayDataMs: 0, calls: [], located: defaultLocatedRecordsMock(), ...init };
 }
 
 const EMPTY_PAYLOADS: Record<string, unknown> = {
@@ -192,6 +309,13 @@ export async function handleDashboardPanels(req: PanelsApiRequest): Promise<bool
     return true;
   }
 
+  if (path === "/v1/dashboard/panels/located_by_unit_chart/records" && method === "GET") {
+    if (!allowed.some((c) => c.id === "located_by_unit_chart")) return (await err(404, "not_found")), true;
+    const r = locatedRecordsReply(query, st.located);
+    await respond(r.status, r.body);
+    return true;
+  }
+
   if (path === "/v1/dashboard/preferences" && method === "PUT") {
     if (st.putStatus) return (await err(st.putStatus, st.putStatus === 409 ? "version_conflict" : "INTERNAL")), true;
     const incoming = (body ?? {}) as { version?: number; panels?: PanelPrefMock[]; restore_default?: boolean };
@@ -243,6 +367,10 @@ export interface EquipmentState {
   /** Corpo/versão aceitos: se `version` divergir -> 409. */
   overrides: { id: string; body: unknown }[];
   delayData: number;
+  /** Registros do painel de localização (status/vazio/XSS). */
+  located: LocatedRecordsMock;
+  /** Substitui `{tipo, dados}` de um painel (rótulos maliciosos). */
+  payloadOverride?: Record<string, { tipo: string; dados: unknown }>;
 }
 
 function makeQueue(n: number): QueueItem[] {
@@ -269,6 +397,7 @@ export async function mockEquipment(page: Page, role: Role, init: Partial<Equipm
     overrideStatus: null,
     overrides: [],
     delayData: 0,
+    located: defaultLocatedRecordsMock(),
     ...rest,
   };
   const cors = (route: Route) => ({
@@ -311,12 +440,24 @@ export async function mockEquipment(page: Page, role: Role, init: Partial<Equipm
     if (!allowed.some((c) => c.id === id)) return err(route, 404, "not_found");
     const forced = state.dataStatus[id];
     if (typeof forced === "number") return err(route, forced, "INTERNAL");
-    const payload = panelPayload(id);
+    const payload = state.payloadOverride?.[id] ?? panelPayload(id);
     if (forced === "empty") {
       const emptied: Record<string, unknown> = { cartoes: { itens: [], total: 0 }, tabela: { colunas: TI_COLS, linhas: [], total: 0 }, grafico: { familia: "TI", familia_label: "Tecnologia da Informação", series: TI_COLS, unidades: [], total: 0 }, distribuicao: { total: 0, familias: [], categorias: [] }, ranking: { metodo: "x", notebooks: 0, docking: 0, sem_docking: 0, por_unidade: [] }, razao: { computadores: 0, notebooks: 0, monitores: 0, monitores_por_computador: null, monitores_por_notebook: null }, lista: { total: 0, por_categoria: [], recentes: [] } };
       return reply(route, 200, { panel_id: id, tipo: payload.tipo, dados: emptied[payload.tipo] ?? payload.dados, filtros_aplicados: [] });
     }
     return reply(route, 200, { panel_id: id, tipo: payload.tipo, dados: payload.dados, filtros_aplicados: [...url.searchParams.keys()] });
+  });
+
+  await page.route("**/api/v1/dashboard/panels/*/records**", async (route) => {
+    const request = route.request();
+    if (request.method() === "OPTIONS") return route.fulfill({ status: 204, headers: cors(route) });
+    const url = new URL(request.url());
+    state.calls.push({ method: request.method(), url: url.pathname + url.search });
+    if (state.delayData) await new Promise((r) => setTimeout(r, state.delayData));
+    const id = url.pathname.split("/").at(-2) ?? "";
+    if (id !== "located_by_unit_chart" || !allowed.some((c) => c.id === id)) return err(route, 404, "not_found");
+    const r = locatedRecordsReply(url.searchParams, state.located);
+    return reply(route, r.status, r.body);
   });
 
   await page.route("**/api/v1/dashboard/panels/*/export**", async (route) => {

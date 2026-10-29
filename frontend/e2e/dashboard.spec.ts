@@ -237,7 +237,7 @@ test.describe("navegação", () => {
     await expect(page).toHaveURL(/\/dashboard$/, { timeout: 45_000 }); // 1ª compilação do `next dev`
   });
 
-  for (const [role, count] of [["ADM", 12], ["USER", 9], ["RH", 7]] as const) {
+  for (const [role, count] of [["ADM", 13], ["USER", 10], ["RH", 8]] as const) {
     test(`${role}: acessa /dashboard e recebe só os ${count} painéis do catálogo do backend`, async ({ page }) => {
       await open(page, "/dashboard", { role });
       await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();

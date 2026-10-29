@@ -15,6 +15,7 @@ import { FormMessage } from "@/components/ui/form-message";
 import { LoadingSkeleton } from "@/components/ui/loading-skeleton";
 import { Switch } from "@/components/ui/switch";
 import { ApiError } from "@/lib/api-client";
+import { listPeople, listRooms } from "@/lib/catalog-api";
 import { listInventories } from "@/lib/inventories-api";
 import {
   downloadReport,
@@ -28,7 +29,13 @@ import {
   type ReportFormState,
 } from "@/lib/reports-api";
 import { cn } from "@/lib/utils";
-import { fieldId, ReportFilterField, type LookupSource } from "./report-filters";
+import {
+  fieldId,
+  ReportFilterField,
+  scopedLookupOptions,
+  type LookupSource,
+  type ReportLookups,
+} from "./report-filters";
 import { ColumnPicker } from "./column-picker";
 import { sortLabel } from "./report-labels";
 
@@ -39,10 +46,16 @@ import { sortLabel } from "./report-labels";
 // temporário). Apresentação apenas: perfil, escopo de unidade, limite de linhas,
 // proteção contra injeção de fórmulas e auditoria são do backend. As colunas
 // marcadas vão em `columns` (ausente = todas; o backend valida). Nenhuma mensagem do backend é exibida.
+// Os filtros de LOOKUP declarados pelo catálogo (unidade, inventário, sala e
+// responsável) recebem aqui a lista que alimenta cada <select>; a falha de uma
+// lista só degrada aquele campo — o relatório continua exportável.
 // =============================================================================
 
 const retry = (count: number, error: unknown) =>
   !(error instanceof ApiError && error.status >= 400 && error.status < 500) && count < 1;
+
+/** Maior `page_size` aceito pelos cadastros de apoio (50/100/200). */
+const LOOKUP_PAGE_SIZE = 200;
 
 type Outcome = { tone: "success" | "empty" | "error"; text: string } | null;
 
@@ -84,8 +97,13 @@ function ReportsPanel({ reports, maxRows, formats }: { reports: ReportDef[]; max
 
   const def = reports.find((report) => report.id === selectedId) ?? reports[0]!;
   const form = forms[def.id] ?? initialReportForm(def);
-  const needsUnits = def.filters.some((f) => f.type === "unit");
+  // Listas dos filtros de LOOKUP: só são pedidas quando o catálogo declara um
+  // filtro do tipo. Salas/responsáveis também usam as unidades do escopo (para
+  // desambiguar homônimos), por isso `needsUnits` inclui os dois.
   const needsInventories = def.filters.some((f) => f.type === "inventory");
+  const needsRooms = def.filters.some((f) => f.type === "room");
+  const needsPeople = def.filters.some((f) => f.type === "person");
+  const needsUnits = def.filters.some((f) => f.type === "unit") || needsRooms || needsPeople;
 
   const unitsQuery = useAccessibleUnits(needsUnits);
   const inventoriesQuery = useQuery({
@@ -95,6 +113,31 @@ function ReportsPanel({ reports, maxRows, formats }: { reports: ReportDef[]; max
     staleTime: 60_000,
     retry,
   });
+  // `GET /rooms` e `GET /responsible-people` (os mesmos cadastros de apoio das
+  // telas de consulta): escopo de unidade, campos por perfil e teto de página
+  // são do backend. Sem `active`: um bem pode estar ligado a sala/responsável
+  // inativo e ainda precisa ser filtrável. 200 é o maior `page_size` aceito.
+  const roomsQuery = useQuery({
+    queryKey: ["reports", "rooms"],
+    queryFn: () => listRooms({ page_size: LOOKUP_PAGE_SIZE, sort: "name" }),
+    enabled: needsRooms,
+    staleTime: 60_000,
+    retry,
+  });
+  const peopleQuery = useQuery({
+    queryKey: ["reports", "people"],
+    queryFn: () => listPeople({ page_size: LOOKUP_PAGE_SIZE, sort: "name" }),
+    enabled: needsPeople,
+    staleTime: 60_000,
+    retry,
+  });
+
+  const unitCodeById = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const unit of unitsQuery.data?.units ?? []) map.set(unit.id, unit.code);
+    return map;
+  }, [unitsQuery.data]);
+
   const units: LookupSource = useMemo(
     () => ({
       options: unitsQuery.data?.units.map((unit) => ({ value: unit.id, label: `${unit.code} — ${unit.name}` })),
@@ -113,6 +156,26 @@ function ReportsPanel({ reports, maxRows, formats }: { reports: ReportDef[]; max
       failed: inventoriesQuery.isError,
     }),
     [inventoriesQuery.data, inventoriesQuery.isPending, inventoriesQuery.isError, needsInventories],
+  );
+  const rooms: LookupSource = useMemo(
+    () => ({
+      options: scopedLookupOptions(roomsQuery.data?.rooms, unitCodeById),
+      loading: needsRooms && roomsQuery.isPending,
+      failed: roomsQuery.isError,
+    }),
+    [roomsQuery.data, roomsQuery.isPending, roomsQuery.isError, needsRooms, unitCodeById],
+  );
+  const people: LookupSource = useMemo(
+    () => ({
+      options: scopedLookupOptions(peopleQuery.data?.people, unitCodeById),
+      loading: needsPeople && peopleQuery.isPending,
+      failed: peopleQuery.isError,
+    }),
+    [peopleQuery.data, peopleQuery.isPending, peopleQuery.isError, needsPeople, unitCodeById],
+  );
+  const lookups: ReportLookups = useMemo(
+    () => ({ unit: units, inventory: inventories, room: rooms, person: people }),
+    [units, inventories, rooms, people],
   );
 
   function patch(next: Partial<ReportFormState>) {
@@ -247,8 +310,7 @@ function ReportsPanel({ reports, maxRows, formats }: { reports: ReportDef[]; max
                     filter={filter}
                     value={form.filters[filter.name] ?? ""}
                     error={errors[filter.name]}
-                    units={units}
-                    inventories={inventories}
+                    lookups={lookups}
                     disabled={busy}
                     onChange={(value) => patch({ filters: { ...form.filters, [filter.name]: value } })}
                   />

@@ -5,6 +5,7 @@ import type { ReactNode } from "react";
 import { Sidebar } from "@/components/layout/sidebar";
 import { Header } from "@/components/layout/header";
 import { AuthGuard } from "@/lib/auth-guard";
+import { useIsRecoverySession } from "@/lib/recovery-session";
 import { useSupabaseSession } from "@/lib/session";
 import { useMyPreferences } from "@/lib/use-my-preferences";
 
@@ -13,6 +14,9 @@ import { useMyPreferences } from "@/lib/use-my-preferences";
 // Sem sessão (carregando ou deslogado) renderiza apenas o <main> com o
 // AuthGuard ("Verificando sessão…" / redirecionamento para /login), sem o chrome
 // do app. Só UX: a autorização é sempre do backend.
+//
+// Sessão criada por link de RECUPERAÇÃO de senha também não mostra o chrome: ela
+// só serve para definir a senha em `/ativar-conta` (correção F6).
 // =============================================================================
 
 /**
@@ -27,7 +31,8 @@ function UiPreferencesSync({ enabled }: { enabled: boolean }) {
 
 export function AppShell({ children }: { children: ReactNode }) {
   const { session, loading } = useSupabaseSession();
-  const showChrome = !loading && !!session;
+  const recoverySession = useIsRecoverySession(session);
+  const showChrome = !loading && !!session && !recoverySession;
 
   return (
     // `relative` no shell, no wrapper e no <main>: containing block de TODO elemento

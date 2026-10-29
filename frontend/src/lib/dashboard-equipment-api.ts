@@ -87,6 +87,8 @@ export interface CardsData {
 }
 export interface UnitRow {
   unidade: string;
+  /** Só no painel de localização: id da unidade (`null` = barra "Outras"). Ausente nos demais. */
+  unit_id?: string | null;
   total: number;
   valores: Record<string, number>;
 }
@@ -194,7 +196,11 @@ const isLabeled = (v: unknown): v is LabeledValue => isRec(v) && isStr(v.id) && 
 const isCardItem = (v: unknown): v is CardItem => isLabeled(v) && isInt((v as unknown as Rec).value);
 const isValues = (v: unknown): v is Record<string, number> => isRec(v) && Object.values(v).every(isInt);
 const isUnitRow = (v: unknown): v is UnitRow =>
-  isRec(v) && isStr(v.unidade) && isInt(v.total) && isValues(v.valores);
+  isRec(v) &&
+  isStr(v.unidade) &&
+  (v.unit_id === undefined || isNullable(v.unit_id, isStr)) &&
+  isInt(v.total) &&
+  isValues(v.valores);
 const isShare = (v: unknown): v is Share =>
   isCardItem(v) && isNullable((v as unknown as Rec).percentual, isNum);
 const isCategoryShare = (v: unknown): v is CategoryShare => isShare(v) && isStr((v as unknown as Rec).familia);

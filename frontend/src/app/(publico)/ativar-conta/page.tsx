@@ -11,6 +11,14 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { FormMessage } from "@/components/ui/form-message";
 import { Skeleton } from "@/components/ui/skeleton";
+import {
+  isKnownActivationMode,
+  parseActivationLink,
+  type ActivationFailure,
+  type ActivationIntent,
+  type ActivationMode,
+} from "@/lib/activation-link";
+import { getRecoveryAccessToken } from "@/lib/recovery-session";
 import { getSupabaseClient } from "@/lib/supabase-client";
 import { activateInvite, ApiError } from "@/lib/users-api";
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -24,121 +32,207 @@ import {
 } from "./activation-errors";
 
 // =============================================================================
-// /ativar-conta — destino do link de convite enviado pelo Supabase Auth
+// /ativar-conta — destino dos links de convite E de recuperação de senha
 // =============================================================================
-// Como a sessão chega a esta página — DOIS caminhos:
+// A leitura do link é PURA e fica em `@/lib/activation-link` (a mesma usada
+// pela rede de segurança da raiz). Quatro formatos chegam aqui:
 //
-//   1) Fluxo atual (token_hash). O e-mail traz
-//      `/ativar-conta?token_hash=<hash>&type=invite`. Scanners de e-mail fazem
-//      GET automático em todo link e consumiriam um link de uso único
-//      (`otp_expired` para o usuário), por isso esta página NÃO consome o
-//      token ao carregar: lê `token_hash`/`type` de `window.location.search`,
-//      remove-os da URL (history.replaceState), guarda o hash só em memória
-//      (ref/estado; nunca localStorage/sessionStorage, nunca logado) e mostra a
-//      fase "confirm". Só o clique em "Continuar" chama
-//      `supabase.auth.verifyOtp({ token_hash, type: "invite" })`, que cria a
-//      sessão. No cliente só se valida o FORMATO; a autoridade é do
-//      Supabase/backend. Falha (expirado/usado) -> fase "invalid", sem
-//      detalhes do erro.
+//   1) token_hash (fluxo ATUAL; desde 2026-10-28 o backend monta o link):
+//      `/ativar-conta?token_hash=<hash>&type=invite|recovery`.
+//      Scanners de antivírus de e-mail fazem GET automático em todo link e
+//      consumiriam um link de uso único, por isso esta página NÃO consome nada
+//      ao carregar: lê a credencial, LIMPA a URL (history.replaceState), guarda
+//      o valor só em memória (ref; nunca localStorage/sessionStorage, nunca
+//      logado) e mostra a fase "confirm". Só o clique em "Continuar" chama
+//      `verifyOtp({ token_hash, type })`. ESSA PROPRIEDADE É A CORREÇÃO DO
+//      INCIDENTE DE 2026-10-27 — não remover.
 //
-//   2) Fluxo legado (convites já enviados). O cliente de `supabase-client.ts`
-//      usa `detectSessionInUrl: true`: ao ser instanciado, o SDK detecta
-//      `#access_token=...&type=invite` (implícito), troca por sessão e limpa a
-//      URL. A página só ADOTA a sessão cujo access_token é IDÊNTICO ao do hash
-//      lido na carga: uma sessão preexistente (de outra pessoa/aba) nunca é
-//      aceita para definir senha. Sem `access_token` no hash, ou sem sessão
-//      correspondente -> "invalid". O token fica só em ref (memória), nunca logado.
+//   2) PKCE: `?code=<code>` (o `type` normalmente não vem). O cliente do
+//      navegador é implícito (sem `flowType`), então o SDK não processa `?code=`
+//      sozinho e antes desta correção um link VÁLIDO aparecia como inválido
+//      (F2). Agora o `code` é tratado igual ao token_hash: guardado em memória e
+//      trocado por sessão (`exchangeCodeForSession`) só no clique.
 //
-//   Também: `#error=access_denied&error_code=otp_expired` (hash) -> "invalid"
-//   com a mensagem "link já usado ou expirado". A rota "/" repassa
-//   `?token_hash=&type=invite|recovery` para cá (ver `auth-guard.tsx`).
+//   3) Legado implícito (`#access_token=...&type=...`): o SDK
+//      (`detectSessionInUrl: true`) troca o hash por sessão ao ser instanciado.
+//      A página só ADOTA a sessão cujo access_token é IDÊNTICO ao do hash lido
+//      na carga — uma sessão preexistente (de outra pessoa/aba) nunca é aceita
+//      para definir senha. Exceção controlada: quando a pessoa chega da raiz,
+//      vale também o access_token da sessão que o SDK anunciou como
+//      `PASSWORD_RECOVERY` nesta mesma carga (`recovery-session.ts`, F6).
 //
-//   MFA: se a sessão criada está em aal1 mas o usuário tem TOTP (nextLevel =
-//   aal2), a fase "mfa" pede o código (`mfa.challengeAndVerify`, como o login)
-//   ANTES do formulário de senha; `insufficient_aal` no `updateUser` leva à
-//   mesma fase e repete o envio. Nada do código/segredo é armazenado.
+//   4) Erro do provedor, na QUERY ou no hash (`error`, `error_code`,
+//      `error_description`): vai para a fase "invalid" com a mensagem da causa.
+//      Antes só o hash era lido: erro de recovery na query string aparecia com
+//      texto de "convite" e o `error_description` ficava na URL e no histórico
+//      (F1).
 //
-//   Erros do Supabase viram mensagens fixas em `activation-errors.ts`
-//   (nunca a mensagem crua); no console só `code`/`status`.
+// Sem `type` reconhecível o modo é "unknown" e os textos ficam NEUTROS — a tela
+// nunca afirma que é convite sem saber (F3).
+//
+// Erros do Supabase viram mensagens fixas em `activation-errors.ts` (nunca a
+// mensagem crua); no console só `code`/`status`. Falha de REDE não descarta a
+// credencial: a pessoa pode clicar de novo (F5).
+//
+// MFA: se a sessão criada está em aal1 mas o usuário tem TOTP (nextLevel =
+// aal2), a fase "mfa" pede o código (`mfa.challengeAndVerify`, como o login)
+// ANTES do formulário de senha; `insufficient_aal` no `updateUser` leva à mesma
+// fase e repete o envio. Nada do código/segredo é armazenado.
 //
 // Fluxo após a sessão existir:
 //   1. Usuário define a senha (`supabase.auth.updateUser({ password })`).
 //   2. CONVITE: em sucesso, chama `POST /api/v1/users/activate-invite` (sem
 //      corpo — o backend identifica o convite pela sessão/token atual).
 //      404/409 do backend = convite inválido/expirado — mensagem clara.
-//
-// RECUPERAÇÃO DE SENHA (o e-mail "Reset Password" também aponta para cá; não
-// há página própria de reset). O modo vem do `type` do link:
-//   - `?token_hash=...&type=recovery` (template recomendado; mesmo cuidado
-//     anti-scanner do convite) -> `verifyOtp({ token_hash, type: "recovery" })`;
-//   - legado `{{ .ConfirmationURL }}` -> `#access_token=...&type=recovery` ou
-//     evento `PASSWORD_RECOVERY` do SDK.
-//   Depois do `updateUser({ password })` NÃO chama activate-invite (usuário já
-//   ativo: daria 404). Encerra a sessão local de recuperação (o próximo acesso
-//   passa pelo login e pelo MFA), mostra sucesso e leva ao /login.
+//   3. RECUPERAÇÃO: NÃO chama activate-invite (usuário já ativo: daria 404).
+//      Encerra a sessão local de recuperação (o próximo acesso passa pelo login
+//      e pelo MFA), mostra sucesso e leva ao /login.
+//   4. MODO INDETERMINADO: tenta a ativação; se o backend disser que não há
+//      convite (404/409), a senha já foi trocada — trata como redefinição.
 // =============================================================================
 
 type Phase = "checking" | "confirm" | "mfa" | "ready" | "invalid" | "activated";
-type InvalidReason = "invalid" | "expired";
-type Mode = "invite" | "recovery";
+type InvalidReason = ActivationFailure;
+type Mode = ActivationMode;
 
 /** Após redefinir a senha, segue sozinho para o login (o botão permite ir antes). */
 const RECOVERY_REDIRECT_MS = 4000;
-const RECOVERY_STEPS = ["Validar link", "Nova senha", "Senha redefinida"];
 const RECOVERY_ERROR = "Não foi possível redefinir a senha agora. Abra o link de recuperação novamente.";
 
-// Apresentação: indicador de etapas (reflete só a fase REAL), skeleton enquanto
-// o link é validado, troca de fase com fade (FadeIn), erro com entrada
-// discreta (AnimatedFormMessage, role="alert") e `<Button loading>`.
-const ACTIVATION_STEPS = ["Validar convite", "Definir senha", "Conta ativada"];
+// ---------------------------------------------------------------------------
+// Textos por MODO (convite / recuperação / indeterminado) — nunca afirmam o que
+// o link não disse. Apresentação: indicador de etapas (reflete só a fase REAL),
+// skeleton enquanto o link é validado, troca de fase com fade (FadeIn), erro com
+// entrada discreta (AnimatedFormMessage, role="alert") e `<Button loading>`.
+// ---------------------------------------------------------------------------
 
-const TOKEN_HASH_MAX_LENGTH = 512;
-
-function isMode(type: string | null): type is Mode {
-  return type === "invite" || type === "recovery";
+interface ModeCopy {
+  title: string;
+  steps: [string, string, string];
+  stepsLabel: string;
+  checking: string;
+  confirmTitle: string;
+  confirmText: string;
+  invalidTitle: string;
+  /** Sujeito da frase de link inválido ("Este link de convite", ...). */
+  subject: string;
+  /** Como pedir um novo link. */
+  request: string;
+  passwordTitle: string;
+  passwordHint: string;
+  submit: string;
+  submitting: string;
+  doneTitle: string;
 }
 
-/** Valida só o FORMATO (type=invite|recovery, hash não vazio, tamanho e charset razoáveis). */
-function isPlausibleTokenHash(value: string | null, type: string | null): value is string {
-  return (
-    isMode(type) &&
-    !!value &&
-    value.length <= TOKEN_HASH_MAX_LENGTH &&
-    /^[A-Za-z0-9._~+/=-]+$/.test(value)
-  );
+const MODE_COPY: Record<Mode, ModeCopy> = {
+  invite: {
+    title: "Ativar conta",
+    steps: ["Validar convite", "Definir senha", "Conta ativada"],
+    stepsLabel: "Etapas da ativação",
+    checking: "Validando seu link de convite…",
+    confirmTitle: "Confirme a ativação",
+    confirmText:
+      "Recebemos o seu convite para o SISPAT-AGU. Selecione “Continuar” para validá-lo e definir a sua senha.",
+    invalidTitle: "Link de convite inválido",
+    subject: "Este link de convite",
+    request: "Peça um novo convite a um administrador.",
+    passwordTitle: "Defina sua senha",
+    passwordHint: `Defina uma senha (mínimo de ${MIN_PASSWORD_LENGTH} caracteres) para concluir a ativação da sua conta.`,
+    submit: "Ativar conta",
+    submitting: "Ativando…",
+    doneTitle: "Ativação concluída",
+  },
+  recovery: {
+    title: "Redefinir senha",
+    steps: ["Validar link", "Nova senha", "Senha redefinida"],
+    stepsLabel: "Etapas da redefinição de senha",
+    checking: "Validando seu link de recuperação…",
+    confirmTitle: "Confirme a redefinição",
+    confirmText:
+      "Recebemos o pedido de redefinição da sua senha do SISPAT-AGU. Selecione “Continuar” para validar o link e definir a nova senha.",
+    invalidTitle: "Link de recuperação inválido",
+    subject: "Este link de recuperação",
+    request: "Peça uma nova redefinição de senha a um administrador.",
+    passwordTitle: "Defina a nova senha",
+    passwordHint: `Defina a nova senha (mínimo de ${MIN_PASSWORD_LENGTH} caracteres). A senha anterior deixa de valer.`,
+    submit: "Redefinir senha",
+    submitting: "Salvando…",
+    doneTitle: "Senha redefinida",
+  },
+  unknown: {
+    title: "Acesso por link",
+    steps: ["Validar link", "Definir senha", "Concluído"],
+    stepsLabel: "Etapas da validação do link",
+    checking: "Validando seu link…",
+    confirmTitle: "Confirme a validação do link",
+    confirmText:
+      "Recebemos um link de acesso ao SISPAT-AGU. Selecione “Continuar” para validá-lo e definir a sua senha.",
+    invalidTitle: "Link inválido",
+    subject: "Este link",
+    request: "Peça um novo link a um administrador.",
+    passwordTitle: "Defina sua senha",
+    passwordHint: `Defina uma senha (mínimo de ${MIN_PASSWORD_LENGTH} caracteres) para concluir.`,
+    submit: "Definir senha",
+    submitting: "Salvando…",
+    doneTitle: "Senha definida",
+  },
+};
+
+const REASON_CORE: Record<"expired" | "invalid", string> = {
+  expired: "já foi usado ou expirou.",
+  invalid: "é inválido ou já expirou.",
+};
+
+/** Mensagem da fase "invalid": causa (F4) + modo (F3), sem detalhe do provedor. */
+function invalidMessage(mode: Mode, reason: InvalidReason): string {
+  const copy = MODE_COPY[mode];
+  if (reason === "rate_limited") {
+    return "Houve muitas tentativas com este link. Aguarde alguns minutos e abra o link do e-mail novamente.";
+  }
+  if (reason === "session") {
+    return "A validação deste link não está mais ativa. Abra o link do e-mail novamente.";
+  }
+  return `${copy.subject} ${REASON_CORE[reason]} ${copy.request}`;
 }
 
-type UrlIntent =
-  | { kind: "token"; tokenHash: string; mode: Mode }
-  | { kind: "invalid"; mode: Mode; reason: InvalidReason }
-  | { kind: "legacy"; mode: Mode; accessToken: string | null };
+/** Causa (classificação do erro do Supabase) → motivo exibido na fase "invalid". */
+function reasonFromFailure(kind: string): InvalidReason {
+  if (kind === "expired") return "expired";
+  if (kind === "rate_limited") return "rate_limited";
+  if (kind === "session_lost") return "session";
+  return "invalid";
+}
 
-/** Lê a URL uma única vez e já a limpa (token_hash e erros nunca ficam no histórico). */
+/** `redirectType` só existe na resposta do PKCE; lido de forma defensiva. */
+function readRedirectType(data: unknown): string | null {
+  if (typeof data !== "object" || data === null || !("redirectType" in data)) return null;
+  const value = (data as { redirectType?: unknown }).redirectType;
+  return typeof value === "string" ? value : null;
+}
+
+type UrlIntent = ActivationIntent | { kind: "none"; mode: Mode };
+
+/**
+ * Lê a URL uma única vez e já a limpa (credenciais e erros nunca ficam na URL
+ * nem no histórico). O hash do fluxo LEGADO é a exceção: quem o consome é o
+ * SDK, então ele é preservado — o próprio SDK o remove depois.
+ */
 function readAndCleanUrl(): UrlIntent {
   const url = new URL(window.location.href);
-  const query = url.searchParams;
-  const hashParams = new URLSearchParams(url.hash.replace(/^#/, ""));
+  const intent = parseActivationLink(url.search, url.hash);
 
-  const hasToken = query.has("token_hash") || query.has("type");
-  const hasHashError = hashParams.has("error") || hashParams.has("error_code");
-  // Legado: o SDK lê/limpa o hash; aqui só se lê o `type` e o access_token (para
-  // adotar SOMENTE a sessão criada por este link, nunca uma preexistente).
-  if (!hasToken && !hasHashError) {
-    return {
-      kind: "legacy",
-      mode: hashParams.get("type") === "recovery" ? "recovery" : "invite",
-      accessToken: hashParams.get("access_token") || null,
-    };
+  if (intent && intent.kind !== "legacy") {
+    window.history.replaceState(window.history.state, "", url.pathname);
+    return intent;
   }
+  if (intent) return intent;
 
-  const tokenHash = query.get("token_hash");
-  const type = query.get("type");
-  window.history.replaceState(window.history.state, "", url.pathname);
-
-  const mode: Mode = type === "recovery" ? "recovery" : "invite";
-  if (hasToken && isPlausibleTokenHash(tokenHash, type)) return { kind: "token", tokenHash, mode };
-  const expired = hashParams.get("error_code") === "otp_expired";
-  return { kind: "invalid", mode, reason: expired ? "expired" : "invalid" };
+  // Sem nada na URL: só vale a sessão que o SDK anunciou como PASSWORD_RECOVERY
+  // nesta carga (chegada pela raiz, F6). Sessão preexistente nunca é aceita.
+  const recoveryToken = getRecoveryAccessToken();
+  if (recoveryToken) return { kind: "legacy", accessToken: recoveryToken, mode: "recovery" };
+  return { kind: "none", mode: "unknown" };
 }
 
 type NextStep = { phase: "ready" } | { phase: "mfa"; factorId: string };
@@ -180,22 +274,29 @@ export default function AtivarContaPage() {
   const [error, setError] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
   const [activatedRole, setActivatedRole] = useState<string | null>(null);
-  const [mode, setMode] = useState<Mode>("invite");
+  const [mode, setMode] = useState<Mode>("unknown");
   // Passo TOTP (só memória; o código nunca é guardado além do input).
   const [factorId, setFactorId] = useState<string | null>(null);
   const [mfaCode, setMfaCode] = useState("");
   const [mfaError, setMfaError] = useState<string | null>(null);
   const [mfaVerifying, setMfaVerifying] = useState(false);
   const [retryAfterMfa, setRetryAfterMfa] = useState(false);
-  const modeRef = useRef<Mode>("invite");
+  const modeRef = useRef<Mode>("unknown");
   const router = useRouter();
 
+  // Credenciais de uso único: só em memória, nunca em storage, nunca logadas.
   const tokenHashRef = useRef<string | null>(null);
+  const codeRef = useRef<string | null>(null);
   const legacyTokenRef = useRef<string | null>(null);
   const adoptedRef = useRef(false);
   const intentRef = useRef<UrlIntent["kind"] | null>(null);
   const verifyingRef = useRef(false);
   const focusRef = useRef<HTMLHeadingElement>(null);
+
+  function applyMode(next: Mode) {
+    modeRef.current = next;
+    setMode(next);
+  }
 
   function applyNextStep(step: NextStep) {
     if (step.phase === "mfa") {
@@ -213,13 +314,18 @@ export default function AtivarContaPage() {
       intentRef.current = intent.kind;
       modeRef.current = intent.mode;
       setMode(intent.mode);
-      if (intent.kind === "token") tokenHashRef.current = intent.tokenHash;
-      if (intent.kind === "legacy") legacyTokenRef.current = intent.accessToken;
-      if (intent.kind === "token") setPhase("confirm");
-      else if (intent.kind === "invalid") {
-        setInvalidReason(intent.reason);
+      if (intent.kind === "token") {
+        tokenHashRef.current = intent.tokenHash;
+        setPhase("confirm");
+      } else if (intent.kind === "code") {
+        codeRef.current = intent.code;
+        setPhase("confirm");
+      } else if (intent.kind === "error") {
+        setInvalidReason(intent.failure);
         setPhase("invalid");
-      } else if (!intent.accessToken) {
+      } else if (intent.kind === "legacy") {
+        legacyTokenRef.current = intent.accessToken;
+      } else {
         // Sem credencial na URL: NUNCA aceitar sessão preexistente (de outra pessoa).
         setPhase("invalid");
       }
@@ -234,6 +340,11 @@ export default function AtivarContaPage() {
       if (!active || adoptedRef.current || !accessToken) return;
       if (accessToken !== legacyTokenRef.current) return;
       adoptedRef.current = true;
+      // O token já virou sessão: tirar o hash da URL e do histórico (quando a
+      // pessoa chegou pela raiz, o SDK não limpa de novo).
+      if (window.location.hash) {
+        window.history.replaceState(window.history.state, "", window.location.pathname);
+      }
       void nextStepAfterSession(supabase).then((step) => {
         if (active) applyNextStep(step);
       });
@@ -246,10 +357,7 @@ export default function AtivarContaPage() {
     });
     const { data: subscription } = supabase.auth.onAuthStateChange((event, session) => {
       if (!active) return;
-      if (event === "PASSWORD_RECOVERY") {
-        modeRef.current = "recovery";
-        setMode("recovery");
-      }
+      if (event === "PASSWORD_RECOVERY") applyMode("recovery");
       adopt(session?.access_token);
     });
 
@@ -265,28 +373,54 @@ export default function AtivarContaPage() {
     if (phase !== "checking") focusRef.current?.focus();
   }, [phase]);
 
+  /**
+   * Valida o link no clique da pessoa (nunca na carga): `verifyOtp` para
+   * `token_hash`, `exchangeCodeForSession` para `?code=`.
+   *
+   * F5: a credencial só é descartada quando o servidor dá uma resposta
+   * DEFINITIVA. Falha de rede/5xx e limite de tentativas preservam o valor em
+   * memória para uma nova tentativa — antes, qualquer falha zerava o token e a
+   * pessoa via "expirado" sem chance de tentar de novo.
+   */
   async function handleConfirm() {
     const tokenHash = tokenHashRef.current;
-    if (!tokenHash || verifyingRef.current) return;
+    const code = codeRef.current;
+    // `verifyOtp` exige um `type` conhecido; `?code=` costuma vir sem `type`.
+    const knownMode = isKnownActivationMode(modeRef.current) ? modeRef.current : null;
+    const useToken = tokenHash !== null && knownMode !== null;
+    if ((!useToken && code === null) || verifyingRef.current) return;
     verifyingRef.current = true;
     setConfirming(true);
-    tokenHashRef.current = null; // uso único: nunca reenvia o mesmo hash
+    setError(null);
     try {
       const supabase = getSupabaseClient();
-      const { data, error: verifyError } = await supabase.auth.verifyOtp({
-        token_hash: tokenHash,
-        type: modeRef.current,
-      });
+      const result =
+        useToken && tokenHash && knownMode
+          ? await supabase.auth.verifyOtp({ token_hash: tokenHash, type: knownMode })
+          : await supabase.auth.exchangeCodeForSession(code ?? "");
+      const { data, error: verifyError } = result;
       if (verifyError || !data.session) {
         const failure = classifyAuthError(verifyError);
         logAuthFailure(failure, "validar link");
-        setInvalidReason(failure.kind === "expired" ? "expired" : "invalid");
+        if (failure.kind === "network" || failure.kind === "rate_limited") {
+          setError(failure.message); // credencial preservada: dá para tentar de novo
+          return;
+        }
+        tokenHashRef.current = null; // resposta definitiva: uso único
+        codeRef.current = null;
+        setInvalidReason(reasonFromFailure(failure.kind));
         setPhase("invalid");
         return;
       }
+      tokenHashRef.current = null;
+      codeRef.current = null;
+      // PKCE sem `type` na URL: o SDK informa se o link era de recuperação.
+      if (readRedirectType(data) === "recovery") applyMode("recovery");
       applyNextStep(await nextStepAfterSession(supabase));
-    } catch {
-      setPhase("invalid");
+    } catch (cause) {
+      // Exceção (rede/SDK): a credencial continua em memória (F5).
+      logAuthFailure(classifyAuthError(cause), "validar link");
+      setError(AUTH_FAILURE_MESSAGES.network);
     } finally {
       verifyingRef.current = false;
       setConfirming(false);
@@ -315,8 +449,9 @@ export default function AtivarContaPage() {
           setError(AUTH_FAILURE_MESSAGES.generic);
           return;
         }
-        if (failure.kind === "expired") {
-          setInvalidReason("expired");
+        // Link/sessão sem volta: sai do formulário com a causa certa (F4).
+        if (failure.kind === "expired" || failure.kind === "link_invalid" || failure.kind === "session_lost") {
+          setInvalidReason(reasonFromFailure(failure.kind));
           setPhase("invalid");
           return;
         }
@@ -332,8 +467,15 @@ export default function AtivarContaPage() {
         return;
       }
 
-      const result = await activateInvite();
-      setActivatedRole(result.role);
+      try {
+        const result = await activateInvite();
+        setActivatedRole(result.role);
+      } catch (cause) {
+        // Modo indeterminado (link sem `type`): se não havia convite, a senha
+        // já foi trocada — trata como redefinição, sem erro falso.
+        if (modeRef.current !== "unknown" || !isInviteGone(cause)) throw cause;
+        await supabase.auth.signOut({ scope: "local" }).catch(() => undefined);
+      }
       setPhase("activated");
     } catch (cause) {
       setError(modeRef.current === "recovery" ? RECOVERY_ERROR : activateErrorMessage(cause));
@@ -389,8 +531,9 @@ export default function AtivarContaPage() {
     }
   }
 
+  const copy = MODE_COPY[mode];
   const recovery = mode === "recovery";
-  const steps = recovery ? RECOVERY_STEPS : ACTIVATION_STEPS;
+  const steps = copy.steps;
   const stepIndex = phase === "checking" || phase === "confirm" || phase === "mfa" ? 0 : phase === "ready" ? 1 : steps.length;
 
   // Recuperação concluída: segue para o login (o botão permite ir antes).
@@ -407,21 +550,17 @@ export default function AtivarContaPage() {
         className="flex w-full max-w-sm flex-col gap-6 rounded-cards border border-ash-stroke p-card-padding"
       >
         <div className="flex flex-col gap-1">
-          <h1 className="text-heading text-[28px] text-bone">{recovery ? "Redefinir senha" : "Ativar conta"}</h1>
+          <h1 className="text-heading text-[28px] text-bone">{copy.title}</h1>
         </div>
 
         {phase !== "invalid" && (
-          <StepIndicator
-            label={recovery ? "Etapas da redefinição de senha" : "Etapas da ativação"}
-            steps={steps}
-            current={stepIndex}
-          />
+          <StepIndicator label={copy.stepsLabel} steps={steps} current={stepIndex} />
         )}
 
         {phase === "checking" && (
           <div className="flex flex-col gap-3" aria-busy="true">
             <p role="status" className="text-body-sm text-warm-granite">
-              {recovery ? "Validando seu link de recuperação…" : "Validando seu link de convite…"}
+              {copy.checking}
             </p>
             <Skeleton className="h-9 w-full" />
             <Skeleton className="h-9 w-full" />
@@ -431,13 +570,11 @@ export default function AtivarContaPage() {
         {phase === "confirm" && (
           <FadeIn className="flex flex-col gap-4">
             <h2 ref={focusRef} tabIndex={-1} className="text-body text-bone focus:outline-none">
-              {recovery ? "Confirme a redefinição" : "Confirme a ativação"}
+              {copy.confirmTitle}
             </h2>
-            <p className="text-body-sm text-warm-granite">
-              {recovery
-                ? "Recebemos o pedido de redefinição da sua senha do SISPAT-AGU. Selecione “Continuar” para validar o link e definir a nova senha."
-                : "Recebemos o seu convite para o SISPAT-AGU. Selecione “Continuar” para validá-lo e definir a sua senha."}
-            </p>
+            <p className="text-body-sm text-warm-granite">{copy.confirmText}</p>
+            {/* Falha de rede/limite: o link continua válido (F5). */}
+            <AnimatedFormMessage id="ativar-erro" message={error} />
             <Button type="button" loading={confirming} onClick={handleConfirm} className="w-full">
               {confirming ? "Validando…" : "Continuar"}
             </Button>
@@ -447,17 +584,9 @@ export default function AtivarContaPage() {
         {phase === "invalid" && (
           <FadeIn className="flex flex-col gap-3">
             <h2 ref={focusRef} tabIndex={-1} className="text-body text-bone focus:outline-none">
-              {recovery ? "Link de recuperação inválido" : "Link de convite inválido"}
+              {copy.invalidTitle}
             </h2>
-            <FormMessage>
-              {invalidReason === "expired"
-                ? recovery
-                  ? "Este link de recuperação já foi usado ou expirou. Peça uma nova redefinição de senha a um administrador."
-                  : "Este link de convite já foi usado ou expirou. Peça um novo convite a um administrador."
-                : recovery
-                  ? "Este link de recuperação é inválido ou já expirou. Solicite uma nova redefinição de senha a um administrador."
-                  : "Este link de convite é inválido ou já expirou. Solicite um novo convite a um administrador."}
-            </FormMessage>
+            <FormMessage>{invalidMessage(mode, invalidReason)}</FormMessage>
             <Link
               href="/login"
               className="inline-flex min-h-6 items-center self-start text-body-sm text-bone underline underline-offset-4"
@@ -504,13 +633,9 @@ export default function AtivarContaPage() {
           <FadeIn>
             <form className="flex flex-col gap-4" onSubmit={handleSubmit}>
               <h2 ref={focusRef} tabIndex={-1} className="text-body text-bone focus:outline-none">
-                {recovery ? "Defina a nova senha" : "Defina sua senha"}
+                {copy.passwordTitle}
               </h2>
-              <p className="text-body-sm text-warm-granite">
-                {recovery
-                  ? `Defina a nova senha (mínimo de ${MIN_PASSWORD_LENGTH} caracteres). A senha anterior deixa de valer.`
-                  : `Defina uma senha (mínimo de ${MIN_PASSWORD_LENGTH} caracteres) para concluir a ativação da sua conta.`}
-              </p>
+              <p className="text-body-sm text-warm-granite">{copy.passwordHint}</p>
 
               <AuthField label="Nova senha">
                 <Input
@@ -543,42 +668,34 @@ export default function AtivarContaPage() {
               <AnimatedFormMessage id="ativar-erro" message={error} />
 
               <Button type="submit" loading={submitting} className="w-full">
-                {recovery ? (submitting ? "Salvando…" : "Redefinir senha") : submitting ? "Ativando…" : "Ativar conta"}
+                {submitting ? copy.submitting : copy.submit}
               </Button>
             </form>
           </FadeIn>
         )}
 
-        {/* Recuperação: sucesso só depois de o Supabase confirmar a nova senha. */}
-        {phase === "activated" && recovery && (
-          <FadeIn className="flex flex-col gap-3" data-recovery-done>
+        {/* Sucesso: só depois de o Supabase (e, no convite, o backend) confirmar. */}
+        {phase === "activated" && (
+          <FadeIn className="flex flex-col gap-3" {...(recovery ? { "data-recovery-done": true } : {})}>
             <h2 ref={focusRef} tabIndex={-1} className="text-body text-bone focus:outline-none">
-              Senha redefinida
+              {copy.doneTitle}
             </h2>
             <p role="status" className="flex items-start gap-2 text-body-sm text-metric-green">
               <CheckCircle2 className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
               <span>
-                Senha redefinida com sucesso. Entre com seu e-mail e a nova senha; você será levado ao login
-                em instantes.
-              </span>
-            </p>
-            <Button asChild className="w-full">
-              <Link href="/login">Ir para o login</Link>
-            </Button>
-          </FadeIn>
-        )}
-
-        {/* Sucesso: só após a resposta real do backend (phase "activated"). */}
-        {phase === "activated" && !recovery && (
-          <FadeIn className="flex flex-col gap-3">
-            <h2 ref={focusRef} tabIndex={-1} className="text-body text-bone focus:outline-none">
-              Ativação concluída
-            </h2>
-            <p role="status" className="flex items-start gap-2 text-body-sm text-metric-green">
-              <CheckCircle2 className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
-              <span>
-                Conta ativada com sucesso{activatedRole ? ` como ${activatedRole}` : ""}. Você já
-                pode entrar com seu e-mail e a nova senha.
+                {recovery ? (
+                  <>
+                    Senha redefinida com sucesso. Entre com seu e-mail e a nova senha; você será levado ao login
+                    em instantes.
+                  </>
+                ) : mode === "invite" ? (
+                  <>
+                    Conta ativada com sucesso{activatedRole ? ` como ${activatedRole}` : ""}. Você já pode entrar
+                    com seu e-mail e a nova senha.
+                  </>
+                ) : (
+                  <>Senha definida com sucesso. Você já pode entrar com seu e-mail e a nova senha.</>
+                )}
               </span>
             </p>
             <Button asChild className="w-full">
@@ -589,6 +706,11 @@ export default function AtivarContaPage() {
       </SlideIn>
     </div>
   );
+}
+
+/** 404/409 do backend = não havia convite pendente para esta sessão. */
+function isInviteGone(cause: unknown): boolean {
+  return cause instanceof ApiError && (cause.status === 404 || cause.status === 409);
 }
 
 function activateErrorMessage(cause: unknown): string {

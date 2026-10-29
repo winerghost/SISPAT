@@ -330,8 +330,9 @@ rodar `flask classify-assets` (dry-run) e, se aprovado, `flask classify-assets -
 
 ## Catálogo novo de painéis (2026-10-27) — substitui os 15 ids antigos
 
-O que o usuário personaliza passa a ser um catálogo de **12 painéis** definido
-no BACKEND, com permissão por perfil (ADM 12, USER 9, RH 7) e **tamanho por
+O que o usuário personaliza passa a ser um catálogo de **13 painéis** (eram 12 até a
+Onda D, que acrescentou `located_by_unit_chart`) definido
+no BACKEND, com permissão por perfil (ADM 13, USER 10, RH 8) e **tamanho por
 painel** (`P`, `M`, `G`), além de visibilidade e ordem. A tela deve:
 
 1. chamar `GET /api/v1/dashboard/panels` e desenhar SÓ o que vier (nunca

@@ -5,7 +5,7 @@ import { installMocks, seedSession, waitForHydration, type MockOptions } from ".
 import { waitForAnimations } from "./support/screens";
 
 // =============================================================================
-// "Personalizar painéis" — catálogo de 12 painéis (ONDA 3). Contrato MOCKADO
+// "Personalizar painéis" — catálogo de 13 painéis (ONDA 3). Contrato MOCKADO
 // (espelha docs/architecture/dashboard-api.md):
 //   GET /api/v1/dashboard/panels        -> {panels, sizes, default_layout, preferences:{panels, version}}
 //   PUT /api/v1/dashboard/preferences   -> {version, panels} | {version, restore_default:true}
@@ -46,6 +46,7 @@ const CATALOG: CatalogEntry[] = [
   { id: "equipment_by_unit_table", label: "Equipamentos de TI por unidade", description: "Tabela com exportação.", group: "tabelas", sizes: ["M", "G"], default_size: "G", exportable: true, roles: ALL },
   { id: "furniture_by_unit_table", label: "Mobiliário por unidade", description: "Tabela com exportação.", group: "tabelas", sizes: ["M", "G"], default_size: "G", exportable: true, roles: ALL },
   { id: "equipment_by_unit_chart", label: "Equipamentos por unidade (gráfico)", description: "Barras agrupadas.", group: "graficos", sizes: ["P", "M", "G"], default_size: "G", exportable: false, roles: ALL },
+  { id: "located_by_unit_chart", label: "Localização dos bens por unidade", description: "Barras por situação de localização.", group: "graficos", sizes: ["P", "M", "G"], default_size: "G", exportable: false, roles: ALL },
   { id: "category_distribution", label: "Distribuição por categoria", description: "Percentual por família e categoria.", group: "graficos", sizes: ["P", "M", "G"], default_size: "M", exportable: false, roles: ALL },
   { id: "notebooks_without_docking", label: "Notebooks sem docking", description: "Estimativa por unidade.", group: "analises", sizes: ["P", "M", "G"], default_size: "M", exportable: false, roles: ["ADM", "USER"] },
   { id: "workstation_ratio", label: "Monitores por computador", description: "Razão por posto.", group: "analises", sizes: ["P", "M", "G"], default_size: "P", exportable: false, roles: ["ADM", "USER"] },
@@ -174,7 +175,7 @@ async function openDialog(page: Page): Promise<Locator> {
 }
 
 test.describe("catálogo por perfil (decidido pelo backend)", () => {
-  for (const [role, count] of [["ADM", 12], ["USER", 9], ["RH", 7]] as const) {
+  for (const [role, count] of [["ADM", 13], ["USER", 10], ["RH", 8]] as const) {
     test(`${role}: lista exatamente ${count} painéis, na ordem do servidor`, async ({ page }) => {
       await open(page, role);
       const d = await openDialog(page);
@@ -214,9 +215,9 @@ test.describe("personalizar", () => {
     await up.focus();
     await page.keyboard.press("Enter");
     await expect(up).toBeFocused();
-    await expect(announcement(d)).toHaveText("Distribuição por categoria movido para a posição 6 de 9.");
+    await expect(announcement(d)).toHaveText("Distribuição por categoria movido para a posição 7 de 10.");
     await page.keyboard.press("Enter");
-    await expect(announcement(d)).toHaveText(/posição 5 de 9/);
+    await expect(announcement(d)).toHaveText(/posição 6 de 10/);
     // "Mobiliário" oculto pelo teclado (Espaço no checkbox).
     const furniture = d.getByRole("checkbox", { name: /^Mobiliário \(/ });
     await furniture.focus();
@@ -231,8 +232,8 @@ test.describe("personalizar", () => {
     const request = page.waitForRequest((r) => r.url().endsWith("/v1/dashboard/preferences") && r.method() === "PUT");
     await save(d).click();
     const expectedOrder = [
-      "kpi_workstations", "kpi_infrastructure", "kpi_furniture", "equipment_by_unit_table", "category_distribution",
-      "furniture_by_unit_table", "equipment_by_unit_chart", "notebooks_without_docking", "workstation_ratio",
+      "kpi_workstations", "kpi_infrastructure", "kpi_furniture", "equipment_by_unit_table", "furniture_by_unit_table",
+      "category_distribution", "equipment_by_unit_chart", "located_by_unit_chart", "notebooks_without_docking", "workstation_ratio",
     ];
     const sent = (await request).postDataJSON() as { version: number; panels: { id: string; visible: boolean; size: string }[] };
     expect(sent.version).toBe(0);
@@ -271,7 +272,7 @@ test.describe("personalizar", () => {
     expect(body.version).toBe(0);
     expect(body.panels.find((p) => p.id === "kpi_workstations")!.size).toBe("M");
     expect(body.panels.find((p) => p.id === "sync_status")!.size).toBe("G");
-    expect(body.panels).toHaveLength(12);
+    expect(body.panels).toHaveLength(13);
     expect("restore_default" in body).toBe(false);
   });
 
@@ -287,7 +288,7 @@ test.describe("personalizar", () => {
     await page.mouse.move(g.x + g.width / 2, t.y + t.height * 0.75, { steps: 6 });
     await expect(d.locator("[data-layout-drop]")).toHaveCount(1);
     await page.mouse.up();
-    await expect(announcement(d)).toHaveText("Postos de trabalho movido para a posição 3 de 12.");
+    await expect(announcement(d)).toHaveText("Postos de trabalho movido para a posição 3 de 13.");
     expect((await dialogOrder(d)).slice(0, 3)).toEqual(["kpi_infrastructure", "kpi_furniture", "kpi_workstations"]);
     expect(state.puts).toHaveLength(0);
     await expect(d.locator("[data-layout-drop]")).toHaveCount(0);
@@ -385,7 +386,7 @@ test.describe("erros e contrato", () => {
     await expect(d).toBeVisible();
     await expect(d.locator("[data-layout-loading]")).toHaveText(/Carregando painéis/);
     await expect(save(d)).toBeDisabled();
-    await expect(d.locator("[data-layout-item]")).toHaveCount(9, { timeout: 20_000 });
+    await expect(d.locator("[data-layout-item]")).toHaveCount(10, { timeout: 20_000 });
     await expect(d.locator("[data-layout-loading]")).toHaveCount(0);
   });
 
@@ -398,7 +399,7 @@ test.describe("erros e contrato", () => {
     await expect(d.getByRole("button", { name: "Restaurar padrão" })).toBeDisabled();
     state.getStatus = null;
     await d.getByRole("button", { name: "Tentar novamente" }).click();
-    await expect(d.locator("[data-layout-item]")).toHaveCount(9);
+    await expect(d.locator("[data-layout-item]")).toHaveCount(10);
     await expect(d.locator("[data-layout-load-error]")).toHaveCount(0);
   });
 

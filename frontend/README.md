@@ -185,6 +185,17 @@ Nenhum item do menu leva a 404 (status por módulo em `docs/ux/MENU_MODULOS.md`)
   desabilitado com aviso em região viva quando 0). Estado só em memória; volta a "todas" ao
   trocar de relatório. Vai em `columns=<chaves separadas por vírgula>` na ordem do catálogo,
   omitido quando todas estão marcadas; 400 `invalid_columns` => mensagem própria.
+  Os filtros são GERADOS pelo `type` de cada item do catálogo
+  (`features/reports/report-filters.tsx`): os quatro tipos de LOOKUP (`unit`,
+  `inventory`, `room`, `person`) compartilham um único ramo — `<select>` nativo com a
+  lista carregada da API (`/units/accessible`, `/inventories`, `/rooms`,
+  `/responsible-people`), opção "Todas as…", "Carregando…", aviso no `hint` quando a
+  lista falha (campo desabilitado, resto da tela intacto) e "Selecionado anteriormente"
+  para valor fora da lista. `enum` (e qualquer filtro com `options`, como `bond_status`,
+  cujas opções são dinâmicas por usuário, com `__none__` = "Sem vínculo") vira `<select>`
+  de opções fixas; `date` e `text`/`uuid` seguem em campo livre — se o catálogo voltar a
+  declarar sala/responsável como `uuid`, a tela degrada para input sem quebrar. Valor fora
+  da lista NUNCA bloqueia a exportação: quem valida é o backend.
 - **Home (`/`):** sem selo "Fase 1"; traz o atalho `DashboardShortcut`
   (`features/dashboard/dashboard-shortcut.tsx`) para `/dashboard`.
 - **Menu:** itens sem API usam o campo `comingSoon` de `nav-items.ts` e mostram o selo
@@ -260,6 +271,40 @@ de orientações (`AuthGuidancePanel`) fica ao lado do formulário em `lg` e aba
 dele em telas menores; é um slide (Embla) com autoplay pausável em todos os tamanhos, desligado sob prefers-reduced-motion. Não há "Cadastre-se" (só convite) nem "Esqueceu a
 senha?" (fluxo inexistente). Testes: `e2e/functional.spec.ts` ("tela pública
 autônoma") e a matriz de `e2e/support/screens.ts`.
+
+### Link de ativação/redefinição (`/ativar-conta`)
+
+A leitura do link é PURA e centralizada em `src/lib/activation-link.ts`, usada
+tanto pela página quanto pela rede de segurança da raiz
+(`src/lib/activation-redirect.ts` + `src/lib/auth-guard.tsx`). Quatro formatos
+são aceitos, na QUERY ou no HASH (query vence, como no supabase-js):
+
+| Formato | Tratamento |
+|---|---|
+| `?token_hash=..&type=invite\|recovery` | fluxo atual (convite e recuperação são montados pelo backend); a credencial fica só em memória e é consumida **no clique** (`verifyOtp`) |
+| `?code=..` (PKCE) | o cliente é implícito (sem `flowType`), então o SDK não consome `?code=`: a página troca por sessão no clique (`exchangeCodeForSession`) |
+| `#access_token=..&type=..` | legado implícito: o SDK cria a sessão e a página só ADOTA a sessão daquele token |
+| `?error=..&error_code=..` (ou no hash) | fase "link inválido" com a mensagem da causa |
+
+Garantias:
+
+- **Nunca consumir no carregamento.** Scanner de antivírus de e-mail faz GET em
+  todo link; o token só é usado no clique da pessoa (correção do incidente de
+  2026-10-27). Falha de rede/429 **preserva** a credencial para nova tentativa.
+- **URL e histórico limpos** (`history.replaceState`) para credenciais e erros,
+  inclusive quando o erro vem na query string.
+- **Sem `type` reconhecível** os textos ficam neutros — a tela nunca afirma que
+  é convite sem saber.
+- **Mensagens por causa** em `activation-errors.ts`: só `otp_expired`,
+  `access_denied`/`bad_jwt` e `over_request_rate_limit` se diferenciam; códigos
+  que falam da conta (`user_not_found`...) caem na mensagem genérica, para a
+  página pública não virar oráculo de enumeração de usuários.
+- **Sessão de recuperação não libera o sistema** (`src/lib/recovery-session.ts`):
+  o evento `PASSWORD_RECOVERY` do SDK marca a sessão; o shell esconde o chrome e
+  o `AuthGuard` manda para `/ativar-conta` até a senha ser definida.
+
+Testes: `e2e/password-recovery-link-functional.spec.ts` e
+`e2e/activate-invite-functional.spec.ts`.
 
 **Compartilhamento (meta tags):** `src/app/layout.tsx` define Open Graph/Twitter
 (`summary_large_image`), `theme-color` #101010 e `robots: noindex`. A imagem

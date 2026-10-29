@@ -39,6 +39,20 @@ class ReportDef:
 
 _BOOL = {"type": "enum", "options": ["true", "false"]}
 
+# Tipos de filtro anunciados ao frontend (ele decide o controle):
+#   text/uuid -> entrada livre; date -> data; enum -> select de `options`;
+#   unit/inventory/room/person -> select carregado do endpoint do próprio
+#   cadastro (`units/accessible`, `inventories`, `rooms`, `responsible-people`),
+#   SEMPRE com escopo de unidade no backend.
+FILTER_TYPES = ("text", "uuid", "enum", "date", "unit", "inventory", "room", "person")
+
+# Marca um filtro `enum` cujas `options` NÃO são fixas: o serviço as resolve por
+# ATOR, a partir dos valores distintos existentes no banco dentro do escopo de
+# unidade (ver `ReportService._filters`). Codificar as opções à mão envelheceria
+# em silêncio na próxima importação da planilha.
+OPTIONS_SOURCE_KEY = "options_from"
+OPTIONS_BOND_STATUS = "bond_status"
+
 ASSETS = ReportDef(
     id="assets",
     title="Patrimônios",
@@ -64,10 +78,12 @@ ASSETS = ReportDef(
         {"name": "q", "type": "text", "max_length": 100},
         {"name": "unit_id", "type": "unit"},
         {"name": "owner_unit_id", "type": "unit"},
-        {"name": "room_id", "type": "uuid"},
-        {"name": "responsible_person_id", "type": "uuid"},
+        {"name": "room_id", "type": "room"},
+        {"name": "responsible_person_id", "type": "person"},
         {"name": "located", "type": "enum", "options": ["SIM", "NAO", "DESCONHECIDO"]},
-        {"name": "bond_status", "type": "text", "max_length": 64},
+        # Opções por ator (valores distintos no escopo + `__none__`): ver `OPTIONS_SOURCE_KEY`.
+        {"name": "bond_status", "type": "enum", "options_from": OPTIONS_BOND_STATUS,
+         "max_length": 64},
     ),
     sorts=(
         "patrimony_number", "-patrimony_number", "description", "-description",

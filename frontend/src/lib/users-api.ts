@@ -45,6 +45,15 @@ export interface UserSummary {
   last_login_at: string | null;
   deactivated_at: string | null;
   version: number;
+  /**
+   * Exclusão lógica (`POST /users/<id>/delete`). Quando presente, a linha já
+   * foi anonimizada pelo backend: `name`/`email` trazem rótulo/endereço
+   * sintéticos, nunca o dado pessoal original. A interface usa este campo —
+   * e não o formato da string — para decidir exibir o rótulo anonimizado.
+   * Opcional porque os `GET` só devolvem usuários não excluídos.
+   */
+  deleted_at?: string | null;
+  anonymized_at?: string | null;
 }
 
 /** Ordenações aceitas pela allowlist do backend. */
@@ -95,6 +104,26 @@ export interface DeactivateUserRequest {
   version: number;
   /** Motivo opcional, até 1000 caracteres. */
   reason?: string;
+}
+
+/**
+ * Corpo de `POST /users/<id>/delete` (`extra="forbid"`). `confirm_text` é o
+ * e-mail exato do alvo, digitado pelo ADM — a verificação que vale é a do
+ * backend (400 quando não bate); o gate da tela é só UX.
+ */
+export interface DeleteUserRequest {
+  version: number;
+  confirm_text: string;
+}
+
+/** Corpo (opcional) de `POST /users/<id>/revoke`: motivo até 1000 caracteres. */
+export interface RevokeAccessRequest {
+  reason?: string;
+}
+
+export interface RevokeAccessResponse {
+  status: string;
+  user_id: string;
 }
 
 export interface RevokeSessionsResponse {
@@ -237,6 +266,26 @@ export function deactivateUser(id: string, payload: DeactivateUserRequest): Prom
 /** `POST /users/<id>/activate` — reativa a conta. */
 export function activateUser(id: string, version: number): Promise<UserSummary> {
   return apiClient.post<UserSummary>(userPath(id, "/activate"), { version });
+}
+
+/**
+ * `POST /users/<id>/delete` — exclusão lógica com anonimização, IRREVERSÍVEL.
+ * Devolve o resumo do usuário já anonimizado. O backend responde 400 quando
+ * `confirm_text` não é o e-mail exato do alvo, 409 em `version` divergente e
+ * 404 (idêntico) para alvo inexistente ou fora do escopo de unidade.
+ * Quem decide se esta exclusão pode acontecer é o backend, sempre.
+ */
+export function deleteUser(id: string, payload: DeleteUserRequest): Promise<UserSummary> {
+  return apiClient.post<UserSummary>(userPath(id, "/delete"), payload);
+}
+
+/**
+ * `POST /users/<id>/revoke` — revogação total: remove perfil e vínculos de
+ * unidade, cancela convite pendente, desativa a conta e encerra as sessões.
+ * 409 para autorrevogação e para o último ADM ativo; 429 acima do limite.
+ */
+export function revokeUserAccess(id: string, payload: RevokeAccessRequest = {}): Promise<RevokeAccessResponse> {
+  return apiClient.post<RevokeAccessResponse>(userPath(id, "/revoke"), payload);
 }
 
 /** `POST /users/<id>/revoke-sessions` — encerra todas as sessões abertas. */

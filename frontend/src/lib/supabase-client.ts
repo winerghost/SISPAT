@@ -42,6 +42,8 @@
 
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
+import { watchRecoverySession } from "@/lib/recovery-session";
+
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
@@ -151,6 +153,12 @@ export function getSupabaseClient(): SupabaseClient {
       detectSessionInUrl: true,
     },
   });
+
+  // Correção F6: ouvir `PASSWORD_RECOVERY` AQUI (mesmo bloco síncrono da
+  // criação do cliente, antes de o SDK processar a URL) é o que garante que uma
+  // sessão criada por link de recuperação nunca libere o sistema — ver
+  // `recovery-session.ts`.
+  watchRecoverySession(cachedClient);
 
   return cachedClient;
 }

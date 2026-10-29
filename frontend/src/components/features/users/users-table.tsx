@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowDown, ArrowUp, ArrowUpDown, Check, CircleSlash, Users } from "lucide-react";
+import { ArrowDown, ArrowUp, ArrowUpDown, Check, CircleSlash, Trash2, Users } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -18,7 +18,7 @@ import { cn } from "@/lib/utils";
 import type { UserSort, UserSummary } from "@/lib/users-api";
 import { UserAvatar } from "./user-avatar";
 import { unitLabel } from "./unit-checkbox-list";
-import { formatDateTime } from "./user-labels";
+import { formatDateTime, isDeletedUser, userDisplayEmail, userDisplayName } from "./user-labels";
 
 // =============================================================================
 // UsersTable — lista paginada de `GET /api/v1/users`.
@@ -28,6 +28,9 @@ import { formatDateTime } from "./user-labels";
 // Motion: entrada escalonada das linhas quando a página/filtro muda
 // (`pageKey`), `busy` esmaece enquanto a próxima resposta chega.
 // Status com ícone + texto (nunca só cor). Datas em America/Araguaina.
+// Usuário excluído não vem nesta lista (o backend filtra `deleted_at IS NULL`);
+// se vier, a linha mostra o rótulo anonimizado e NUNCA o identificador —
+// `userDisplayName`/`userDisplayEmail` decidem pelo payload, não pela string.
 // =============================================================================
 
 type SortField = "name" | "email" | "last_login_at";
@@ -71,16 +74,25 @@ export function UsersTable({ users, pageKey, busy = false, sort, onSortChange, o
         ) : (
           users.map((user, index) => {
             const lastLogin = formatDateTime(user.last_login_at);
+            const deleted = isDeletedUser(user);
+            const displayName = userDisplayName(user);
+            const displayEmail = userDisplayEmail(user);
             return (
               <AnimatedTableRow key={user.id} index={index}>
                 <TableCell className="min-w-[14rem]">
                   <div className="flex items-center gap-3">
-                    <UserAvatar userId={user.id} name={user.name} hasAvatar={user.has_avatar} size="sm" lazy />
-                    <span className="min-w-0 break-words [overflow-wrap:anywhere]">{user.name}</span>
+                    <UserAvatar
+                      userId={user.id}
+                      name={displayName}
+                      hasAvatar={!deleted && user.has_avatar}
+                      size="sm"
+                      lazy
+                    />
+                    <span className="min-w-0 break-words [overflow-wrap:anywhere]">{displayName}</span>
                   </div>
                 </TableCell>
                 <TableCell className="min-w-[12rem] break-words text-warm-granite [overflow-wrap:anywhere]">
-                  {user.email}
+                  {displayEmail ?? "—"}
                 </TableCell>
                 <TableCell>
                   {user.role ? (
@@ -103,18 +115,26 @@ export function UsersTable({ users, pageKey, busy = false, sort, onSortChange, o
                   )}
                 </TableCell>
                 <TableCell>
-                  <Badge variant={user.active ? "success" : "default"}>
-                    {user.active ? <Check aria-hidden="true" /> : <CircleSlash aria-hidden="true" />}
-                    {user.active ? "Ativo" : "Inativo"}
-                  </Badge>
+                  {deleted ? (
+                    <Badge variant="warning">
+                      <Trash2 aria-hidden="true" />
+                      Excluído
+                    </Badge>
+                  ) : (
+                    <Badge variant={user.active ? "success" : "default"}>
+                      {user.active ? <Check aria-hidden="true" /> : <CircleSlash aria-hidden="true" />}
+                      {user.active ? "Ativo" : "Inativo"}
+                    </Badge>
+                  )}
                 </TableCell>
                 <TableCell className="whitespace-nowrap text-warm-granite">{lastLogin ?? "Nunca"}</TableCell>
                 <TableCell className="text-right">
                   <Button
                     variant="outline"
                     size="sm"
+                    disabled={deleted}
                     onClick={() => onManage(user)}
-                    aria-label={`Gerenciar ${user.name}`}
+                    aria-label={`Gerenciar ${displayName}`}
                   >
                     Gerenciar
                   </Button>

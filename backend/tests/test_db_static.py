@@ -132,7 +132,7 @@ def test_db_alembic_revision_chain_is_linear() -> None:
     down_targets = [d for d in revisions.values() if d is not None]
     assert len(down_targets) == len(set(down_targets)), "ramificação (branch) de revisões"
     heads = set(revisions) - set(down_targets)
-    assert heads == {"0018_equipment_classification"}, heads
+    assert heads == {"0019_user_soft_delete"}, heads
 
 
 def test_db_alembic_revision_ids_cabem_em_alembic_version() -> None:
@@ -986,3 +986,108 @@ def test_db_0015_model_matches_migration_and_vocabulary(tech_migration) -> None:
     idx = {i.name: i for i in table.indexes}["ix_assets_category_active"]
     assert not idx.unique
     assert "asset_category IS NOT NULL" in str(idx.dialect_options["postgresql"]["where"])
+
+
+# ---------------------------------------------------------------------------
+# Migração 0019_user_soft_delete (exclusão lógica + anonimização de usuário)
+# ---------------------------------------------------------------------------
+
+SOFT_DELETE_PY = VERSIONS_DIR / "0019_user_soft_delete.py"
+SOFT_DELETE_SQL = SQL_DIR / "0022_user_soft_delete.sql"
+
+
+@pytest.fixture(scope="module")
+def soft_delete_migration() -> ModuleType:
+    return _load_module(SOFT_DELETE_PY)
+
+
+def test_db_0019_revises_0018(soft_delete_migration) -> None:
+    assert soft_delete_migration.revision == "0019_user_soft_delete"
+    assert soft_delete_migration.down_revision == "0018_equipment_classification"
+
+
+def test_db_0019_declara_colunas_check_e_permissao(soft_delete_migration) -> None:
+    cols = soft_delete_migration.ADD_COLUMNS_SQL
+    assert soft_delete_migration.NEW_COLUMNS == ("deleted_at", "deleted_by", "anonymized_at")
+    assert "ADD COLUMN IF NOT EXISTS deleted_at timestamptz NULL" in cols
+    assert "ADD COLUMN IF NOT EXISTS anonymized_at timestamptz NULL" in cols
+    assert "ADD COLUMN IF NOT EXISTS deleted_by uuid NULL" in cols
+    # FK igual à de `deactivated_by` (0005): nunca RESTRICT/CASCADE aqui.
+    assert "REFERENCES public.users(id) ON DELETE SET NULL" in cols
+    assert "DEFAULT" not in cols.upper()  # sem backfill: NULL = "não excluído"
+    checks = soft_delete_migration.ADD_CHECKS_SQL
+    assert "conname = 'ck_users_deleted_requires_anonymized'" in checks  # idempotente
+    assert "CHECK (deleted_at IS NULL OR anonymized_at IS NOT NULL)" in checks
+    assert soft_delete_migration.NEW_PERMISSIONS == ("users.delete",)
+    seed = soft_delete_migration.SEED_PERMISSIONS_SQL
+    assert re.findall(r"WHERE r\.code = '(\w+)'", seed) == ["ADM"]
+    assert "'USER'" not in seed and "'RH'" not in seed
+    for stmt in re.findall(r"INSERT INTO[^;]*;", seed):
+        assert "ON CONFLICT" in stmt
+
+
+def test_db_0019_upgrade_e_aditivo_e_idempotente(soft_delete_migration) -> None:
+    assert soft_delete_migration.UPGRADE_STATEMENTS == (
+        soft_delete_migration.ADD_COLUMNS_SQL,
+        soft_delete_migration.ADD_CHECKS_SQL,
+        soft_delete_migration.SEED_PERMISSIONS_SQL,
+    )
+    upgrade_sql = chr(10).join(soft_delete_migration.UPGRADE_STATEMENTS)
+    assert not re.search(r"ADD\s+COLUMN\s+(?!IF\s+NOT\s+EXISTS)", upgrade_sql)
+    # Nunca mexe em audit_logs, nem apaga/atualiza dado algum de `users`.
+    assert "audit_logs" not in upgrade_sql
+    assert not re.search(
+        r"(UPDATE|DELETE|TRUNCATE|DROP|GRANT|ALTER\s+TABLE\s+public\.audit_logs)",
+        upgrade_sql,
+        re.IGNORECASE,
+    )
+    # A unicidade de `users.email` NÃO é alterada (o e-mail anonimizado é
+    # único por construção, derivado do id).
+    assert "UNIQUE" not in upgrade_sql.upper()
+
+
+def test_db_0019_downgrade_only_removes_its_own_objects(soft_delete_migration) -> None:
+    sql = soft_delete_migration.DOWNGRADE_SQL
+    assert set(re.findall(r"DROP COLUMN IF EXISTS (\w+)", sql)) == {
+        "deleted_at", "deleted_by", "anonymized_at",
+    }
+    assert re.findall(r"DROP CONSTRAINT IF EXISTS (\w+)", sql) == [
+        "ck_users_deleted_requires_anonymized"
+    ]
+    assert "DROP TABLE" not in sql.upper()
+    assert "audit_logs" not in sql
+    # Só a permissão desta migração é removida (2 menções: vínculo + permissão).
+    assert sql.count("users.delete") == 2
+    assert "DISABLE ROW LEVEL SECURITY" not in sql.upper()
+
+
+def test_db_0019_sql_mirror_matches_alembic(soft_delete_migration) -> None:
+    mirror = SOFT_DELETE_SQL.read_text(encoding="utf-8")
+    for statement in soft_delete_migration.UPGRADE_STATEMENTS:
+        assert statement.strip(chr(10)) in mirror
+    assert "PENDENTE DE APLICAÇÃO" in mirror
+    assert "PENDENTE DE APLICAÇÃO" in SOFT_DELETE_PY.read_text(encoding="utf-8")
+    assert "alembic stamp 0019_user_soft_delete" in mirror
+    assert not re.search(r"^\s*(BEGIN|COMMIT)\s*;", mirror, re.IGNORECASE | re.MULTILINE)
+
+
+def test_db_0019_model_matches_migration() -> None:
+    from app.models.rbac import User
+
+    cols = User.__table__.c
+    for name in ("deleted_at", "deleted_by", "anonymized_at"):
+        assert name in cols, name
+        assert cols[name].nullable
+        assert cols[name].server_default is None and cols[name].default is None
+    for name in ("deleted_at", "anonymized_at"):
+        assert isinstance(cols[name].type, DateTime) and cols[name].type.timezone
+    # `email` continua NOT NULL UNIQUE: a anonimização grava um valor único.
+    assert not cols.email.nullable and cols.email.unique
+    checks = {c.name: str(c.sqltext) for c in User.__table__.constraints if c.name}
+    assert checks["ck_users_deleted_requires_anonymized"] == (
+        "deleted_at IS NULL OR anonymized_at IS NOT NULL"
+    )
+    # A FK de `deleted_by` aponta para users.id com SET NULL (nunca CASCADE:
+    # a linha do excluído NUNCA é removida fisicamente).
+    fk = next(iter(cols.deleted_by.foreign_keys))
+    assert fk.column is User.__table__.c.id and fk.ondelete == "SET NULL"

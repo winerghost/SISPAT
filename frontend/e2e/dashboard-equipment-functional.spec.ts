@@ -55,11 +55,11 @@ async function noHorizontalScroll(page: Page) {
 }
 
 test.describe("renderização por tipo", () => {
-  test("ADM: 12 painéis com os números exatos do backend", async ({ page }) => {
+  test("ADM: 13 painéis com os números exatos do backend", async ({ page }) => {
     await open(page, "ADM");
     const grid = page.locator("[data-equipment-grid]");
     await expect(grid).toBeVisible({ timeout: 20_000 });
-    await expect(page.locator("[data-equipment-panel]")).toHaveCount(12);
+    await expect(page.locator("[data-equipment-panel]")).toHaveCount(13);
 
     // cartoes
     const ws = panel(page, "kpi_workstations");
@@ -95,15 +95,15 @@ test.describe("renderização por tipo", () => {
     await expect(panel(page, "sync_status")).toContainText("Divergências pendentes", { timeout: 20_000 });
   });
 
-  test("USER recebe só o que o catálogo devolve (9) e RH (7)", async ({ page }) => {
+  test("USER recebe só o que o catálogo devolve (10)", async ({ page }) => {
     await open(page, "USER");
-    await expect(page.locator("[data-equipment-panel]")).toHaveCount(9, { timeout: 20_000 });
+    await expect(page.locator("[data-equipment-panel]")).toHaveCount(10, { timeout: 20_000 });
     await expect(panel(page, "unclassified_review")).toHaveCount(0);
   });
 
-  test("RH: 7 painéis, sem análises nem administração", async ({ page }) => {
+  test("RH: 8 painéis, sem análises nem administração", async ({ page }) => {
     const state = await open(page, "RH");
-    await expect(page.locator("[data-equipment-panel]")).toHaveCount(7, { timeout: 20_000 });
+    await expect(page.locator("[data-equipment-panel]")).toHaveCount(8, { timeout: 20_000 });
     await expect(panel(page, "notebooks_without_docking")).toHaveCount(0);
     // O cliente não consulta dados de painéis que o catálogo não devolveu.
     await expect(page.locator("[data-equipment-panel=kpi_workstations] [data-stat-card]").first()).toBeVisible({ timeout: 20_000 });
@@ -286,7 +286,7 @@ test.describe("fila de revisão", () => {
 test.describe("acessibilidade e responsividade", () => {
   test("axe sem violações no dashboard (ADM, todos os painéis)", async ({ page }) => {
     await open(page, "ADM");
-    await expect(page.locator("[data-equipment-panel]")).toHaveCount(12, { timeout: 20_000 });
+    await expect(page.locator("[data-equipment-panel]")).toHaveCount(13, { timeout: 20_000 });
     await expect(page.locator("[data-equipment-panel=sync_status]")).toContainText("Divergências", { timeout: 20_000 });
     await expect(page.locator("[data-equipment-panel=equipment_by_unit_chart] figure")).toBeVisible({ timeout: 20_000 });
     await waitForAnimations(page);
@@ -311,7 +311,7 @@ test.describe("acessibilidade e responsividade", () => {
     test(`sem rolagem horizontal da página em ${width}px`, async ({ page }) => {
       await page.setViewportSize({ width, height: 900 });
       await open(page, "ADM");
-      await expect(page.locator("[data-equipment-panel]")).toHaveCount(12, { timeout: 20_000 });
+      await expect(page.locator("[data-equipment-panel]")).toHaveCount(13, { timeout: 20_000 });
       await expect(page.locator("[data-equipment-panel=equipment_by_unit_chart] figure")).toBeVisible({ timeout: 20_000 });
       await expect(page.locator("[data-equipment-panel=sync_status]")).toContainText("Divergências", { timeout: 20_000 });
       await waitForAnimations(page);

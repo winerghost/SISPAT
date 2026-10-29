@@ -43,6 +43,8 @@ import {
 
 /** token_hash sintético aceito pelo mock de /auth/v1/verify (qualquer outro => otp_expired). */
 export const VALID_INVITE_TOKEN_HASH = "hash-valido-e2e";
+/** `?code=` sintético aceito por /auth/v1/token?grant_type=pkce (outro => flow_state_not_found). */
+export const VALID_PKCE_CODE = "code-valido-e2e";
 export const SUPABASE_URL = "http://127.0.0.1:54321";
 export const API_URL = "http://127.0.0.1:5000/api";
 /**
@@ -149,6 +151,15 @@ export interface MockOptions {
   userUpdateErrors?: UserUpdateErrorMock[];
   /** A sessão criada por `/auth/v1/verify` já traz o fator TOTP verificado (nextLevel aal2 => passo TOTP). */
   verifySessionHasFactor?: boolean;
+  /**
+   * `/auth/v1/verify` e `/token?grant_type=pkce` de USO ÚNICO (como o GoTrue
+   * real): a 2ª vez com a mesma credencial responde `otp_expired`.
+   */
+  singleUseLink?: boolean;
+  /** Primeiras N chamadas a `/auth/v1/verify` abortadas (falha de rede/transporte). */
+  verifyNetworkFailures?: number;
+  /** Status forçado em `POST /api/v1/users/activate-invite` (ex.: 404 = sem convite pendente). */
+  activateInviteStatus?: number;
   /** Cadastros de apoio: omite a chave `phone` (como o backend faz para quem não é ADM). */
   catalogHidePhone?: boolean;
   /** Cadastros de apoio: omite a chave `address` das unidades. */
@@ -476,6 +487,12 @@ export interface MockState extends CatalogMockState, AssetMockState, MovementMoc
   factorNoticeStatus: number;
   userUpdateErrors: UserUpdateErrorMock[];
   verifySessionHasFactor: boolean;
+  /** Link de uso único: credenciais já consumidas (quando `singleUseLink`). */
+  consumedLinks: Set<string>;
+  singleUseLink: boolean;
+  /** Abortes de rede restantes em `/auth/v1/verify`. */
+  verifyNetworkFailures: number;
+  activateInviteStatus: number | null;
   /** `true` após um desafio TOTP verificado nesta aba (step-up do MFA reset). */
   reauthVerified: boolean;
   calls: { method: string; url: string; body: unknown }[];
@@ -1171,6 +1188,10 @@ export async function installMocks(page: Page, opts: MockOptions = {}): Promise<
     factorNoticeStatus: opts.factorNoticeStatus ?? 204,
     userUpdateErrors: [...(opts.userUpdateErrors ?? [])],
     verifySessionHasFactor: opts.verifySessionHasFactor ?? false,
+    consumedLinks: new Set<string>(),
+    singleUseLink: opts.singleUseLink ?? false,
+    verifyNetworkFailures: opts.verifyNetworkFailures ?? 0,
+    activateInviteStatus: opts.activateInviteStatus ?? null,
     ...defaultCatalog(UNITS, { hidePhone: opts.catalogHidePhone, hideAddress: opts.catalogHideAddress }),
     ...bulkAssets(defaultAssets(UNITS), opts.assetsBulk ?? 0),
     forceListStatus: opts.assetsListStatus ?? null,
@@ -1228,10 +1249,32 @@ export async function installMocks(page: Page, opts: MockOptions = {}): Promise<
       }
       return json(route, 200, fakeSession(state.aal, state.hasVerifiedFactor, state.unverifiedFactorId));
     }
+    // PKCE: exchangeCodeForSession -> POST /token?grant_type=pkce (auth_code).
+    if (path === "/token" && url.searchParams.get("grant_type") === "pkce") {
+      const authCode = (body as { auth_code?: string } | undefined)?.auth_code ?? "";
+      if (authCode !== VALID_PKCE_CODE || (state.singleUseLink && state.consumedLinks.has(authCode))) {
+        return json(route, 404, {
+          code: "flow_state_not_found",
+          error_code: "flow_state_not_found",
+          msg: "invalid flow state, no valid flow state found",
+        });
+      }
+      state.consumedLinks.add(authCode);
+      return json(route, 200, fakeSession("aal1", state.verifySessionHasFactor));
+    }
     // verifyOtp({ token_hash, type: "invite" }): só o hash válido sintético cria sessão.
     if (path === "/verify" && method === "POST") {
+      // Falha de TRANSPORTE (sem resposta): o token NÃO é consumido.
+      if (state.verifyNetworkFailures > 0) {
+        state.verifyNetworkFailures -= 1;
+        return route.abort("failed");
+      }
       const hash = (body as { token_hash?: string } | undefined)?.token_hash;
-      if (hash === VALID_INVITE_TOKEN_HASH) return json(route, 200, fakeSession("aal1", state.verifySessionHasFactor));
+      const consumed = state.singleUseLink && !!hash && state.consumedLinks.has(hash);
+      if (hash === VALID_INVITE_TOKEN_HASH && !consumed) {
+        if (hash) state.consumedLinks.add(hash);
+        return json(route, 200, fakeSession("aal1", state.verifySessionHasFactor));
+      }
       return json(route, 403, {
         code: "otp_expired",
         error_code: "otp_expired",
@@ -1515,6 +1558,12 @@ export async function installMocks(page: Page, opts: MockOptions = {}): Promise<
     }
 
     if (path === "/v1/users/activate-invite" && method === "POST") {
+      // 404/409 = não havia convite pendente para esta sessão.
+      if (state.activateInviteStatus && state.activateInviteStatus >= 400) {
+        return json(route, state.activateInviteStatus, {
+          error: { code: "NOT_FOUND", message: "SISPAT_BACKEND_MSG" },
+        });
+      }
       return json(route, 200, { role: "USER", units: [] });
     }
 

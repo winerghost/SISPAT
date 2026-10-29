@@ -187,8 +187,12 @@ export async function expectPanelsLoaded(
   } else if (state === "error") {
     await expect(page.locator("[data-equipment-error]")).toHaveCount(ids.length);
     await expect(page.getByRole("button", { name: /Tentar novamente/ }).first()).toBeVisible();
-  } else if (ids.includes("equipment_by_unit_chart")) {
-    await expect(page.locator("[data-equipment-panel=equipment_by_unit_chart] figure")).toBeVisible({ timeout: 20_000 });
+  } else {
+    for (const chartId of ["equipment_by_unit_chart", "located_by_unit_chart"]) {
+      if (ids.includes(chartId)) {
+        await expect(page.locator(`[data-equipment-panel=${chartId}] figure`)).toBeVisible({ timeout: 20_000 });
+      }
+    }
   }
 }
 
@@ -208,6 +212,7 @@ export const PANELS_CUSTOM_ORDER = [
   "workstation_ratio",
   "kpi_workstations",
   "equipment_by_unit_chart",
+  "located_by_unit_chart",
   "kpi_infrastructure",
   "equipment_by_unit_table",
   "furniture_by_unit_table",
@@ -287,6 +292,11 @@ const REPORT_SCREENS: ScreenDef[] = (
     await expect(page.getByRole("heading", { level: 1, name: "Relatórios" })).toBeVisible();
     await expect(page.getByTestId("report-form")).toBeVisible();
     await expect(page.getByRole("button", { name: "Exportar CSV" })).toBeVisible();
+    // Filtros de lookup (lista do backend) prontos: sala, responsável e vínculo.
+    const filtros = page.getByRole("group", { name: "Filtros" });
+    for (const label of ["Sala", "Responsável", "Vínculo"]) {
+      await expect(filtros.getByLabel(label, { exact: true })).toBeEnabled();
+    }
   },
 }));
 
@@ -312,6 +322,17 @@ const REPORT_ERROR_SCREENS: ScreenDef[] = [
       // Volta ao topo: o cabeçalho fixo não deve cobrir controles rolados pelo clique.
       await page.getByRole("main").evaluate((el) => el.scrollTo(0, 0));
       await page.evaluate(() => window.scrollTo(0, 0));
+    },
+  },
+  {
+    id: "relatorios-listas-indisponiveis",
+    title: "Relatórios — listas de salas/responsáveis indisponíveis (403)",
+    path: "/relatorios",
+    session: { role: "USER", lookupListStatus: 403 },
+    prepare: async (page) => {
+      await expect(page.getByTestId("report-form")).toBeVisible();
+      await expect(page.getByText("Lista de salas indisponível para o seu perfil ou no momento.")).toBeVisible();
+      await expect(page.getByText("Lista de responsáveis indisponível para o seu perfil ou no momento.")).toBeVisible();
     },
   },
   {
@@ -406,12 +427,34 @@ export const SCREENS: ScreenDef[] = [
     },
   },
   {
+    // Sem `type` na URL o texto é NEUTRO (F3): a tela não afirma que é convite.
     id: "ativar-conta-invalido",
-    title: "Ativar conta — link inválido",
+    title: "Ativar conta — link inválido (sem type)",
     path: "/ativar-conta",
     session: null,
     prepare: async (page) => {
-      await expect(page.getByText("Este link de convite é inválido")).toBeVisible();
+      await expect(page.getByText("Este link é inválido ou já expirou.")).toBeVisible();
+    },
+  },
+  {
+    // Erro do provedor na QUERY STRING, com type=recovery (F1 + F4).
+    id: "ativar-conta-erro-query",
+    title: "Redefinir senha — link já usado (erro na query string)",
+    path: "/ativar-conta?error=access_denied&error_code=otp_expired&error_description=Email+link+is+invalid&type=recovery",
+    session: null,
+    prepare: async (page) => {
+      await expect(page.getByRole("heading", { level: 2, name: "Link de recuperação inválido" })).toBeVisible();
+      await expect(page.getByText("Este link de recuperação já foi usado ou expirou.")).toBeVisible();
+    },
+  },
+  {
+    // Link PKCE (`?code=`): confirmação antes de qualquer consumo (F2).
+    id: "ativar-conta-codigo",
+    title: "Redefinir senha — confirmação do link PKCE (?code=)",
+    path: "/ativar-conta?code=code-valido-e2e&type=recovery",
+    session: null,
+    prepare: async (page) => {
+      await expect(page.getByRole("button", { name: "Continuar" })).toBeVisible();
     },
   },
   {
@@ -832,6 +875,45 @@ export const SCREENS: ScreenDef[] = [
       await openUserSheet(page, ADMIN_NAME, "Conta");
       await page.getByRole("button", { name: "Desativar conta" }).click();
       await expect(page.getByRole("dialog", { name: "Desativar conta" })).toBeVisible();
+    },
+  },
+  {
+    id: "usuarios-acoes-alto-impacto",
+    title: "Usuários — conta: zona de revogação e exclusão",
+    path: "/administracao/usuarios",
+    session: { role: "ADM" },
+    prepare: async (page) => {
+      await openUserSheet(page, ADMIN_NAME, "Conta");
+      const zone = page.getByRole("region", { name: "Ações de alto impacto" });
+      await expect(zone.getByRole("button", { name: "Revogar acesso" })).toBeVisible();
+      await expect(zone.getByRole("button", { name: "Excluir usuário" })).toBeVisible();
+    },
+  },
+  {
+    id: "usuarios-confirmar-revogacao",
+    title: "Usuários — confirmação de revogação total do acesso",
+    path: "/administracao/usuarios",
+    session: { role: "ADM" },
+    prepare: async (page) => {
+      await openUserSheet(page, ADMIN_NAME, "Conta");
+      await page.getByRole("button", { name: "Revogar acesso" }).click();
+      const dialog = page.getByRole("dialog", { name: "Revogar todo o acesso" });
+      await expect(dialog).toBeVisible();
+      await expect(dialog.getByLabel("Motivo (opcional)")).toBeVisible();
+    },
+  },
+  {
+    id: "usuarios-confirmar-exclusao",
+    title: "Usuários — confirmação forte de exclusão (digitar o e-mail)",
+    path: "/administracao/usuarios",
+    session: { role: "ADM" },
+    prepare: async (page) => {
+      await openUserSheet(page, ADMIN_NAME, "Conta");
+      await page.getByRole("button", { name: "Excluir usuário" }).click();
+      const dialog = page.getByRole("dialog", { name: "Excluir usuário definitivamente" });
+      await expect(dialog).toBeVisible();
+      // Nunca pré-confirmada: o botão só libera com o e-mail exato digitado.
+      await expect(dialog.getByRole("button", { name: "Excluir definitivamente" })).toBeDisabled();
     },
   },
   {
@@ -1786,7 +1868,7 @@ export const SCREENS: ScreenDef[] = [
   },
   {
     id: "dashboard-painel-adm",
-    title: "Dashboard de painéis — catálogo completo de 12 (ADM)",
+    title: "Dashboard de painéis — catálogo completo de 13 (ADM)",
     path: "/dashboard",
     session: { role: "ADM" },
     prepare: async (page) => {

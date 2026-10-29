@@ -38,7 +38,7 @@ async function expectNoHorizontalScroll(page: Page) {
 }
 
 async function dashboardReady(page: Page, role: Role) {
-  const expected = { ADM: 12, USER: 9, RH: 7 }[role];
+  const expected = { ADM: 13, USER: 10, RH: 8 }[role];
   await expect(page.locator("[data-equipment-panel]")).toHaveCount(expected, { timeout: 20_000 });
   await expect(page.locator("[data-equipment-panel=equipment_by_unit_chart] figure")).toBeVisible({ timeout: 20_000 });
   await waitForAnimations(page);

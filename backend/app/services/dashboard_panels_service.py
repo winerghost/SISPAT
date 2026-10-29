@@ -158,6 +158,18 @@ PANEL_CATALOG: tuple[PanelDefinition, ...] = (
         default_size="G",
     ),
     PanelDefinition(
+        id="located_by_unit_chart",
+        label="Localização dos bens por unidade (gráfico)",
+        description=(
+            "Barras agrupadas por unidade: localizados, não localizados e não informados. "
+            "O clique numa barra lista os bens."
+        ),
+        group="graficos",
+        roles=_ALL_ROLES,
+        sizes=PANEL_SIZES,
+        default_size="G",
+    ),
+    PanelDefinition(
         id="category_distribution",
         label="Distribuição por categoria",
         description="Distribuição percentual por família/categoria de bem.",

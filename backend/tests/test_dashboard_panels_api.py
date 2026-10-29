@@ -3,7 +3,7 @@
 
 SQLite com o schema REAL dos modelos + `require_auth` real (papéis e
 permissões lidos do banco), Redis falso, sem rede. Cobre: catálogo filtrado
-por perfil (ADM 12 / USER 9 / RH 7), painel proibido ao perfil rejeitado E
+por perfil (ADM 13 / USER 10 / RH 8), painel proibido ao perfil rejeitado E
 auditado, `extra="forbid"`, limite de itens, tamanho inválido, 409 de versão,
 `user_id` do cliente rejeitado, dado legado/inválido caindo no padrão e a
 tradução do `dashboard_layout` antigo.
@@ -42,6 +42,7 @@ ADM_PANELS = [
     "equipment_by_unit_table",
     "furniture_by_unit_table",
     "equipment_by_unit_chart",
+    "located_by_unit_chart",
     "category_distribution",
     "notebooks_without_docking",
     "workstation_ratio",
@@ -60,6 +61,7 @@ DEFAULT_SIZES = {
     "equipment_by_unit_table": "G",
     "furniture_by_unit_table": "G",
     "equipment_by_unit_chart": "G",
+    "located_by_unit_chart": "G",
     "category_distribution": "M",
     "notebooks_without_docking": "M",
     "workstation_ratio": "P",
@@ -153,8 +155,8 @@ def seed_panels(api, user_id, panels, *, version=1) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_catalogo_tem_doze_paineis_sem_repeticao():
-    assert len(dps.PANEL_CATALOG) == 12
+def test_catalogo_tem_treze_paineis_sem_repeticao():
+    assert len(dps.PANEL_CATALOG) == 13
     assert list(dps.PANEL_IDS) == ADM_PANELS
     assert len(set(dps.PANEL_IDS)) == len(dps.PANEL_IDS)
 
@@ -333,7 +335,7 @@ def test_pior_caso_de_tamanho_cabe_no_check(api):
     response = put_prefs(api, {"version": 0, "panels": pedido}, "ADM")
     assert response.status_code == 200
     salvo = stored(api, api.users["ADM"])
-    assert len(salvo) == 12
+    assert len(salvo) == 13
     # jsonb::text do PostgreSQL usa ", " e ": " (igual ao json.dumps padrão)
     assert len(json.dumps(salvo, ensure_ascii=False).encode("utf-8")) <= 2048
 
