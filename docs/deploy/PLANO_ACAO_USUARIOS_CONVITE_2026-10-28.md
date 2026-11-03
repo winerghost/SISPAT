@@ -1,5 +1,9 @@
 # Plano de ação — convite à prova de scanner, exclusão de usuários e correções do /ativar-conta
 
+> **Estado atual (2026-10-29):** implementado e IMPLANTADO em produção (commits
+> `be2a16c` e `6823803`); a migração `0019_user_soft_delete` já está aplicada e
+> carimbada. A validação funcional em produção aguarda o responsável.
+
 Data: 2026-10-28. Autorizado pelo responsável na mesma data.
 
 Contexto: em 2026-10-27 o reset de senha foi corrigido (Plano B: o backend

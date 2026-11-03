@@ -5,6 +5,18 @@ perfil (ADM, USER, RH) pode fazer e quantos usuários ativos o utilizam. Ocultar
 ou negar na interface é só UX: a autorização real (ADM + AAL2 + `roles.manage`)
 é do backend, que decide em toda chamada.
 
+> **Matriz gravável: ainda NÃO existe (verificado em 2026-10-29).** A decisão de
+> tornar a matriz editável para RH e USER, com teto de permissões (registrada em
+> 2026-10-27), **não está implementada**. No backend,
+> `backend/app/api/v1/admin_access.py` declara apenas três rotas, todas `GET`
+> (`/admin/roles`, `/admin/permissions`, `/admin/unit-access`) e o próprio módulo
+> diz "Nenhuma escrita". No frontend, `matrix-panel.tsx` renderiza células
+> estáticas (`Check`/`Minus` + texto) e a página escreve "Somente leitura"; não há
+> `PUT`/`PATCH` em `src/lib/admin-access-api.ts`. O que já é gravável é o
+> **perfil e as unidades de UM usuário**, em `PATCH /api/v1/users/<id>` pela aba
+> "Perfil e unidades" — ver `docs/ux/USUARIOS.md`. Não documente a matriz como
+> editável antes de o endpoint de escrita existir.
+
 ## Fonte de dados
 | Chamada | Uso |
 |---|---|
@@ -48,4 +60,12 @@ matriz; USER/RH/`/me` com erro/403/AAL1 veem acesso restrito; estados de
 carregando, erro (com retry), erro só na matriz e vazio; XSS inerte; 320, 768,
 1280 e 1920 px sem overflow horizontal e axe WCAG 2.2 AA sem violações.
 Mocks em `e2e/support/admin-access-mocks.ts` e `e2e/support/mocks.ts`; telas
-registradas em `e2e/support/screens.ts` (responsive + a11y).
+`perfis-permissoes`, `perfis-permissoes-matriz`, `perfis-permissoes-erro` e
+`perfis-permissoes-negado` em `e2e/support/screens.ts` (responsive + a11y).
+Não reexecutado nesta data.
+
+## Onde ficam as decisões de acesso de cada pessoa
+Esta tela não altera nada. As ações estão em `/administracao/usuarios`
+(`docs/ux/USUARIOS.md`): trocar perfil e unidades, convidar, desativar/reativar,
+encerrar sessões, enviar redefinição de senha, resetar MFA, revogar todo o acesso
+e excluir definitivamente (exclusão lógica com anonimização e confirmação forte).

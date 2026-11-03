@@ -1,8 +1,22 @@
 # Módulo de Configurações — contrato da API
 
-Fonte de verdade compartilhada entre backend e frontend. Plano completo:
-`C:\Users\winer\.claude\plans\stateless-wandering-kahn.md` (local). Erros seguem o formato
+Fonte de verdade compartilhada entre backend e frontend. Erros seguem o formato
 padrão `{"error": {"code": "...", "message": "..."}}` de `backend/app/errors.py`.
+(O plano original está num arquivo LOCAL fora do repositório, em
+`~/.claude/plans/`; não é referência verificável por quem lê este documento.)
+
+Rotas, schemas e permissões reconferidos contra o código em 2026-10-29
+(`backend/app/api/v1/{ai_settings,email_settings,users,me,security,dashboard,ai}.py`,
+`schemas.py`, `user_admin_http.py`, `app/services/{user_admin_service,
+user_deletion_service,preferences_service,invite_service,invite_delivery,
+password_reset_delivery}.py`). Nessa data: `alembic_version` de produção =
+`0019_user_soft_delete` (head, cadeia linear 0001→0019) e a permissão
+`users.delete` está semeada e vinculada SOMENTE ao perfil ADM (consulta somente
+leitura). As telas correspondentes existem em `/administracao/usuarios`,
+`/administracao/perfis-permissoes` (consulta), `/administracao/vinculos-unidades`,
+`/administracao/auditoria`, `/administracao/integracoes`,
+`/administracao/configuracoes-sistema` e `/configuracoes/{perfil,seguranca,
+aparencia,inteligencia-artificial}`.
 
 ## Etapa 1 — Inteligência Artificial
 
@@ -204,6 +218,46 @@ Corpo (`extra="forbid"`):
 **Sessões revogadas:** `require_auth` rejeita com 401 todo JWT cujo `iat` seja anterior a
 `users.sessions_revoked_at`.
 
+### Migração da exclusão lógica de usuário — `0019_user_soft_delete`
+
+Registro exigido pelo projeto para toda migração (conferido no arquivo
+`backend/migrations/versions/0019_user_soft_delete.py` em 2026-10-29):
+
+- **O que cria** (aditiva e idempotente, sem backfill — tudo nasce `NULL`): em
+  `public.users`, as colunas `deleted_at timestamptz NULL`,
+  `deleted_by uuid NULL REFERENCES public.users(id) ON DELETE SET NULL` e
+  `anonymized_at timestamptz NULL`; o CHECK
+  `ck_users_deleted_requires_anonymized` (`deleted_at IS NULL OR anonymized_at
+  IS NOT NULL`); e a permissão `users.delete`, vinculada SOMENTE ao perfil ADM
+  (confirmado por consulta somente leitura em 2026-10-29). Nenhuma constraint de
+  unicidade é alterada: `users.email` segue `NOT NULL UNIQUE`, e a anonimização
+  grava um endereço único não roteável derivado do `id` (domínio `.invalid`,
+  RFC 2606), o que LIBERA o e-mail original para um convite futuro.
+- **Espelho `.sql`:** `backend/migrations/sql/0022_user_soft_delete.sql` (a
+  numeração do espelho é deslocada em +3 em relação à revisão Alembic desde o
+  início do projeto; a correspondência é verificada por
+  `backend/tests/test_db_static.py`).
+- **Rollback:** `alembic downgrade 0018_equipment_classification` (ou o
+  `DOWNGRADE_SQL` do próprio arquivo, no SQL Editor). Remove apenas a permissão,
+  o CHECK e as três colunas; `audit_logs` e as demais colunas de `users` ficam
+  intactos. A anonimização já executada **não é reversível** — só se perde a
+  marcação de quem foi excluído.
+- **Backup antes de aplicar ou reverter:**
+  `pg_dump "$DATABASE_URL" --no-owner --no-privileges -t public.users -t public.permissions -t public.role_permissions -f backup_pre_0019.sql`
+  (ou o dump completo, conforme o roteiro de `docs/deploy/`). Nunca aplicar nem
+  reverter em produção sem autorização explícita.
+- **Ordem de implantação (obrigatória):** o DDL vem ANTES da imagem nova do
+  backend. `app.models.rbac.User` declara as três colunas e a consulta de
+  autenticação as seleciona; sem elas no banco, TODA requisição autenticada
+  falharia.
+- **Por que a exclusão é lógica, com garantia do banco:** quatro FKs `RESTRICT`
+  apontam para `users.id` (`asset_movements.requested_by`,
+  `import_previews.requested_by`, `inventories.created_by`,
+  `invites.invited_by`) e `audit_logs.actor_user_id` é `ON DELETE SET NULL`, mas
+  o gatilho `trg_audit_logs_block_update_delete` (da `0004`) RECUSA esse
+  `UPDATE`. Por isso a linha de `users` precisa continuar existindo: é o que
+  mantém a trilha append-only íntegra, com `actor_user_id` preservado.
+
 ### Histórico: `GET /api/v1/users/<uuid>/audit?page=&page_size=` (`audit.read`)
 
 ```json
@@ -243,7 +297,7 @@ Corpo (`extra="forbid"`):
   - Resposta: `{"has_avatar": true}`.
 - Erros do `PUT`: 413 `file_too_large` e 400 `unsupported_image`.
 - `GET avatar-url`: `{"url": "<URL assinada>", "expires_in": 300}`, ou 404 `not_found` quando não há foto.
-- Armazenamento no bucket **privado** `avatars` do Supabase Storage (o bucket ainda não foi criado em produção). Sem bucket ou com o Storage fora do ar → 503 `storage_unavailable`; o resto do sistema segue funcionando.
+- Armazenamento no bucket **privado** `avatars` do Supabase Storage. Sem bucket ou com o Storage fora do ar → 503 `storage_unavailable`; o resto do sistema segue funcionando. Se o bucket já existe em produção é **a confirmar** (a verificação de 2026-10-29 cobriu tabelas, colunas, índices e permissões do banco, não o Storage).
 - `GET /api/v1/me` passa a incluir `"has_avatar": bool`, para o header decidir se pede `GET /api/v1/me/avatar-url`. A URL nunca vem no `/me`.
 
 ### `GET /api/v1/me` (qualquer usuário autenticado, só `require_auth`)
@@ -364,8 +418,10 @@ Corpo (`extra="forbid"`):
   vazio → 400 `unsupported_image`. Campo extra no formulário → 400 `validation_error`,
   auditado. A foto antiga é apagada depois do commit, em melhor esforço; se falhar, fica um
   objeto órfão e o erro vai para o log. No `DELETE`, o Storage é chamado primeiro; se estiver
-  fora → 503 e nada muda. O objeto se chama `<uuid4>.webp`, na raiz do bucket. O SQL do
-  bucket está em `backend/migrations/sql/0008_storage_avatars.sql` (**não aplicado**).
+  fora → 503 e nada muda. O objeto se chama `<uuid4>.webp`, na raiz do bucket. O SQL de
+  criação do bucket está em `backend/migrations/sql/0008_storage_avatars.sql` — espelho SEM
+  revisão Alembic correspondente (ele mexe no schema `storage`, do Supabase, não no
+  `public`); se foi executado em produção é **a confirmar**.
 - **Histórico:** em `changes.units`, as unidades fora do escopo do ADM são omitidas. Eventos
   de segurança aparecem com `changes: {}`. Os eventos em que o usuário consultado é só o
   **autor** entram apenas quando o alvo do evento é um usuário vinculado a uma unidade do
@@ -401,6 +457,166 @@ Corpo (`extra="forbid"`):
 - **Infra (pendente, fora do backend):** o `client_max_body_size 2m` do Nginx
   (`infra/cloudpanel/vhost.conf.example`) barra uploads perto de 2 MiB por causa da
   sobrecarga do multipart. Recomendo `3m`.
+
+## Convites de acesso (cadastro só por convite)
+
+Conferido contra o código em 2026-10-29: `backend/app/api/v1/users.py`,
+schemas `InviteRequest`/`RevokeRequest` em `app/api/v1/schemas.py`, regra em
+`app/services/invite_service.py`, entrega do e-mail em
+`app/services/invite_delivery.py`, modelo em `app/models/invites.py`. Não existe
+`/register` nem `/signup` em nenhum blueprint.
+
+| Método e rota | Pilha | Limite (fail-closed) |
+|---|---|---|
+| `POST /api/v1/users/invite` | `require_auth → require_role("ADM") → require_aal2 → require_permission("users.invite")` | 10/h por ADM |
+| `POST /api/v1/users/activate-invite` | **só `require_auth`** (ver abaixo) | 10/h por usuário |
+| `POST /api/v1/users/<uuid>/revoke` | `require_auth → require_role("ADM") → require_aal2 → require_permission("users.revoke_access")` | 10/h por ADM |
+
+Redis indisponível bloqueia (503) em vez de liberar: `fail_open=False` nas três.
+
+### `POST /users/invite`
+
+Corpo (`InviteRequest`, `extra="forbid"`): `email` (3–254, regex simples de
+e-mail), `name` (1–200), `intended_role_code` (1–32), `unit_ids` (1 a 50 UUIDs),
+`justification` (opcional, ≤ 2000). Resposta **201**:
+`{id, email, name, intended_role_code, status, unit_ids, created_at, expires_at}` —
+`status` nasce `PENDENTE` (CHECK `ck_invites_status`: `PENDENTE|ACEITO|EXPIRADO|REVOGADO`)
+e `expires_at = now() + INVITE_TTL_DAYS` (padrão 7). **Nenhuma resposta deste módulo
+inclui token ou link.**
+
+- `intended_role_code` fora de `{USER, RH}` (inclusive `ADM`) → **400** e evento
+  `PRIVILEGE_ESCALATION_ATTEMPT` severidade HIGH. Convite nunca concede ADM.
+- Unidade fora do escopo do ADM (ou inexistente — mesma resposta) → **403** com
+  `UNIT_SCOPE_DENIED`.
+- Já existe convite `PENDENTE` para o e-mail → **409**, garantido também no banco
+  pelo índice único parcial `uq_invites_pending_email`
+  (`lower(email) WHERE status = 'PENDENTE'`, declarado em `app/models/invites.py`).
+- Falha ao falar com o Supabase Auth, ou `INVITE_ALLOWED_REDIRECT_URLS` vazia →
+  **502** com mensagem genérica.
+
+**Entrega à prova de scanner (2026-10-28).** O convite NÃO usa mais
+`POST /auth/v1/invite` (template do painel, cujo `{{ .ConfirmationURL }}` é um GET
+de uso único em `/auth/v1/verify` que scanners de antivírus consomem segundos após
+o envio). O fluxo atual: `admin/generate_link` (`type=invite`, que cria o usuário no
+Auth e **não** envia e-mail) devolve o `hashed_token`; o backend monta
+`<redirect_to>?token_hash=...&type=invite` e envia por SMTP próprio
+(`invite_delivery.deliver_invite`, irmão de `password_reset_delivery`). O
+`redirect_to` é a PRIMEIRA URL de `INVITE_ALLOWED_REDIRECT_URLS`, obrigatoriamente
+`https://` e com caminho `/ativar-conta`; o token nunca é logado, auditado,
+devolvido nem colocado em exceção, e vai no link com `quote(safe="")`. A página só
+chama `verifyOtp` depois do clique da pessoa (UX em `docs/ux/ATIVACAO_CONVITE.md`).
+
+**Consequência operacional:** `generate_link` já cria a conta no Supabase Auth. Se o
+e-mail não sair, `create_invite` trata como falha e NÃO grava nada localmente.
+
+### `POST /users/activate-invite`
+
+É o próprio convidado que ativa. Exige **apenas** `require_auth` por desenho: ao
+criar o convite, o serviço já insere a linha em `users` (`active=True`) com ZERO
+papéis e ZERO unidades — sem papel, o conjunto de permissões é vazio e nenhuma outra
+rota responde, então o usuário só alcança `GET /api/v1/me` e esta rota. Não
+introduzir um estado "pendente" via `users.active=False`: isso quebraria
+`require_auth` exatamente aqui.
+
+Sem corpo. Qualquer corpo não vazio → **400**; se for objeto, os nomes de campo
+passam por `reject_unexpected_fields` (tentativa de enviar `role`, `unit_ids`,
+`is_admin`... é registrada como escalonamento de privilégio). Papel e unidades vêm
+EXCLUSIVAMENTE do convite gravado pelo ADM. Respostas: **200**
+`{"role": "USER|RH", "units": ["<uuid>", ...]}`; **404** sem convite pendente para o
+usuário atual; **409** se o convite encontrado já expirou (ele é marcado `EXPIRADO`
+nessa mesma chamada e nunca mais pode ser aceito); **502** em falha inesperada. As
+falhas gravam `INVITE_ACTIVATION_FAILED` (`reason: not_found|expired`, severidade
+baixa).
+
+### `POST /users/<uuid>/revoke` (legado, mantido)
+
+Corpo opcional `{"reason"?: ≤ 1000}` (`RevokeRequest`, `extra="forbid"`; **não**
+aceita `version`). Resposta **200** `{"status": "revoked", "user_id": "<uuid>"}` —
+é a única ação de conta que não devolve `UserSummary`. Além de remover papéis e
+vínculos, hoje também grava `active=false`, `deactivated_at/by`,
+`sessions_revoked_at` e `version + 1`, e faz o ban no Supabase em melhor esforço.
+
+- Autorrevogação → **409** + `REVOKE_BLOCKED` (`reason: self_revoke`).
+- Último ADM ativo → **409** + `REVOKE_BLOCKED` (`reason: last_admin`, HIGH).
+- Alvo que não compartilha nenhuma unidade com o ADM, inexistente ou malformado →
+  o MESMO **404** genérico, com `UNIT_SCOPE_DENIED`. O escopo do alvo soma os
+  vínculos de `user_unit_access` às unidades de convites **PENDENTES** dele (casados
+  por `auth_user_id` ou e-mail normalizado), para que um convidado ainda não ativado
+  não fique irrevogável; a consulta de convites roda sempre, para que alvo alheio e
+  inexistente executem o mesmo número de consultas (AUD-14-07).
+- Sucesso grava `USER_ACCESS_REVOKED` (HIGH, `result=SUCESSO`).
+- Residual conhecido: esta rota legada NÃO revalida o ator dentro da transação
+  (UA-TOCTOU-01), ao contrário de PATCH/`deactivate`/`activate`/`revoke-sessions`/
+  `mfa-reset`.
+
+**Pendência operacional (não é código):** impedir cadastro direto pelo GoTrue
+(`POST /auth/v1/signup` com a chave `anon`) é configuração do painel do Supabase —
+Authentication > Settings > "Allow new users to sign up" deve estar DESATIVADA. O
+backend não tem como impor isso; é verificação da equipe responsável pelo projeto
+Supabase.
+
+## MFA do próprio usuário (`/api/v1/security/...`)
+
+Documentado a partir do código em 2026-10-29 (`backend/app/api/v1/security.py`);
+estas duas rotas não constavam de nenhum documento de `docs/architecture/`. Elas
+sustentam a tela `/configuracoes/seguranca`. O CADASTRO do fator (enroll/verify
+TOTP) é feito pelo frontend direto no Supabase Auth e **não** passa por este
+módulo — por isso um ADM em `aal1` consegue cadastrar o primeiro fator.
+
+### `DELETE /api/v1/security/mfa/factors/<uuid>`
+
+`require_auth → require_aal2 → rate_limit` (5/h por usuário, fail-closed). Sem
+permissão granular — decisão AUD-14-03 registrada no módulo:
+`security.manage_mfa` (semeada só para ADM no espelho
+`backend/migrations/sql/0005_seed_security_permissions.sql`, que não tem revisão
+Alembic equivalente — não confundir com a revisão `0005_settings_ai_users`)
+fica reservada para uma futura
+rota ADMINISTRATIVA de recuperação assistida (remover fator de OUTRO usuário),
+que **não existe**; exigi-la aqui impediria USER/RH de remover o próprio fator.
+Autosserviço estrito: age só sobre o `auth_user_id` da sessão.
+
+- Sucesso: **204** sem corpo, com evento HIGH `MFA_FACTOR_DELETED`.
+- `factor_id` que não seja UUID → 404 pelo conversor da rota, antes da view
+  (impede normalização de `..` e injeção de query na URL da API Admin). O UUID é
+  canonicalizado em minúsculas antes da comparação — sem isso um ADM burlaria a
+  regra do último fator mandando o mesmo id em maiúsculas.
+- Fator que não é do próprio usuário, ou inexistente → o mesmo **404**.
+- ADM tentando remover o ÚNICO fator `verified` → **409** + evento HIGH
+  `MFA_FACTOR_DELETE_BLOCKED` (`reason: adm_last_verified_factor`). É a política
+  de MFA obrigatório para ADM.
+- Usuário local sem `auth_user_id` → 409; falha na API Admin do Supabase →
+  **502** genérico (detalhe só no log do servidor).
+- A remoção é SEMPRE feita pelo backend com a Service Role Key, nunca pelo SDK
+  no navegador: é o que permite aplicar a regra acima.
+
+### `POST /api/v1/security/mfa/factor-added-notice`
+
+`require_auth → rate_limit` (10/h por usuário, fail-closed). Sem corpo (corpo
+presente → 400). Aviso de melhor-esforço que o frontend envia depois do enroll:
+se o usuário tem papel ADM **e** a sessão está em `aal1`, grava o evento HIGH
+`ADM_TOTP_ENROLL_AAL1` (quem tem só a senha pode ter virado dono do 2º fator).
+Qualquer outro caso responde IGUAL e não registra nada — a rota não é oráculo de
+perfil. Não altera o cadastro do fator nem concede nada.
+
+## E-mail transacional — `POST /api/v1/settings/email/test`
+
+Documentado a partir do código em 2026-10-29
+(`backend/app/api/v1/email_settings.py`); também não constava em
+`docs/architecture/`. Apoia `/administracao/integracoes`.
+
+`require_auth → require_role("ADM") → require_aal2 →
+require_permission("settings.email.manage") → rate_limit` (3/h por ADM).
+Corpo vazio ou ausente (`EmptyBody`, `extra="forbid"`: qualquer campo → 400
+`validation_error`). **O destinatário é o e-mail do próprio ADM autenticado,
+nunca um endereço vindo do cliente.** Resposta 200 `{"result": ...}` com
+`sent | disabled | failed`; `EMAIL_ENABLED=false` devolve `disabled` sem tentar
+enviar. Auditoria: evento `EMAIL_TEST_REQUESTED` (`target_type=email_settings`,
+`details.outcome`), severidade baixa, ou `FALHA`/média quando `failed` — nunca
+o endereço, o corpo da mensagem ou credencial de SMTP. O envio passa por
+`send_email_safely`, que aplica o teto `EMAIL_MAX_PER_HOUR` e nunca levanta
+exceção. A permissão `settings.email.manage` vem de
+`0006_email_settings_permission` (espelho `sql/0009_email_settings_permission.sql`;
+rollback `alembic downgrade 0005_settings_ai_users`, `pg_dump` antes).
 
 ## Etapa 3 — Aparência (preferências do próprio usuário)
 
@@ -600,19 +816,32 @@ system prompt é fixo. Saída em texto puro, sem controle, truncada em 2000 cara
 
 ## Tabela `unit_aliases` (importação de bens)
 
-Migração Alembic `0007_unit_aliases` (espelho `backend/migrations/sql/0010_unit_aliases.sql`),
-pendente de aplicação. Mapeia a sigla da coluna UNIDADE da planilha (ex.: `UEA`)
+Migração Alembic `0007_unit_aliases` (espelho `backend/migrations/sql/0010_unit_aliases.sql`).
+Mapeia a sigla da coluna UNIDADE da planilha (ex.: `UEA`)
 para `units.id`: `alias` único case-insensitive (`lower(alias)`), 1..32 caracteres
 sem espaços nas pontas, `unit_id` FK `ON DELETE RESTRICT`, RLS default-deny e
 REVOKE de anon/authenticated. Seed: `UEA` → unidade de code `023404` (ignorado se a
-unidade não existir). Aplicar: `cd backend && alembic upgrade head`.
+unidade não existir).
+
+Estado em 2026-10-29: o `alembic_version` de produção é `0019_user_soft_delete`, muito
+além desta revisão, e a resolução de siglas está em uso na importação. Rollback (só com
+autorização e `pg_dump` antes): `alembic downgrade 0006_email_settings_permission`
+(remove apenas a tabela `unit_aliases`). Verificação de presença do DDL:
+`docs/database/historico-migracoes.md`.
 
 ## Migrações 0009 e 0010 (índices únicos e correção de permissões)
 
-Duas migrações separadas, **preparadas e NÃO aplicadas** em banco algum. O usuário escolhe.
-A cadeia Alembic é linear: `0008` → `0009` → `0010`. Como o `alembic_version` do banco ainda
-marca `0006` (0007/0008 foram aplicadas à mão), **não rode `alembic upgrade head` no
-Supabase sem antes alinhar o `alembic_version`**; prefira colar os `.sql`.
+Duas migrações separadas na cadeia linear `0008` → `0009` → `0010`.
+
+**Estado em 2026-10-29 (substitui o aviso anterior, que dizia `alembic_version` = `0006`
+e "não aplicadas"):** o carimbo de produção é `0019_user_soft_delete`, portanto já passou
+por estas duas revisões, e uma consulta somente leitura ao catálogo confirmou a existência
+de `uq_assets_patrimony_number_active` (0009). O seed da 0010 também está **efetivo**: o
+perfil USER ficou sem `rooms.manage` e sem `inventory.create` (conferência em produção
+registrada em `docs/permissions/matriz-permissoes.md`, §3.2). Fica **a confirmar** apenas
+`uq_asset_movements_one_pending`, o outro índice da 0009 (ver
+`docs/database/historico-migracoes.md`, que marca o DDL da 0009 como "a confirmar"). O
+comando de referência para alinhar carimbo sem DDL continua `alembic stamp <revisão>`.
 
 | Alembic | Espelho SQL (colar nesta ordem) | Efeito |
 |---|---|---|
@@ -620,8 +849,9 @@ Supabase sem antes alinhar o `alembic_version`**; prefira colar os `.sql`.
 | `0010_seed_permission_corrections` | `backend/migrations/sql/0013_seed_permission_corrections.sql` | Revoga do perfil USER `rooms.manage` e `inventory.create` (a matriz as reserva ao ADM). |
 
 - 0009: cada índice é precedido de verificação que aborta com contagem (sem dados pessoais) se
-  houver duplicatas. Tabelas de bens/movimentações têm 0 linhas hoje. `CREATE UNIQUE INDEX IF
-  NOT EXISTS`, idempotente.
+  houver duplicatas. `CREATE UNIQUE INDEX IF NOT EXISTS`, idempotente. (A frase original
+  "tabelas de bens/movimentações têm 0 linhas hoje" valia na data da escrita da migração;
+  o volume atual de `assets` **não** foi medido nesta revisão.)
 - 0010: as rotas já exigem papel ADM; é correção de menor privilégio (sem mudança de
   comportamento da API). `DELETE` restrito ao perfil USER e a essas duas permissões; idempotente.
   O teste `test_db_static.py` abre exceção explícita e verificada só para este DELETE.

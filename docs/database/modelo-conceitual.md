@@ -4,6 +4,10 @@
 > domínio e seus relacionamentos em nível conceitual, sem detalhes de tipo de coluna,
 > índice ou constraint (ver `modelo-logico.md` para o detalhamento físico e `der.md`
 > para o diagrama entidade-relacionamento).
+>
+> **Atualizado em 2026-10-29** com os conceitos introduzidos pelas migrações `0012`
+> a `0019` (head `0019_user_soft_delete`): vínculo do bem, classificação do bem,
+> preferência de painéis do dashboard e exclusão lógica/anonimização de usuário.
 
 ## 1. Visão geral do domínio
 
@@ -37,6 +41,12 @@ O domínio conceitual se organiza em cinco blocos:
   usuário pode ter mais de um perfil).
 - **Acesso de usuário a unidade** — escopo que restringe um usuário a operar sobre
   determinadas unidades organizacionais, independentemente do seu perfil.
+- **Preferência de aparência do usuário** — densidade, escala de fonte e escolha de
+  gráficos do dashboard, por usuário (migrações `0005`, `0011` e `0013`).
+- **Preferência de painéis do dashboard** — quais painéis o usuário vê, em que ordem
+  e em que tamanho (migração `0017`). A ausência de preferência significa "layout
+  padrão do perfil", resolvido na leitura; o catálogo de painéis e quem pode ver
+  cada um são decididos **no backend**, nunca pelo cliente.
 
 ### 2.2 Estrutura organizacional e física
 
@@ -56,6 +66,19 @@ O domínio conceitual se organiza em cinco blocos:
   patrimônio, com número patrimonial, descrição, unidade proprietária, unidade/sala/
   local onde atualmente se encontra, pessoa responsável e situação de localização
   (localizado, não localizado ou desconhecido).
+- **Vínculo do bem** — atributo do bem (não uma entidade própria): a situação de
+  vínculo trazida pela 1ª coluna `RESPONSAVEL` da planilha (ex.: Servidor,
+  Terceirizado, Ocioso), materializada pela migração `0012`. Antes dela o valor só
+  existia dentro do registro bruto de importação.
+- **Classificação do bem** — também atributos do próprio bem, em duas camadas que
+  **coexistem**: a classificação técnica (categoria do bem, tipo de TI e situação
+  operacional, migração `0015`) e a classificação de equipamentos (família,
+  categoria, grau de confiança, regra que decidiu, versão do conjunto de regras e
+  **correção manual do ADM**, migração `0018`). Conceitualmente importante:
+  classificação é **derivada** da descrição por regras do backend, carrega sempre a
+  marca de quem/como decidiu e admite correção manual que vence a regra
+  automática; "não classificado" é um estado legítimo e distinto de qualquer
+  categoria. Ver `docs/architecture/classificacao-patrimonial.md`.
 - **Movimentação de bem (asset movement)** — registro de uma mudança de unidade,
   sala e/ou responsável de um bem, com fluxo de solicitação e aprovação.
 - **Inventário (inventory)** — campanha de conferência física de bens de uma
@@ -114,6 +137,9 @@ O domínio conceitual se organiza em cinco blocos:
 | Bem — Conflito de sincronização | 1:N (opcional) | um bem pode acumular conflitos pendentes de resolução |
 | Usuário — Filtro salvo | 1:N | um usuário pode salvar vários filtros |
 | Usuário — Job de exportação | 1:N | um usuário solicita exportações |
+| Usuário — Preferência de aparência | 1:0..1 | no máximo uma por usuário; sem registro = padrão do sistema |
+| Usuário — Preferência de painéis | 1:0..1 | no máximo uma por usuário; sem registro = layout padrão do perfil |
+| Usuário (ADM) — Usuário excluído | N:1 (opcional) | quem executou a exclusão lógica da conta (`deleted_by`); vira "desconhecido" se a conta do próprio ADM for excluída depois |
 
 ## 4. Observações conceituais importantes
 
@@ -127,8 +153,12 @@ O domínio conceitual se organiza em cinco blocos:
 - **Código curto ≠ identificador completo da unidade.** A existência de um código
   curto (ex.: `UEA`) e de um identificador completo (ex.: `023404`) para a mesma
   unidade não deve ser tratada como uma simples abreviação — os dois valores são
-  preservados como atributos distintos, sem presumir uma regra de derivação entre
-  eles (ver `modelo-logico.md`, tabela `units`).
+  preservados sem presumir uma regra de derivação entre eles. **Correção de
+  2026-10-29:** no esquema implantado isso **não** é um segundo atributo de
+  `units` (não existe `units.full_identifier`). O identificador numérico fica em
+  `units.code` (o seed da migração `0007_unit_aliases` usa `023401`..`023404`) e a
+  sigla curta da planilha fica em `unit_aliases.alias` (`PF`, `PU`, `CJU`, `UEA`),
+  com unicidade **case-insensitive**. Ver `modelo-logico.md`, seção 0.6.
 - **Localização pode ser desconhecida.** O domínio reconhece explicitamente um
   terceiro estado para a localização de um bem, além de "localizado" e "não
   localizado": "desconhecido" — relevante para o acervo legado migrado da planilha,
@@ -139,3 +169,20 @@ O domínio conceitual se organiza em cinco blocos:
   `docs/architecture/estrategia-sincronizacao.md`).
 - **Nenhuma exclusão física de patrimônio.** A entidade Bem nunca é removida
   fisicamente; toda remoção é lógica, preservando o histórico para auditoria.
+- **Exclusão de Usuário também é lógica — e vem com anonimização** (migração
+  `0019`). A linha do usuário **precisa** continuar existindo para que a trilha de
+  auditoria permaneça íntegra (o ator de cada registro é preservado) e porque o
+  histórico de movimentações, inventários, pré-visualizações de importação e
+  convites referencia o usuário. Em troca, os dados pessoais (nome, e-mail,
+  telefone, foto, vínculo com o provedor de autenticação e último login) são
+  apagados **irreversivelmente** no mesmo ato, e só o instante da exclusão, o ADM
+  que a executou e o instante da anonimização ficam registrados. Nenhuma cópia do
+  dado pessoal removido é guardada — nem na auditoria, que recebe apenas o e-mail
+  mascarado. Conceitualmente: "usuário excluído" é um usuário **sem identidade**,
+  não um usuário ausente.
+- **A chave de busca do número patrimonial é derivada, não armazenada.** O domínio
+  precisa casar `AGU-123` com `AGU123` ou `12.345` com `12345`; isso é obtido
+  normalizando o valor (minúsculas, sem acento, sem pontuação) **no momento da
+  consulta** (migrações `0014` e `0016`). Não existe um "número normalizado" como
+  atributo do Bem — o número patrimonial original é preservado exatamente como veio
+  da fonte, e nenhuma normalização pode sobrescrevê-lo.

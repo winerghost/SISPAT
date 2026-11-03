@@ -1,5 +1,9 @@
 # Template de e-mail de redefinição de senha (Supabase Auth)
 
+> **Estado atual (2026-10-29):** a redefinição de senha é enviada pelo próprio
+> backend (`backend/app/services/password_reset_delivery.py`) desde a correção
+> validada em produção em 2026-10-28; este template fica como registro.
+
 > ATENÇÃO: isto altera o projeto Supabase (Auth › Email Templates). Só aplique
 > com autorização do dono do projeto. Nada neste repositório altera o painel.
 

@@ -1,5 +1,9 @@
 # Plano de ação — "link de redefinição de senha chega expirado"
 
+> **Estado atual (2026-10-29):** a correção (o backend monta e envia o e-mail)
+> está implantada e foi validada em produção em 2026-10-28; o convite recebeu o
+> mesmo tratamento na rodada implantada em 2026-10-29.
+
 Data: 2026-10-27. Relato: em `/administracao/usuarios`, ao usar "Enviar
 redefinição de senha", os usuários dizem que o link chega **expirado**.
 
@@ -159,6 +163,14 @@ Rebuild: `cd /opt/SISPAT && docker compose build frontend && docker compose up -
   falha na execução (o do lock está limpo: `vulns: []` em 58 pacotes).
 
 ## 5. Testes de regressão (a criar)
+
+> Estado em 2026-10-30: o teste de backend previsto aqui existe sob outro nome —
+> `backend/tests/test_password_reset_delivery.py` (cobre a allow-list em
+> `test_redirect_fora_da_allowlist_nao_envia_e_mail`, a preservação da query do
+> redirect e as garantias de sigilo). O arquivo
+> `backend/tests/test_sec_password_reset_link.py` nunca foi criado com esse nome.
+> O spec de frontend `frontend/e2e/password-recovery-link-functional.spec.ts`
+> existe. Não reexecutados nesta data.
 
 - `backend/tests/test_sec_password_reset_link.py`: redirect fora da allow-list
   em variações mínimas (barra final, caixa, esquema) → `None`; sem redirect →

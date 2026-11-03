@@ -6,6 +6,34 @@ Cloudflare only"), Cloudflare proxied. Backend `127.0.0.1:8110`, frontend
 `127.0.0.1:3110`, Redis interno. Vhost: `infra/cloudpanel/vhost.ueato-cloudpanel.conf`.
 Roteiro: `docs/deploy/ROTEIRO_VPS_ueato.md`. Checklist: `docs/deployment/checklist-deploy-vps.md`.
 
+## Estado em 2026-10-29 (bloco de estado; o histórico datado abaixo permanece)
+
+- Rodadas implantadas depois de 2026-10-20: **2026-10-21** (Auditoria, Vínculos
+  de Unidades, Relatórios) e **2026-10-29** (convite à prova de scanner,
+  exclusão/anonimização de usuário, filtros de `/relatorios`, correções do
+  `/ativar-conta` e logomarca sazonal do cabeçalho público — commits `be2a16c`
+  e `6823803`).
+- **Banco:** `alembic_version` = `0019_user_soft_delete` = head do código.
+  Nada pendente de aplicar nem de carimbar. Com isso **caíram** as menções
+  antigas a "stamp da migração 0012/0013 pendente", "banco em 0018" e "0019
+  pendente" — ver a atualização de 2026-10-29 no fim deste arquivo.
+- **Validação funcional da rodada de 2026-10-29: aguardando o responsável.**
+  Containers subiram `healthy`. O banco já comprova, em 2026-10-29, login de
+  ADM com AAL2 e confirmação de importação (as rotas de `imports.py` são todas
+  `@require_aal2`; o último `CONFIRM_IMPORT` é de 21:06 UTC) e 2 ADMs ativos —
+  o que o banco não diz é se a sessão saiu pela VPS ou de um backend local.
+  Seguem sem confirmação: convite real, exclusão de usuário de teste e os
+  filtros novos de `/relatorios`.
+- **Pendências abertas**, em ordem de urgência: 6 (expurgo de
+  `import_previews`, **vencida**: a importação real terminou em 2026-10-29 e há
+  101 prévias guardadas), 1 (Supabase Auth, reduzido — ver abaixo),
+  2 (gitleaks/trivy na VPS), 5 (`set_real_ip_from 0.0.0.0/0` global do
+  CloudPanel), 3 (limite de 100 s da Cloudflare, que já **não** é portão: a
+  importação dos 1.069 bens rodou sem 524) e 4 (worker Celery, decisão de
+  baixa prioridade).
+- **Não existe pendência de instalar n8n:** o n8n é EXTERNO e este projeto
+  nunca instala nem constrói um n8n.
+
 Regras para todos os itens:
 
 - O responsável executa cada passo. Nada aqui autoriza mudança em produção
@@ -15,12 +43,12 @@ Regras para todos os itens:
 
 | # | Pendência | Onde | Prioridade |
 |---|---|---|---|
-| 1 | Supabase Auth (template, SMTP, senhas vazadas, URLs) | Painel do Supabase | Alta (antes do 1º convite real) |
+| 1 | Supabase Auth (Site URL/Redirect URLs, senhas vazadas, MFA; template e SMTP do convite saíram do caminho em 2026-10-29) | Painel do Supabase | Alta (antes do 1º convite real) |
 | 2 | gitleaks e trivy | VPS | Alta |
-| 3 | Limite de 100 s da Cloudflare (524) na importação | VPS / decisão | Alta (antes de importar os bens) |
+| 3 | Limite de 100 s da Cloudflare (524) na importação | VPS / decisão | Média (a importação dos 1.069 bens rodou sem 524; vale para prévias maiores) |
 | 4 | Worker Celery | VPS / decisão | Baixa (não é necessário hoje) |
 | 5 | `set_real_ip_from 0.0.0.0/0` no nginx global | VPS | Média (afeta os OUTROS sites) |
-| 6 | Expurgo de `import_previews` | VPS (após a importação real) | Média (LGPD) |
+| 6 | Expurgo de `import_previews` | VPS | **Alta (LGPD): a importação real terminou em 2026-10-29 e há 101 prévias guardadas** |
 
 ---
 
@@ -412,7 +440,8 @@ A linha mostra `leitura=`, `prefetch=`, `classificacao=`, `persistencia=` e
 
 ### Mitigação imediata (recomendada)
 
-1. Meça o RTT (passo 1) antes de importar os bens.
+1. Meça o RTT (passo 1) antes de uma importação grande. A dos 1.069 bens já
+   rodou, entre 2026-10-22 e 2026-10-29, sem nenhum 524.
 2. Se o limite calculado for menor que o total de itens, confirme em lotes:
    na tela de revisão selecione só parte dos itens NOVO (dentro do limite) e
    confirme. Gere uma nova prévia: os já importados aparecem como EXISTENTE;
@@ -732,3 +761,59 @@ Pendências desta rodada (o responsável executa):
   URLs, `INVITE_ALLOWED_REDIRECT_URLS`, MFA e certifi.
 - Bloqueadores da importação de Bens: stamp da migração 0013, limite de 100 s da
   Cloudflare (item 3) e SEC-1021-01.
+  (Estado em 2026-10-29: o stamp já não é bloqueador — o banco está em
+  `0019_user_soft_delete`, o head do código.)
+
+---
+
+## Atualização 2026-10-29 (convite, exclusão de usuário, relatórios, logomarca)
+
+Implantado em produção pelo responsável (commits `be2a16c` e `6823803`), com
+rebuild das duas pontas:
+
+```
+cd /opt/SISPAT && git pull --ff-only
+docker compose build backend frontend && docker compose up -d backend frontend
+docker compose ps
+```
+
+Containers `backend`, `frontend` e `redis` subiram `healthy`; a presença do
+código novo foi conferida dentro das imagens, não só pelo build.
+**A validação funcional em produção ainda não está confirmada pelo responsável.**
+
+Banco: `alembic_version` = `0019_user_soft_delete`, igual ao head do código.
+A `0019` (espelho `backend/migrations/sql/0022_user_soft_delete.sql`) cria
+`users.deleted_at`, `users.deleted_by`, `users.anonymized_at`, o CHECK
+`ck_users_deleted_requires_anonymized` e a permissão `users.delete` ligada ao
+perfil ADM. Backup antes de DDL equivalente em outro ambiente:
+`pg_dump "$DATABASE_URL" --schema=public -Fc -f backup-pre-0019-$(date +%F-%H%M).dump`.
+Reversão, só com autorização explícita:
+`docker compose run --rm --no-deps backend alembic downgrade 0018_equipment_classification`.
+
+Mudança no item 1 (Supabase Auth): o convite **não usa mais** o template "Invite
+user" nem o SMTP do Supabase. O backend monta o link com
+`admin/generate_link` (que não envia e-mail) e entrega o e-mail por conta
+própria (`backend/app/services/invite_delivery.py`), igual ao reset de senha.
+Logo, do item 1 continuam valendo: Site URL e Redirect URLs com
+`https://ueato.revizzicar.com.br/ativar-conta` (o `generate_link` exige a URL na
+allow-list), proteção contra senhas vazadas, MFA do ADM e a remoção das Redirect
+URLs `http://localhost...`. Em troca, o convite passou a depender de
+`EMAIL_ENABLED=true` e do bloco `EMAIL_*` no `.env` da VPS (ver
+`docs/deploy/ENV_PRODUCAO_ueato.md`).
+
+Pendências desta rodada (o responsável executa):
+
+- [ ] Validação funcional: login real do ADM com MFA; convite real para um
+      e-mail de teste (link `/ativar-conta?token_hash=...&type=invite`, nenhum
+      `verify` nos logs antes do clique); exclusão de um usuário de teste; os
+      três selects novos em `/relatorios` com uma exportação CSV/XLSX. Criar um
+      2º ADM saiu da lista: já há **2 ADMs ativos** (consulta read-only em
+      2026-10-30).
+- [ ] Logs sem segredos depois dos testes:
+      `docker compose logs --since 30m backend frontend | grep -iE 'token_hash|Bearer|eyJ|service_role|secret|password'`
+      deve voltar vazia.
+- [ ] Medir o tempo da primeira exportação real de `/relatorios`: ela passa pela
+      `location /api/` do vhost, com `proxy_read_timeout 60s` (menor que o
+      gunicorn, 180 s). Se encostar nesse limite, tratar junto com o item 3.
+- [ ] `bash scripts/security-audit.sh --strict` não foi rodado nesta rodada.
+- [ ] Itens 1 a 6 acima seguem abertos na ordem do bloco de estado no topo.

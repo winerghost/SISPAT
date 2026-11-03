@@ -81,8 +81,16 @@ não declarava o parâmetro (a interface só listava as colunas) e o serviço ex
 | kind | filtros | sort (padrão) |
 |---|---|---|
 | `assets` | `q` (<=100), `unit_id`, `owner_unit_id`, `room_id`, `responsible_person_id` (UUID como texto; fora do escopo => 404), `located` (SIM/NAO/DESCONHECIDO), `bond_status` (opções do catálogo; `__none__` = sem vínculo) | `patrimony_number`, `description`, `created_at`, `updated_at`, `bond_status` (+ prefixo `-`); padrão `patrimony_number` |
-| `movements` | `status`, `movement_type`, `origin_unit_id`, `destination_unit_id`, `created_from`, `created_to` (AAAA-MM-DD, UTC) | `created_at`, `status` (+ `-`); padrão `-created_at` |
+| `movements` | `status`, `movement_type`, `origin_unit_id`, `destination_unit_id`, `created_from`, `created_to` (AAAA-MM-DD; ver nota de fuso) | `created_at`, `status` (+ `-`); padrão `-created_at` |
 | `inventory-items` | `inventory_id`, `unit_id`, `inventory_status`, `result` (ENCONTRADO/NAO_ENCONTRADO/DIVERGENTE), `checked_from`, `checked_to` | `checked_at`, `patrimony_number`, `result` (+ `-`); padrão `-checked_at` |
+
+**Fuso dos filtros de data** (`app/services/report_repository.py`, helper
+`app/services/local_dates.py`): `created_from`/`created_to` e
+`checked_from`/`checked_to` são DIA CIVIL em America/Araguaina (UTC-3, sem DST),
+convertidos para o intervalo `[00:00 local, 00:00 local do dia seguinte)` em UTC —
+o limite `*_to` é inclusivo. É o mesmo helper de `GET /api/v1/movements`. O banco
+continua em UTC e as colunas de data/hora exportadas saem em UTC ISO-8601; só o
+FILTRO é local. Data invertida (`from > to`) => 400; ano < 1900 => 400.
 
 Erros (`{"error": {"code","message"}}`): `400 validation_error`/`invalid_columns`, `401`, `403 forbidden`/`AAL2_REQUIRED`,
 `404 not_found`, `413 row_limit_exceeded`, `429`.

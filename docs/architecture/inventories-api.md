@@ -15,8 +15,16 @@ Campanhas de conferência física de bens POR UNIDADE. Tabelas existentes
 | POST | `/inventories/<id>/start`, `/close`, `/cancel` | auth, ADM, AAL2 | `inventory.create` |
 
 Não há PUT/PATCH/DELETE (405). Não existe `inventory.read`: leituras usam
-`inventory.check` (ADM e USER; RH = 403). O seed SQL concede `inventory.create` também a
-`USER`, mas a rota exige o papel ADM (a matriz diz "USER não tem").
+`inventory.check` (ADM e USER; RH = 403). O seed inicial
+(`backend/migrations/sql/0002_seeds_roles_permissions.sql`) concedia
+`inventory.create` também ao perfil USER; a migração
+`0010_seed_permission_corrections` (espelho `sql/0013_seed_permission_corrections.sql`)
+REVOGA essa permissão do USER, alinhando o banco à matriz e às rotas — que de
+qualquer forma exigem o papel ADM (`require_role("ADM")`), logo um USER com a
+permissão residual continuaria recebendo 403. Essa remoção está **efetiva no
+banco** (conferência em produção registrada em
+`docs/permissions/matriz-permissoes.md`, §3.2: o perfil USER tem 11 permissões,
+sem `rooms.manage` nem `inventory.create`).
 
 ## Estados
 

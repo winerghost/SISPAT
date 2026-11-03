@@ -1,6 +1,34 @@
 # Dashboard — tipo de gráfico por painel
 
-O usuário escolhe o tipo de gráfico de cada painel de `/dashboard`. A escolha é
+> **Estado atual (2026-10-29).** Esta preferência (`dashboard_charts`) vale hoje
+> apenas para os blocos da composição **legada**, que ficaram só no relatório
+> imprimível `/dashboard/relatorio` (tema `paper`). A tela `/dashboard` passou a
+> ser governada pelo catálogo de painéis do backend e **não tem** seletor de tipo
+> de gráfico — ver `DASHBOARD.md`. Como o relatório renderiza em tema `paper` e o
+> seletor só existe no tema `screen`, `chart-type-menu.tsx` e
+> `use-dashboard-chart-prefs.ts` continuam no repositório **sem caminho de uso
+> pela interface**: o relatório respeita o que estiver salvo, mas não há como
+> alterar a escolha. As telas `dashboard-graficos-alternativos` e
+> `dashboard-graficos-empilhado-barras` não existem mais em
+> `frontend/e2e/support/screens.ts`. O resto deste documento descreve o contrato e
+> os componentes como eles estão no código, para quando o relatório migrar.
+>
+> **Não confunda com os painéis do catálogo do backend.** Tudo nesta página — a
+> tabela de chaves abaixo, inclusive a linha `location` ("Localizados × não
+> localizados por unidade") — pertence ao conjunto LEGADO de painéis: 6 chaves de
+> tipo de gráfico em `user_preferences.dashboard_charts`, sobre os 15 ids de
+> `dashboard_layout` (`kpis`, `units`, `status`, `location`...). Os painéis do
+> catálogo (`PANEL_CATALOG`, ids
+> `located_by_unit_chart`, `located_summary`, `equipment_by_unit_chart`...) **não**
+> passam por aqui: eles não têm chave em `dashboard_charts`, não têm seletor de
+> tipo e não usam `dashboard-panel-meta.ts`; a forma de cada um é fixa no código da
+> view e o rótulo/descrição vêm do backend. Em particular, o painel
+> `located_summary` (2026-11-01) é **sempre uma rosca**
+> (`located-summary-view.tsx` → `nivo-pie-chart.PieChart` com `kind="donut"`), e
+> isso NÃO é preferência do usuário — ao contrário do painel legado `status` ("Bens
+> por situação"), que ainda aceita `pie|donut|bar`. Ver `DASHBOARD.md` §1.
+
+O usuário escolhe o tipo de gráfico de cada painel do conjunto legado. A escolha é
 uma preferência do próprio usuário, guardada no backend.
 
 ## Contrato (mockado nos testes; backend em paralelo)
@@ -76,7 +104,8 @@ uma preferência do próprio usuário, guardada no backend.
   o seletor (sem `version` não há como salvar).
 - Nivo é carregado só no cliente por `next/dynamic` (`ssr: false`), um chunk por
   módulo (barras, pizza, linhas): quem escolheu "Barras" na situação não baixa o
-  módulo de pizza. First Load JS de `/dashboard`: 257 kB (Recharts) → 258 kB
+  módulo de pizza. First Load JS de `/dashboard` medido em 2026-10-20 (antes da
+  Onda 3, quando a rota ainda montava os blocos legados): 257 kB (Recharts) → 258 kB
   (Nivo); os chunks dinâmicos dos três módulos somam ~457 kB brutos / ~152 kB gzip
   (antes: chunk principal do Recharts ~424 kB / ~111 kB gzip).
   Enquanto o GET de preferências não responde, o painel
@@ -119,7 +148,8 @@ uma preferência do próprio usuário, guardada no backend.
   texto literal visível. Também preferência legada/inválida: valor de outro painel,
   HTML, chave nova inválida, chave obrigatória ausente, não-objeto (padrões, sem
   seletor), chave desconhecida ignorada e backend anterior (PATCH funciona).
-- Telas novas em `e2e/support/screens.ts`: `dashboard-graficos-alternativos` e
-  `dashboard-graficos-empilhado-barras` (agora com os 6 painéis em tipos não
-  padrão; matriz responsiva 320–1920 + axe).
 - `e2e/dashboard.spec.ts`: o gráfico de situação agora é "pizza".
+- As telas `dashboard-graficos-alternativos` e
+  `dashboard-graficos-empilhado-barras` foram removidas de
+  `e2e/support/screens.ts` quando `/dashboard` deixou de montar os blocos legados
+  (conferido em 2026-10-29). Nenhum spec foi reexecutado nesta data.

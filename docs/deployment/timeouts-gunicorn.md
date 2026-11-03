@@ -27,7 +27,34 @@ ser tratada pelo Flask e não pelo SIGABRT do arbiter.
 - Hardening intacto: `read_only`, `--worker-tmp-dir /dev/shm`, limites de
   request-line/fields. Proxy (Nginx/CloudPanel) deve ter `proxy_read_timeout`
   >= 190 s em `/api/` para não cortar antes do gunicorn.
-- Ajuste sem rebuild possível via `GUNICORN_CMD_ARGS="--timeout 240"` no env.
+- Ajuste sem rebuild possível via `GUNICORN_CMD_ARGS="--timeout 240"` no env
+  (basta recriar o container: `docker compose up -d backend`).
+
+## Camada de borda em produção (2026-10-29)
+
+O proxy em produção é o vhost do CloudPanel
+(`infra/cloudpanel/vhost.ueato-cloudpanel.conf`):
+
+| Rota | `proxy_read_timeout` |
+|---|---|
+| `^~ /api/v1/imports/` (prévia/importação do Sheets) | 190 s |
+| `/api/` (demais rotas da API, inclusive exportação de `/relatorios`) | 60 s |
+| `/` (frontend) | 60 s |
+
+Dois limites ficam FORA do nginx e do gunicorn:
+
+- **Cloudflare, 100 s** (planos Free/Pro/Business, com DNS proxied): uma
+  resposta acima disso vira 524 no navegador mesmo com nginx em 190 s e
+  gunicorn em 180 s, e o worker continua processando. É o risco M1 de
+  `docs/deploy/ROTEIRO_VPS_ueato.md` e o item 3 de
+  `docs/deploy/PENDENCIAS_OPERACIONAIS_2026-10-20.md`. A importação dos Bens já
+  rodou (1.069 bens, entre 2026-10-22 e 2026-10-29, com 24 prévias confirmadas)
+  **sem nenhum 524**: na prática valeu a opção "aceitar e monitorar". A
+  pendência continua aberta para prévias maiores que o acervo atual, mas já não
+  é um portão para importar.
+- **Exportação de relatórios**: passa pela `location /api/`, com 60 s — menor
+  que o gunicorn. Medir o tempo da primeira exportação real; se encostar no
+  limite, tratar junto com o M1 em vez de aumentar só um dos valores.
 
 ## Tratamento de erro (`app/errors.py`)
 
@@ -48,6 +75,16 @@ ou `DB_STATEMENT_TIMEOUT_MS=120000` quando a conexão for direta/sessão.
 
 ## Aplicar
 
+Só com autorização explícita do responsável (vale também para um rebuild).
+
 ```
+cd /opt/SISPAT
 docker compose build backend && docker compose up -d backend
+docker compose up -d        # o frontend depende do backend e cai na recriação
+docker compose ps           # backend, frontend e redis healthy
+curl -fsS http://127.0.0.1:8110/api/health
 ```
+
+Mudança apenas no vhost (os `proxy_read_timeout` da tabela acima) não precisa de
+rebuild: `sudo nginx -t && sudo systemctl reload nginx`, com backup do vhost
+antes.

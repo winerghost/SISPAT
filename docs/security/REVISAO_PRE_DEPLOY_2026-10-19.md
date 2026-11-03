@@ -82,7 +82,7 @@ Supabase exige autorização do dono do projeto.
 ### Aceitável / informativo
 
 A1. semgrep `python.jinja2.security.audit.autoescape-disabled-false` em
-`backend/app/services/email/templates.py:75` (o relatório anterior citava `app/email/templates.py`;
+`backend/app/services/email/templates.py:75` (o relatório anterior citava `app/services/email/templates.py`;
 o caminho correto é `app/services/email/`). Reavaliado: FALSO POSITIVO. `_text_env` renderiza apenas o
 corpo text/plain (l.133); o HTML usa `_html_env` com `autoescape=True` (l.74); nomes passam por
 `clean_text` (remove controles, limita tamanho); templates são constantes no código. O `# nosec B701`

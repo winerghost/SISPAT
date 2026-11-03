@@ -372,6 +372,14 @@ export interface AnimatedChartProps {
   /** Tema visual (padrão "screen"; "paper" = relatório impresso). */
   theme?: ChartThemeName;
   className?: string;
+  /**
+   * Cor semântica + textura por chave de CATEGORIA (ex.: SIM/NAO/DESCONHECIDO),
+   * quando a cor precisa seguir a entidade e não a ordem da paleta. Ausente =
+   * paleta categórica na ordem. Mantenha o objeto ESTÁVEL (constante de módulo).
+   * Observação: com seleção ativa, as fatias texturizadas não esmaecem (a
+   * textura carrega a cor); o esmaecimento continua visível na legenda.
+   */
+  categoryStyles?: Readonly<Record<string, SeriesStyle>>;
 }
 
 /** Legenda, tabela, resumo e cores de um gráfico categórico. */
@@ -383,10 +391,17 @@ export function useCategoryModel({
   selectedKey = null,
   isSelectableKey,
   theme = "screen",
+  categoryStyles,
 }: AnimatedChartProps) {
   const palette = chartPalette(theme);
   return useMemo(() => {
-    const rows = toCategoryRows(kind, data, palette);
+    // A cor do estilo (quando houver) substitui a da paleta: a categoria "Outros"
+    // e as sem estilo seguem a ordem categórica.
+    const rows = toCategoryRows(kind, data, palette).map((row) => {
+      const color = categoryStyles?.[row.key]?.color;
+      return color ? { ...row, color } : row;
+    });
+    const patternFor = (key: string) => categoryStyles?.[key]?.pattern;
     const canSelect = (key: string) => key !== OTHERS_KEY && (isSelectableKey ? isSelectableKey(key) : true);
     const fillFor = (row: CategoryRow) => (kind === "bar" && row.key === selectedKey ? palette.highlight : row.color);
     const opacityFor = (row: CategoryRow) => (selectedKey && row.key !== selectedKey ? 0.35 : 1);
@@ -394,6 +409,7 @@ export function useCategoryModel({
       key: row.key,
       label: row.label,
       color: fillFor(row),
+      pattern: patternFor(row.key),
       opacity: opacityFor(row),
       valueText: valueFormatter(row.value),
       selectable: canSelect(row.key),
@@ -406,8 +422,8 @@ export function useCategoryModel({
     const summary = `${categoryKindLabel(kind)}: ${rows
       .map((row) => `${row.label} ${valueFormatter(row.value)}`)
       .join("; ")}.`;
-    return { rows, legend, table, summary, fillFor, opacityFor, palette, canSelect };
-  }, [kind, data, palette, selectedKey, valueFormatter, valueLabel, isSelectableKey]);
+    return { rows, legend, table, summary, fillFor, opacityFor, patternFor, palette, canSelect };
+  }, [kind, data, palette, selectedKey, valueFormatter, valueLabel, isSelectableKey, categoryStyles]);
 }
 
 /** Props comuns dos gráficos de várias séries (unidades e mensal). */

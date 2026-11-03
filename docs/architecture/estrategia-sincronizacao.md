@@ -6,6 +6,12 @@
 > orquestrar o disparo da rotina, mas nunca substitui as regras de validação do
 > backend.
 
+Reconferido contra o código em 2026-10-29 (`backend/app/models/sync.py`,
+`app/services/import_service.py`, `import_references.py`, `import_normalizer.py`,
+`catalog_import_service.py`, `app/api/v1/imports.py`, `catalog_imports.py`,
+`app/integrations/n8n_client.py`). Onde o desenho desta estratégia ainda não
+corresponde ao implementado, há aviso explícito na seção (§5, §7 e §9).
+
 ## 1. Objetivo e limites da Fase 1
 
 - Importar o acervo patrimonial hoje mantido em planilha Google Sheets para as
@@ -26,7 +32,7 @@
 Google Sheets (fonte)
       │  leitura via Google Sheets API
       ▼
-sync_jobs (nova linha, status=RUNNING)
+sync_jobs (nova linha, status=EM_EXECUCAO)
       │
       ▼
 raw_import_records (uma linha por linha da planilha, raw_values = JSON fiel ao original)
@@ -212,17 +218,49 @@ savepoint por item, `SyncJob` + `RawImportRecord` + `AuditLog`
 => 409), revalidando contra o estado atual (corrida => falha só daquele item).
 O relatório (`create_preview(...).report`, `get_report`) traz classificações,
 pendências por código, `ids_repetidos`, `nomes_suspeitos` e `provaveis_duplicatas`.
-Sem rotas nesta etapa; as rotas (ADM + AAL2) vêm na próxima onda.
+
+As rotas JÁ EXISTEM (verificado em 2026-10-29, `backend/app/api/v1/catalog_imports.py`,
+blueprint `catalog_imports_bp`, prefixo `/api/v1/catalog-imports`): `POST /<kind>/preview`
+(`kind` ∈ `units|rooms|people`), `GET /<preview_id>/report`, `GET /<preview_id>/items` e
+`POST /<preview_id>/confirm`, todas ADM + AAL2 com a permissão do tipo
+(`units.update`/`rooms.manage`/`responsible.manage`). Contrato completo (404 uniforme,
+limites, projeção segura, alias por item): `docs/architecture/cadastros-apoio-api.md`.
+
+Classificação de equipamentos na importação: bem NOVO é classificado sempre e bem
+EXISTENTE é reclassificado pela descrição atual, exceto se tiver `category_override`
+(regras e impacto em `docs/architecture/classificacao-patrimonial.md`).
 
 ## 5. Idempotência
 
+> **Estado real em 2026-10-29 (leia antes do desenho abaixo).** Nenhum ponto do
+> código de produção INSERE linhas em `sync_conflicts`: o único construtor
+> `SyncConflict(...)` está em testes (`backend/tests/test_alerts_api.py`,
+> `test_sec_alerts.py`). O que a importação faz hoje com um bem EXISTENTE é
+> atualizar apenas descrição, vínculo (`bond_status`) e campos de origem, e
+> IGNORAR divergências de sala, responsável e `LOCALIZADO` — sem registrar
+> conflito (ver `plano-importacao-mconferencia.md`, "Comportamento da
+> reimportação", e `app/services/import_service.py`). A regra de alerta e o painel
+> `sync_status` só CONTAM conflitos pendentes, caso existam. O desenho a seguir é,
+> portanto, o alvo acordado; a parte de `sync_conflicts` ainda não foi implementada.
+
 A idempotência é garantida por duas camadas:
 
-1. **Chave de correspondência determinística.** `assets` possui o índice único
-   parcial `UNIQUE (source_system, source_record_id) WHERE source_record_id IS
-   NOT NULL` (ver `modelo-logico.md`, seção 11). Cada execução de sincronização
-   faz, por linha, um *upsert* lógico:
-   - Se existe `assets` com o mesmo `(source_system, source_record_id)`:
+1. **Chave de correspondência determinística.** Correção de 2026-10-29: **não
+   existe** índice `UNIQUE (source_system, source_record_id)` em `assets` — o
+   que a `0001` cria é o índice COMUM (não único) `ix_assets_source_record_id`
+   (`backend/migrations/sql/0001_initial_schema.sql`), e o modelo
+   (`app/models/assets.py`) declara as duas colunas como `text NULL` sem
+   unicidade. A chave de correspondência realmente usada pela importação é o
+   NÚMERO PATRIMONIAL sem caixa e sem espaços
+   (`ImportService._prefetch_active_assets`, `IN` sobre
+   `lower(trim(patrimony_number))`), serializada por advisory lock
+   (`app/services/patrimony_lock.py`) e sustentada no banco pelo índice único
+   parcial `uq_assets_patrimony_number_active` (migração `0009`, presente em
+   produção — verificação somente leitura em 2026-10-29). O desenho original por
+   `(source_system, source_record_id)` está descrito abaixo como alvo; hoje
+   `source_record_id` serve de rastro da origem e de critério de relatório, não
+   de chave única. Cada execução faz, por linha, um *upsert* lógico:
+   - Se existe `assets` correspondente:
      compara campo a campo o valor normalizado da planilha com o valor atual
      em banco.
      - Sem diferença: nenhuma escrita, `records_read` incrementado,
@@ -237,9 +275,16 @@ A idempotência é garantida por duas camadas:
        `sync_conflicts` com `source_values` e `database_values` para resolução
        manual.
    - Se não existe: `INSERT` de novo `assets`, `records_created` incrementado.
-   - **Pendente de validação institucional:** a lista exata de "campos
-     sincronizáveis automaticamente" versus "campos protegidos contra
-     sobrescrita automática" — a proposta acima (description/source_updated_at
+   - **Lista implementada hoje (2026-10-29):** para bem EXISTENTE a importação
+     atualiza `description`, `bond_status` (1ª coluna `RESPONSAVEL`; célula vazia
+     NÃO apaga o valor atual), os campos de origem (`source_record_id`,
+     `source_system`, `source_updated_at`) e a classificação de equipamentos da
+     0018 quando não há `category_override`. Ficam PROTEGIDOS contra sobrescrita
+     automática `located`, `room_id`, `responsible_person_id` e `notes` — a
+     divergência simplesmente não é aplicada (e, como dito acima, também não é
+     registrada em `sync_conflicts`). Mudar isso é decisão de produto.
+   - **Pendente de validação institucional:** a lista DEFINITIVA de "campos
+     sincronizáveis automaticamente" versus "campos protegidos" — a proposta acima (description/source_updated_at
      automáticos; located/responsible_person_id/notes protegidos) é um ponto
      de partida razoável, não uma decisão fechada.
 2. **Reexecução segura.** Reexecutar o mesmo job (ou um novo job sobre a mesma
@@ -258,16 +303,26 @@ parcialmente gravado.
 
 ## 6. Tratamento de falhas e `sync_jobs`
 
-- `sync_jobs.status` inicia em `RUNNING`, é atualizado para `SUCCESS` (nenhuma
-  falha), `PARTIAL` (alguma linha falhou, outras importaram) ou `FAILED` (falha
-  impediu a execução, ex.: planilha inacessível, credencial inválida).
-- `records_failed` conta linhas com `import_status IN ('REJEITADO','CONFLITO')`
-  após a execução.
-- `error_summary` guarda um resumo humano-legível (não o payload completo —
-  isso já está em `raw_import_records.validation_errors`).
-- Toda falha de autenticação/autorização com a Google Sheets API e toda falha
-  de execução do job devem gerar entrada em `audit_logs`
-  (`entity_type='sync_jobs'`, `result='FAILURE'`).
+Vocabulário REAL das colunas (CHECKs em `backend/app/models/sync.py`,
+conferido em 2026-10-29 — as siglas em inglês de versões anteriores deste
+documento nunca existiram no banco):
+
+- `sync_jobs.status` nasce `EM_EXECUCAO` (server default) e termina em
+  `CONCLUIDO`, `PARCIAL` (parte das linhas falhou) ou `FALHOU` (a execução não
+  pôde ser concluída, ex.: planilha inacessível, credencial inválida) —
+  `ck_sync_jobs_status`.
+- `raw_import_records.import_status` ∈ `PENDENTE`, `IMPORTADO`, `REJEITADO`,
+  `CONFLITO` (`ck_raw_import_records_import_status`).
+- Contadores: `records_read`, `records_created`, `records_updated`,
+  `records_failed` (linhas rejeitadas/conflitantes), mais `started_at`,
+  `finished_at` e `error_summary` (resumo humano-legível; o detalhe fica em
+  `raw_import_records.validation_errors`).
+- `audit_logs.result` aceita só `SUCESSO` ou `FALHA`
+  (`ck_audit_logs_result`; ver `estrategia-auditoria.md`). Falhas de
+  autenticação/autorização com a Google Sheets API e falhas de execução do job
+  entram com `result='FALHA'`; os `entity_type` realmente gravados pelo código
+  nesse fluxo são `import` e `catalog_import` (não `sync_jobs`) — a lista
+  completa está na seção 2.1 de `estrategia-auditoria.md`.
 
 ### 6.1 Expurgo de prévias antigas (`flask purge-import-previews`)
 
@@ -304,20 +359,27 @@ exceção, e a transação é desfeita.
 
 ## 7. Resolução de `sync_conflicts`
 
-Fase 1: resolução é sempre **manual**, através de uma ação administrativa
-(`ADM`, via permissão implícita em `sync.execute`/`imports.execute` — ver
-`docs/permissions/matriz-permissoes.md`) que define `status`:
+Fase 1: a resolução é sempre **manual**. Estados aceitos pela coluna
+(`ck_sync_conflicts_status`, `backend/app/models/sync.py`):
 
-- `RESOLVIDO_MANTEM_BD`: o valor em `assets` prevalece; a divergência da
+- `PENDENTE` (padrão ao criar o conflito);
+- `RESOLVIDO_MANTER_BANCO`: o valor em `assets` prevalece; a divergência da
   planilha é descartada para este ciclo (mas permanece registrada em
-  `sync_conflicts` para histórico).
-- `RESOLVIDO_APLICA_ORIGEM`: o valor da planilha é aplicado a `assets`,
-  sobrescrevendo o valor atual (gera também entrada em `audit_logs` para o
-  `UPDATE` resultante).
+  `sync_conflicts` para histórico);
+- `RESOLVIDO_USAR_ORIGEM`: o valor da planilha é aplicado a `assets`,
+  sobrescrevendo o valor atual (geraria também entrada em `audit_logs` para o
+  `UPDATE` resultante);
 - `IGNORADO`: conflito descartado sem ação (ex.: identificado como erro de
   origem já corrigido na própria planilha em execução futura).
 
-Nenhuma resolução automática de conflito ocorre nesta fase.
+**Limite atual (verificado em 2026-10-29): não existe rota de API para
+resolver conflito.** Nenhum blueprint de `backend/app/api/v1/` expõe
+`sync_conflicts`; os únicos consumos são de LEITURA agregada — a regra de
+alerta `sync_conflicts_pending`
+(`backend/app/services/alerts/rules.py`) e o painel `sync_status` do dashboard
+(`conflitos_pendentes`). Ou seja, os três status "RESOLVIDO_*"/`IGNORADO` são
+vocabulário do modelo, ainda sem fluxo de aplicação; mudar o status hoje exigiria
+SQL manual fora do fluxo auditado. Nenhuma resolução automática ocorre.
 
 ## 8. Preparação para sincronização bidirecional futura
 
@@ -357,6 +419,17 @@ n8n pode ser usado para:
 n8n **nunca** acessa o PostgreSQL diretamente nem aplica regra de negócio — ele
 consome apenas as APIs autenticadas do Flask (`CLAUDE.md`), que permanece o
 único responsável por validação, idempotência e autorização.
+
+**Estado real em 2026-10-29.** Existe o cliente de saída
+`backend/app/integrations/n8n_client.py` (`N8nClient`: feature flag
+`n8n_integration_enabled`, desligada por padrão; timeout; `Idempotency-Key`;
+nunca derruba a operação; a API key nunca vai a log), mas NENHUM serviço do
+backend o chama ainda — fora `app/integrations/__init__.py`, as menções a ele no
+código são comentários de outros módulos que seguem o mesmo padrão. E não existe
+endpoint que INICIE um `sync_job`: a importação é sempre prévia + confirmação
+disparadas por um ADM autenticado (`/api/v1/imports/google-sheets/*` e
+`/api/v1/catalog-imports/*`). Portanto, hoje, o agendamento pelo n8n é
+possibilidade de arquitetura, não função implantada.
 
 ## 10. Resumo dos pontos pendentes de validação institucional
 

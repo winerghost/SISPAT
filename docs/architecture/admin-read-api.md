@@ -1,5 +1,9 @@
 # APIs administrativas de leitura (`/api/v1/admin/...`)
 
+Conferido contra o código em 2026-10-29 (`backend/app/api/v1/admin_access.py`,
+`admin_audit.py`, `admin_schemas.py`, `app/services/admin_access_service.py`,
+`admin_audit_service.py`).
+
 Somente LEITURA (nenhum POST/PUT/PATCH/DELETE; `audit_logs` é append-only).
 Todas: `require_auth -> require_role("ADM") -> require_aal2 ->
 require_permission(...) -> rate_limit` (fail-closed). USER/RH recebem 403
@@ -18,9 +22,10 @@ desconhecido -> 400 auditado (`MASS_ASSIGNMENT_REJECTED` /
 | `GET /admin/permissions` | `roles.manage` | Catálogo de permissões (com perfis que as concedem). |
 | `GET /admin/unit-access` | `users.manage` | Usuário x unidades, paginado. |
 
-Não há `roles.read`: a leitura de perfis reutiliza `roles.manage` (semeada em
-`0002`, só ADM). `audit.read`, `roles.manage` e `users.manage` já existem no
-seed; nenhuma permissão nova.
+Não há `roles.read`: a leitura de perfis reutiliza `roles.manage` (semeada só
+para ADM no espelho `backend/migrations/sql/0002_seeds_roles_permissions.sql`,
+que não tem revisão Alembic equivalente). `audit.read`, `roles.manage` e
+`users.manage` já existem nesse seed; nenhuma permissão nova.
 
 ## Auditoria
 
@@ -87,3 +92,39 @@ somente usuários vinculados ao escopo do ADM e somente unidades do escopo dele.
 O SQL seleciona colunas (`users.id/name/active`): e-mail, telefone e
 `auth_user_id` nem são lidos. A edição segue em `PATCH /api/v1/users/<id>`
 (`users.assign_role`/`users.assign_unit`).
+
+## Não existe gestão GRAVÁVEL de perfil x permissão
+
+Verificado em 2026-10-29: o blueprint `admin_access_bp` registra APENAS os três
+`GET` acima e `AdminAccessService` só executa `SELECT`. Nenhuma rota da API
+cria, altera ou remove linhas de `roles`, `permissions` ou `role_permissions`
+— `RolePermission` é usado apenas em leitura
+(`app/services/admin_access_service.py`) e no carregamento de permissões da
+sessão (`app/auth/supabase_auth.py`). A tela
+`frontend/src/app/(app)/administracao/perfis-permissoes/page.tsx` é, por isso,
+somente consulta (`frontend/src/lib/admin-access-api.ts` só tem `GET`).
+
+Consequência prática: alterar o conjunto de permissões de um perfil hoje exige
+MIGRAÇÃO versionada (+ espelho `.sql`) e autorização explícita. Atenção: dois
+seeds de permissão NÃO têm revisão Alembic e vivem só como espelho —
+`backend/migrations/sql/0002_seeds_roles_permissions.sql` (perfis e permissões
+iniciais) e `sql/0005_seed_security_permissions.sql` (`security.manage_mfa`,
+`security.view_auth_logs`, `users.invite`, `users.assign_role`,
+`users.assign_unit`, `users.activate`, `users.deactivate`,
+`users.revoke_access`). A numeração dos espelhos é deslocada em relação às
+revisões, então
+`sql/0005...` não corresponde à revisão `0005_settings_ai_users`. As revisões que
+mexem em permissões são `0005_settings_ai_users` (`settings.ai.manage`,
+`ai.use`, `users.reset_password`, `users.reset_mfa`, `users.revoke_sessions`,
+`users.avatar.manage`),
+`0006_email_settings_permission` (`settings.email.manage`),
+`0008_catalog_source_ids_permissions` (`responsible.manage`, `units.update`),
+`0010_seed_permission_corrections` (REVOGA `rooms.manage` e `inventory.create`
+do perfil USER) e `0019_user_soft_delete` (`users.delete`, só ADM). O que a API permite
+mudar em tempo de execução é o PERFIL e as UNIDADES de um usuário
+(`PATCH /api/v1/users/<id>`), nunca o que cada perfil pode fazer.
+
+O que varia por usuário sem migração: perfil (`user_roles`) e unidades
+(`user_unit_access`), ambos por `PATCH /api/v1/users/<id>`; e as preferências
+de painel do dashboard (`PUT /api/v1/dashboard/preferences`), que não são
+permissão.

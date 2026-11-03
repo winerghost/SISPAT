@@ -1,5 +1,9 @@
 # Telas de dados — evidência (2026-10-13)
 
+> Estado atual (2026-10-29): registro histórico. As tabelas agora têm ordenação pela allowlist do
+> backend (`aria-sort`) e paginação única `PaginationBar` (50/100/200); os formulários de
+> patrimônio, cadastros, movimentações, inventários e usuários passaram a existir.
+
 Papel: Desenvolvedor Frontend de Telas de Dados (tabelas, formulários, importação).
 Base: fundação (`@/components/animations`, `m.*`, `@/lib/motion/tokens`). Nenhum arquivo da fundação,
 de `src/lib/**`, backend ou regra de negócio foi alterado.
@@ -33,11 +37,11 @@ Editados
   `LoadingSkeleton variant="table"`, EmptyState, badge ícone + texto, linha selecionada, indicador
   "Atualizando…" na paginação, pílulas com `transition-factory`. Query/filtros/params inalterados.
 - `features/imports/confirm-import-dialog.tsx` — botão "Confirmar" com `loading` (texto "Confirmando…" mantido).
-- `app/administracao/importacao/google-sheets/page.tsx` — indicador "Requisição:" derivado só do estado
+- `app/(app)/administracao/importacao/google-sheets/page.tsx` — indicador "Requisição:" derivado só do estado
   real das mutations; `AnimatePresence mode="wait"` entre vazio / skeleton (`cards` + `table`) / prévia /
   resultado (fade + 4 px); resultado com `AnimatedCounter`; erro com SlideIn. Textos/regras de
   "Pré-visualizar Importação" e "Confirmar Importação" preservados (ADM + confirmação expressa no modal).
-- `app/administracao/usuarios/page.tsx` — usa os componentes acima; `keepPreviousData` + "Carregando página…";
+- `app/(app)/administracao/usuarios/page.tsx` — usa os componentes acima; `keepPreviousData` + "Carregando página…";
   revogação com `Button loading`; Esc não fecha o modal durante o envio.
 
 ## Decisões frente ao DESIGN.md

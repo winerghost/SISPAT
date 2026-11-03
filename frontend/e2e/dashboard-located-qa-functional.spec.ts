@@ -42,14 +42,20 @@ async function overflow(page: Page) {
   });
 }
 
+// canal linearizado (WCAG 2.x) lido direto do par hexadecimal em `start`:
+// acesso por canal em vez de desestruturar `.map()`, cujo comprimento o TS não prova
+function channel(hex: string, start: number): number {
+  const v = parseInt(hex.slice(start, start + 2), 16) / 255;
+  return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
+}
 function luminance(hex: string): number {
-  const c = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255);
-  const [r, g, b] = c.map((v) => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4));
-  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  return 0.2126 * channel(hex, 1) + 0.7152 * channel(hex, 3) + 0.0722 * channel(hex, 5);
 }
 const ratio = (a: string, b: string) => {
-  const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
-  return (hi + 0.05) / (lo + 0.05);
+  // Math.max/Math.min no lugar de desestruturar o `.sort()` (mesmo resultado, tipo garantido)
+  const la = luminance(a);
+  const lb = luminance(b);
+  return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05);
 };
 
 test.describe("varredura estática do código do painel", () => {

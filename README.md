@@ -3,14 +3,25 @@
 Sistema de Gestão Patrimonial da **Advocacia-Geral da União (AGU)** — unidade
 **Palmas/TO**.
 
-> **Status atual (2026-10-27): Fase 1 (banco, modelagem e permissionamento)
-> concluída; em andamento: importação do Google Sheets (importação de Bens ainda
-> não executada), MFA/convite, UX e o dashboard de equipamentos com classificação
-> patrimonial (Ondas 1-5 documentadas; ver [Classificação patrimonial e painéis
-> (Onda 5)](#classificação-patrimonial-e-painéis-do-dashboard-onda-5-2026-10-27)).**
-> Backend e frontend já existem; a implantação na VPS registrada em "Implantado"
-> é de 2026-10-20/21 e NÃO inclui as Ondas 1-5 de 2026-10-27. O que é pendência
-> está marcado como tal em cada seção
+> **Status atual (2026-10-29): Fase 1 (banco, modelagem e permissionamento)
+> concluída.** O sistema está em produção em `https://ueato.revizzicar.com.br`,
+> com a imagem implantada em **2026-10-29** (commits `be2a16c` e `6823803`):
+> convite à prova de scanner, exclusão lógica + anonimização de usuário, filtros
+> de relatório por sala/responsável/vínculo, correções do `/ativar-conta` e
+> logomarca do cabeçalho público. **A validação funcional pelo responsável ainda
+> NÃO está confirmada.**
+>
+> Banco: `alembic_version` = `0019_user_soft_delete`, igual à head do código
+> (cadeia linear 0001→0019) — ver
+> [Estado do banco de produção](#estado-do-banco-de-produção-supabase-tocbtonqnahmtegfkrmn-2026-10-29).
+> Em andamento: MFA/convite e UX. A importação do Google Sheets **já foi
+> executada**: 1.069 Bens em produção, última sincronização em 2026-10-29 com
+> 0 novos e 1.069 existentes — ver
+> [Acervo importado](#acervo-importado-conferido-em-2026-11-01).
+>
+> As seções datadas abaixo são **histórico por onda** e foram preservadas como
+> tal: o estado de hoje é o deste bloco somado à seção de banco. Nada é
+> implantado em produção sem autorização explícita
 > ([Documentação local](#documentação-local-não-versionada)).
 
 ## Visão geral
@@ -43,8 +54,8 @@ O SISPAT-AGU controla o inventário patrimonial da unidade, com:
   unidade e, quando aplicável, por campo. O backend valida autorização em
   toda operação; nega por padrão.
 
-**Estes dois arquivos são documentos de governança imutáveis: não devem ser
-substituídos, recriados ou modificados sem autorização explícita.** Qualquer
+**`CLAUDE.md` e `DESIGN.md` são documentos de governança imutáveis: não devem
+ser substituídos, recriados ou modificados sem autorização explícita.** Qualquer
 alteração de infraestrutura ou código deve respeitar o que está definido
 neles. Ambos são mantidos localmente, fora do repositório (ver
 [Documentação local](#documentação-local-não-versionada)).
@@ -141,7 +152,50 @@ autorização explícita. Documentos:
 Nginx não emite cabeçalhos de segurança (Next.js e Flask emitem; tabela no
 vhost).
 
-### Implantado (2026-10-20)
+### Implantado (2026-10-29) — estado atual
+
+Implantação feita pelo responsável, com autorização explícita. A `main` foi
+levada até `6823803`; o lote entregou:
+
+- **Convite à prova de scanner** (`backend/app/services/invite_delivery.py` +
+  `generate_invite_token_hash` em `app/integrations/supabase_admin_client.py`):
+  o backend monta e envia o e-mail com `?token_hash=...&type=invite` apontando
+  para `/ativar-conta`, em vez de usar o `POST /auth/v1/invite` (cujo link de
+  uso único era consumido por scanner de antivírus de e-mail). Mesmo desenho já
+  validado no reset de senha. Motivo e evidência:
+  [`docs/deploy/PLANO_ACAO_USUARIOS_CONVITE_2026-10-28.md`](./docs/deploy/PLANO_ACAO_USUARIOS_CONVITE_2026-10-28.md).
+- **Exclusão lógica + anonimização de usuário:**
+  `POST /api/v1/users/<id>/delete` (ADM + AAL2 + `users.delete`, corpo
+  `{version, confirm_text}` com `extra="forbid"`), em
+  `app/services/user_deletion_service.py`. A linha de `users` nunca é removida;
+  `name`/`email`/`phone`/`avatar_object_key`/`auth_user_id` são anonimizados
+  (e-mail substituído por endereço único e não roteável em `.invalid`) e
+  `audit_logs` continua intacto, com `actor_user_id` preservado. Recusa
+  autoexclusão, último ADM, conflito de `version` e alvo fora do escopo; alvo
+  inexistente, malformado, de outra unidade ou já excluído devolvem o **mesmo**
+  404. Tela: `Administração → Usuários` (diálogo que exige digitar o e-mail do
+  alvo).
+- **Filtros de relatório:** `room_id`, `responsible_person_id` e `bond_status`
+  deixaram de ser campo livre no catálogo (`app/services/report_catalog.py`
+  declara `type` `room`, `person` e `enum`), então `/relatorios` monta `<select>`
+  com as listas já limitadas ao escopo. Causa e correção:
+  [`docs/deploy/PLANO_ACAO_FILTROS_RELATORIOS_2026-10-28.md`](./docs/deploy/PLANO_ACAO_FILTROS_RELATORIOS_2026-10-28.md).
+- **Correções do `/ativar-conta`** (leitura pura do link em
+  `frontend/src/lib/activation-link.ts`; o token só é consumido no clique).
+- **Logomarca do cabeçalho público** (`frontend/src/components/brand/agu-logo.tsx`):
+  troca sazonal temporária, direto sobre o canvas. O ativo oficial
+  (`src/assets/brand/agu-logo.png`) seguiu intacto e continuou sendo o usado
+  pela rota `/og`. **Revertida em 2026-11-01**: o cabeçalho público voltou à
+  logomarca oficial e o ativo temporário foi apagado — ver a seção da logomarca
+  em [`docs/deploy/CHECKLIST.md`](./docs/deploy/CHECKLIST.md). A reversão
+  precisa de rebuild do frontend para valer em produção.
+- Rebuild usado nesta entrega:
+  `docker compose build backend frontend && docker compose up -d backend frontend`.
+- **Validação funcional pelo responsável: ainda NÃO confirmada.** Também não
+  foram reexecutados nesta data `scripts/test-backend.sh`,
+  `scripts/test-responsive.sh` nem `scripts/security-audit.sh`.
+
+### Implantado (2026-10-20) — histórico
 
 - Em produção em `https://ueato.revizzicar.com.br` (VPS Hostinger, CloudPanel,
   Cloudflare com "Allow traffic from Cloudflare only"). Containers `backend`,
@@ -149,8 +203,10 @@ vhost).
   `127.0.0.1:3110` (site).
 - Vhost em uso: [`infra/cloudpanel/vhost.ueato-cloudpanel.conf`](./infra/cloudpanel/vhost.ueato-cloudpanel.conf);
   as diferenças em relação ao modelo estão no roteiro (seção 5).
-- Alembic carimbado em `0011_dashboard_charts_prefs` (IDs encurtados para
-  caber em `varchar(32)`; ver `docs/database/historico-migracoes.md`).
+- Alembic carimbado, **naquela data**, em `0011_dashboard_charts_prefs` (IDs
+  encurtados para caber em `varchar(32)`; ver
+  `docs/database/historico-migracoes.md`). Hoje o carimbo é
+  `0019_user_soft_delete`.
 - Verificado de fora: `/api/health` ok e cada cabeçalho de segurança emitido
   uma única vez.
 - Pendências: teste completo no navegador (login ADM com MFA, dashboard);
@@ -182,8 +238,9 @@ vhost).
   pessoa responsável. Só é lido quando a planilha tem exatamente 2 colunas
   `RESPONSAVEL` (senão a prévia mostra um aviso). Filtro, ordenação e coluna em
   Patrimônios; `GET /api/v1/assets/bond-statuses`. Migração
-  `0012_asset_bond_status` (espelho `sql/0015`) já aplicada no Supabase; no
-  deploy basta `alembic stamp 0012_asset_bond_status`.
+  `0012_asset_bond_status` (espelho `sql/0015`) aplicada no Supabase e hoje
+  coberta pelo carimbo `0019_user_soft_delete` (a coluna `assets.bond_status`
+  foi conferida no banco em 2026-10-29).
 - **Dashboard personalizável:** cada usuário exibe o que é do seu interesse.
   Filtros na URL (unidade, unidade dona, sala, responsável, localizado S/N,
   vínculo, tipo, período de registro, inventário, com/sem sala, com/sem
@@ -194,12 +251,13 @@ vhost).
   `docs/architecture/dashboard-api.md`.
 - Revisão: `docs/security/REVISAO_VINCULO_FILTROS_2026-10-20.md` (SEC-VF-01
   corrigido; SEC-VF-02 pendente; `certifi` 2026.10.19 aplicado em 2026-10-21).
-- **Importação de Bens:** só depois do deploy desta versão.
+- **Importação de Bens:** executada depois deste deploy — 1.069 bens, entre
+  2026-10-22 e 2026-10-29.
 
 ### Catálogo de painéis do dashboard por perfil (2026-10-27)
 
 - **Catálogo novo de painéis** (`app/services/dashboard_panels_service.py`; eram 12
-  nesta data e hoje são 13, ver a seção da Onda D abaixo),
+  nesta data e hoje são 14, ver as seções da Onda D e de 2026-11-01 abaixo),
   com permissão por perfil **no backend** (na época ADM 12, USER 9, RH 7), rótulo,
   tamanhos admitidos `P`/`M`/`G` e tamanho padrão. Substitui a allowlist
   antiga de 15 ids de `user_preferences.dashboard_layout`.
@@ -211,10 +269,10 @@ vhost).
 - Tabela `user_dashboard_preferences` (migração `0017_dashboard_panel_prefs`,
   espelho `backend/migrations/sql/0020_dashboard_panel_prefs.sql`): **DDL
   aplicado à mão no Supabase em 2026-10-27, com autorização explícita** (RLS
-  sem políticas, sem grants para `anon`/`authenticated`, 0 linhas). Carimbo já
-  feito: o `alembic_version` está em `0018_equipment_classification`, que
-  sucede esta revisão na cadeia linear — não rodar `alembic upgrade` sobre
-  ela.
+  sem políticas, sem grants para `anon`/`authenticated`, 0 linhas). A tabela
+  existe no banco (conferido em 2026-10-29) e o `alembic_version` hoje é
+  `0019_user_soft_delete`, que sucede esta revisão na cadeia linear — não rodar
+  `alembic upgrade` sobre este banco.
 - As escolhas antigas são traduzidas (`kpis`->`kpi_workstations`,
   `units`->`equipment_by_unit_chart`, `tech_summary`->`kpi_infrastructure`,
   `tech_category`->`category_distribution`, `tech_units`->
@@ -231,7 +289,7 @@ vhost).
   ADM prevalece). Regras, listas de contexto e **como adicionar uma regra nova**
   (onde, ordem de prioridade, teste, medir o impacto com `flask classify-equipment`
   em dry-run): `docs/architecture/classificacao-patrimonial.md`.
-- **13 painéis** com permissão por perfil no backend (ADM 13, USER 10, RH 8), tela
+- **14 painéis** com permissão por perfil no backend (ADM 14, USER 11, RH 9), tela
   "Personalizar painéis" e dados em `/api/v1/dashboard/panels/<id>/data`; fila de
   revisão `/dashboard/classificacao` e `POST /assets/<id>/category-override` (ADM +
   AAL2). Contrato, mapa de migração dos 15 painéis antigos e limitações
@@ -239,15 +297,21 @@ vhost).
   remoção de override): `docs/architecture/dashboard-api.md`.
 - **Banco:** migrações `0016_asset_search_key`, `0017_dashboard_panel_prefs` e
   `0018_equipment_classification` (espelhos `sql/0019`, `sql/0020`, `sql/0021`), DDL
-  aplicado à mão no Supabase; `alembic_version` = `0018` por UPDATE manual. **Nunca
-  rodar `alembic upgrade` sobre este banco.** Rollbacks, backup e verificação:
-  `docs/database/historico-migracoes.md`.
-- **Pendência (decisão do responsável):** as colunas de classificação estão NULL
-  (sem backfill). Rodar `flask classify-equipment` (dry-run por padrão) e decidir
-  entre `--apply` (só com autorização) antes da 1ª importação ou aceitar que a 1ª
-  importação conte ~1.069 bens como atualizados (`version`+1). Medidas do acervo
-  (protótipo, 2026-10-27): MOBILIARIO 630, TI 403, OUTROS 36; ALTA 1.068, BAIXA 1;
-  sem impressoras (cartão = 0, correto).
+  aplicado à mão no Supabase. Em 2026-10-29 as três estão no banco (função
+  `sispat_alnum_key` e índices `ix_assets_patrimony_key_trgm`,
+  `ix_assets_description_trgm`, `ix_assets_equipment_active`; tabela
+  `user_dashboard_preferences`; colunas `equipment_family`,
+  `equipment_category`, `classification_confidence`) e o `alembic_version` é
+  `0019_user_soft_delete`. **Nunca rodar `alembic upgrade` sobre este banco.**
+  Rollbacks, backup e verificação: `docs/database/historico-migracoes.md`.
+- **Backfill (decisão do responsável):** quando esta onda foi escrita as colunas de
+  classificação estavam NULL. Rodar `flask classify-equipment` (dry-run por padrão)
+  e decidir entre `--apply` (só com autorização) antes da 1ª importação ou aceitar
+  que a 1ª importação conte os bens como atualizados (`version`+1). **Se o
+  `--apply` já foi executado, não foi reconferido nesta data.** As medidas de
+  acervo citadas em 2026-10-27 vinham do dry-run do protótipo daquela data
+  (MOBILIARIO 630, TI 403, OUTROS 36; ALTA 1.068, BAIXA 1; sem impressoras) e não
+  foram refeitas.
 - **Segurança (Onda 4):** `docs/security/REVISAO_QA_ONDA4_2026-10-27.md` —
   backend 14344 passed/64 skipped/4 xfailed/0 failed em Python 3.10 e SQLite;
   gitleaks e trivy não executados, pip-audit inconclusivo; **não validado em
@@ -255,11 +319,48 @@ vhost).
 - Rebuild: backend + frontend (`docker compose build backend frontend && docker
   compose up -d backend frontend`), somente com autorização de implantação.
 
+### Painel do quantitativo global por situação de localização (2026-11-01)
+
+- **14º painel do catálogo**, `located_summary` (`tipo = grafico`): total GLOBAL de bens
+  localizados x não localizados x não informado, o irmão agregado de
+  `located_by_unit_chart`. Catálogo agora: **ADM 14, USER 11, RH 9**. Posição padrão: logo
+  após `located_by_unit_chart`; tamanhos P/M/G, padrão **M**; sem exportação e sem rota de
+  registros (as duas devolvem o mesmo 404 de painel inexistente).
+- Dados em `GET /api/v1/dashboard/panels/located_summary/data` (rota genérica já existente,
+  `reports.read` + AAL2 para ADM): as TRÊS séries saem sempre, na ordem
+  `SIM`/`NAO`/`DESCONHECIDO`, inclusive com `value: 0`; `total` é a soma exata no escopo de
+  unidade do ator e nos filtros (`unit_id`/`familia`/`categoria`); `percentual` é
+  `round(value*100/total, 1)` — série vazia com acervo não vazio devolve `0.0`, e `null`
+  aparece só quando `total = 0` (200, nunca erro). Diferente do endpoint legado
+  `GET /dashboard/por-situacao`, que **descarta** as situações com zero.
+- **Tela** (`frontend/src/components/features/dashboard/located-summary-view.tsx`): rosca com
+  as três séries por cor + textura (verde liso, laranja listrado, cinza pontilhado), legenda
+  com o valor de cada série (inclusive a de 0), cartão com o total do servidor e tabela
+  `Situação | Bens | % do total` com rodapé de total — o total mostra "—" na coluna de
+  percentual, nunca 100%. Abaixo de `lg`, cartões em vez da tabela. O painel **não abre lista
+  de bens**: `/patrimonios` não aceita a situação como parâmetro de URL, então ele orienta a
+  usar o filtro "Localizado" e linka `/patrimonios` sem filtro. UX:
+  `docs/ux/DASHBOARD.md` §1.
+- Quem já salvou preferências recebe o painel ao fim da lista, visível, tamanho M.
+  **Sem migração** e sem rota nova. Contrato e testes:
+  `docs/architecture/dashboard-api.md` ("Painel `located_summary`"),
+  `backend/tests/test_dashboard_located_summary.py`,
+  `backend/tests/test_dashboard_panels_located_summary.py`,
+  `frontend/e2e/dashboard-located-summary-functional.spec.ts` (não reexecutados nesta data).
+- Na mesma frente, a tabela do painel `located_by_unit_chart` ganhou **linha de totais**
+  (`located-chart-view.tsx`): total geral verbatim do servidor e, por situação, a soma das
+  linhas que o servidor mandou (inclusive "Outras"); se os dois não fecharem, os **dois**
+  números são exibidos num aviso, nunca escondidos.
+- Rebuild: backend + frontend
+  (`docker compose build backend frontend && docker compose up -d backend frontend`), somente
+  com autorização de implantação. Este trabalho é posterior à imagem implantada em
+  2026-10-29, portanto **não está em produção**.
+
 ### Painel de localização dos bens por unidade (Onda D, 2026-10-29)
 
 - **13º painel do catálogo**, `located_by_unit_chart` (gráfico de barras agrupadas
   localizados / não localizados / não informado por unidade, top 15 + "Outras" com soma
-  exata). Catálogo agora: **ADM 13, USER 10, RH 8**. Posição padrão: logo após
+  exata). Catálogo então: **ADM 13, USER 10, RH 8** (hoje 14/11/9, ver abaixo). Posição padrão: logo após
   `equipment_by_unit_chart`. Quem já salvou preferências o recebe ao fim da lista,
   visível, tamanho G.
 - O clique numa barra (ou nos botões da tabela de dados, para teclado) abre a lista de bens
@@ -270,7 +371,10 @@ vhost).
   histórico. Contrato completo: `docs/architecture/dashboard-api.md`.
 - **Deploy:** sem migração, sem DDL, sem backfill. Rebuild de backend e frontend
   (`docker compose build backend frontend && docker compose up -d backend frontend`),
-  somente com autorização. **Nada foi implantado.**
+  somente com autorização explícita. Esta onda está em commit anterior ao lote
+  implantado em 2026-10-29 (ver "Implantado (2026-10-29)"), logo faz parte da
+  imagem em produção; a **validação funcional pelo responsável ainda não está
+  confirmada**.
 
 ### Painéis de Tecnologia no dashboard (2026-10-22)
 
@@ -278,9 +382,12 @@ vhost).
   situação operacional, sem responsável e tempo desde o registro) + exportação
   CSV/XLSX agregada (`csv_safety`, auditada). Só contagens (RH sem dados pessoais).
   Contrato: `docs/architecture/dashboard-api.md`; UX: `docs/ux/DASHBOARD_PERSONALIZACAO.md`.
-- Migração `0015_asset_tech_classification` (espelho `backend/migrations/sql/0018_*.sql`):
-  **PENDENTE, NÃO aplicada** (Supabase único: dev = prod). Só com autorização: executar
-  o espelho no SQL Editor e depois `alembic stamp 0015_asset_tech_classification`.
+- Migração `0015_asset_tech_classification` (espelho
+  `backend/migrations/sql/0018_asset_tech_classification.sql`): **aplicada** — as
+  colunas `assets.asset_category`, `assets.tech_type` e
+  `assets.operational_status` existem no banco (conferido em 2026-10-29) e a
+  revisão está coberta pelo carimbo `0019_user_soft_delete`. O texto
+  "PENDENTE" desta seção era o estado de 2026-10-22.
 - Classificação inicial: `flask classify-assets` (dry-run por padrão; `--apply` grava;
   `--list-unclassified` só lê e lista id + descrição truncada dos bens sem regra).
   Correção manual: PATCH `/assets/<id>` (ADM/USER, escopo, `version`) e tela de
@@ -294,8 +401,9 @@ vhost).
 - **Personalizar painéis:** cada usuário mostra/oculta e reordena os painéis
   do dashboard (`user_preferences.dashboard_layout`, migração
   `0013_dashboard_layout_prefs`, espelho `sql/0016`, aplicada no Supabase em
-  2026-10-21; no deploy, `alembic stamp 0013_dashboard_layout_prefs`). O
-  relatório imprimível segue a mesma ordem.
+  2026-10-21; a coluna `user_preferences.dashboard_layout` foi conferida no
+  banco em 2026-10-29 e o carimbo já passou deste ponto). O relatório
+  imprimível segue a mesma ordem.
 - Tipo de gráfico também em localização, vínculo e salas; clicar num item do
   gráfico aplica o filtro na URL (de novo, remove); no celular a barra de
   filtros é recolhível.
@@ -313,14 +421,17 @@ vhost).
 
 ```
 SISPAT-AGU/
-├── backend/                 # API Flask (modelos, rotas, serviços, migrações)
+├── backend/                 # API Flask (rotas em app/api/v1, serviços,
+│   │                         # modelos, autorização, migrações Alembic)
 │   └── Dockerfile
-├── frontend/                 # Next.js (telas, testes Playwright em e2e/)
+├── frontend/                 # Next.js (31 telas, testes Playwright em e2e/)
 │   ├── Dockerfile
-│   └── src/{app,components,features,lib}/
+│   └── src/{app,assets,components,hooks,lib}/
 │                              # app/(publico): /login e /ativar-conta (tela
 │                              # autônoma, sem menu); app/(app): shell + rotas
-│                              # autenticadas (URLs inalteradas)
+│                              # autenticadas (URLs inalteradas). Os módulos de
+│                              # domínio ficam em src/components/features/
+│                              # (src/features/ existe só com .gitkeep)
 ├── infra/
 │   └── cloudpanel/           # Modelo de vhost Nginx para o CloudPanel
 │                              # (infra/cloudpanel/vhost.conf.example)
@@ -374,20 +485,90 @@ CI: `.github/workflows/ci.yml` (sem deploy) + `.github/dependabot.yml`.
 Next.js está em `15.5.28` (corrige GHSA-2464-fhr4-w9xw e GHSA-p3m5-59mp-jv5r); histórico em
 `docs/security/HISTORICO_DEPENDENCIAS.md`.
 
-### Estado do banco de produção (Supabase `tocbtonqnahmtegfkrmn`, 2026-10-14)
+### Estado do banco de produção (Supabase `tocbtonqnahmtegfkrmn`, 2026-10-29)
+
+Conferido em **2026-10-29** por consulta somente leitura ao banco. Supabase é
+único: **dev = prod**. Nenhuma migração é aplicada aqui sem autorização
+explícita, e o padrão do projeto é o responsável executar o espelho `.sql` no
+SQL Editor e só então carimbar o Alembic (`alembic stamp`, nunca `upgrade`).
+
+- `alembic_version` = **`0019_user_soft_delete`** — igual à head do código. A
+  cadeia é linear (`0001` → `0019`), então o carimbo declara toda a cadeia
+  aplicada. Mapeamento revisão ↔ espelho `.sql` (até `sql/0022`), comando de
+  `downgrade` e `pg_dump` de backup: [`backend/README.md`](./backend/README.md).
+- Objetos conferidos diretamente nesta data:
+  - `users.deleted_at`, `users.deleted_by`, `users.anonymized_at` (0019);
+  - `assets.bond_status` (0012); `assets.asset_category`, `assets.tech_type`,
+    `assets.operational_status` (0015); `assets.equipment_family`,
+    `assets.equipment_category`, `assets.classification_confidence` (0018);
+  - função `public.sispat_unaccent` (0014) e função `public.sispat_alnum_key`
+    com o índice funcional `ix_assets_patrimony_key_trgm` (0016);
+  - índices `ix_assets_description_trgm`, `ix_assets_equipment_active`,
+    `ix_assets_bond_status_lower`, `ix_assets_category_active` e o único
+    `uq_assets_patrimony_number_active`;
+  - `user_preferences.dashboard_charts` (0011) e
+    `user_preferences.dashboard_layout` (0013);
+  - tabela `user_dashboard_preferences` (0017).
+- **Não existe coluna `assets.search_key`.** A busca por número patrimonial usa
+  a função `sispat_alnum_key` e o índice funcional
+  `ix_assets_patrimony_key_trgm`, criados pela 0016.
+- Os cabeçalhos de alguns arquivos de migração/espelho (0016, 0019) ainda dizem
+  "PENDENTE DE APLICAÇÃO": é o texto de quando foram escritos, não o estado do
+  banco.
+- Outros fatos conferidos: `assets.located` é o enum `asset_located_status`,
+  `users.auth_user_id` é `text`, as chaves primárias são `uuid`, a permissão
+  `users.delete` está semeada e vinculada **só** ao ADM, o schema `public` tem
+  28 tabelas de aplicação (+ `alembic_version`) e **não** existem
+  `units.full_identifier` nem o índice `ix_invites_revoked_by` (este último
+  segue como proposta em `docs/database/historico-migracoes.md`).
+- Não reconferidos nesta data: seeds de permissões de catálogo e bucket
+  `avatars` do Storage. As contagens de linhas estão na seção seguinte.
+
+### Acervo importado (conferido em 2026-11-01)
+
+Consulta somente leitura e **agregada** ao banco de produção (nenhuma linha de
+bem foi lida individualmente):
+
+- **1.069 bens** em `assets`, todos ativos (nenhum `deleted_at`), todos com
+  número patrimonial distinto e `source_system` = `google_sheets`.
+- Criados em 2026-10-22 (187), 2026-10-23 (42) e 2026-10-26 (840).
+- A importação está **completa e idempotente**: a última prévia confirmada
+  (2026-10-29 21:06 UTC, a 24ª de `google_sheets`) trouxe 1.069 linhas com
+  **0 novo / 1.069 existente / 0 duplicado / 0 inválido / 0 conflitante**.
+- `raw_import_records`: 17.181 linhas em 40 jobs de sincronização, todas
+  `IMPORTADO`, com 1.196 `source_record_id` distintos. O último job tem
+  exatamente os 1.069 que existem como bem; os outros 127 são resíduo de
+  sincronizações anteriores (linhas que saíram da planilha ou foram
+  re-chaveadas), o que é o papel da zona de pouso append-only — **não** são
+  bens faltando.
+- Classificação: 100% com `equipment_family` e `classification_rules_version`
+  = `"2"`; 36 em OUTROS, 1 com confiança BAIXA, 0 com `category_override`.
+  Chegou pela confirmação de importação de 2026-10-27, não pelo backfill
+  auditado — ver `docs/architecture/classificacao-patrimonial.md`.
+- Vínculo (`bond_status`): Servidor 733, Terceirizado 70, Ocioso 32,
+  Estagiario 11 e 223 bens sem vínculo. `located`: SIM 840, NAO 229.
+- Preenchimento: 846 bens com responsável, 697 com sala, 4 unidades com bens.
+- `import_previews`: **101 prévias guardadas**, 40 delas confirmadas. O
+  expurgo LGPD (item 6 de
+  `docs/deploy/PENDENCIAS_OPERACIONAIS_2026-10-20.md`) estava condicionado à
+  importação real e, portanto, **está vencido**.
+
+### Estado do banco de produção (Supabase `tocbtonqnahmtegfkrmn`, 2026-10-14) — histórico
 
 - Alembic aplicado até `0005_settings_ai_users` (verificado em 2026-10-14:
   colunas novas de `users`, `ai_settings`/`user_preferences` com RLS e sem grants
   para `anon`/`authenticated`, IA desligada).
 - `migrations/sql/0008_storage_avatars.sql` (bucket privado `avatars` do Storage)
-  **NÃO aplicado**; requer autorização. Sem ele, as rotas de foto respondem 503
+  registrado como **NÃO aplicado** naquela data; requer autorização e **não foi
+  reconferido em 2026-10-29**. Sem ele, as rotas de foto respondem 503
   `storage_unavailable` e o resto do sistema segue normal.
 - Seeds SQL `0002` (roles/permissions) e `0005` (permissões de gestão de
   usuários/segurança) aplicados.
 - Primeiro ADM criado por bootstrap (Supabase Auth + `users` + `user_roles` +
   `user_unit_access` + `audit_logs` com `BOOTSTRAP_FIRST_ADMIN`), sem expor
   dados pessoais além do necessário.
-- 4 unidades: 023401 PF, 023402 PU, 023403 CJU, 023404 UEA.
+- 4 unidades: 023401 PF, 023402 PU, 023403 CJU, 023404 UEA (levantamento de
+  2026-10-14; não reconferido nesta data).
 
 Cadeia e mapeamento Alembic ↔ SQL: `backend/README.md`. Notas sobre os dois
 históricos de migração: `docs/database/historico-migracoes.md`.
@@ -436,6 +617,15 @@ Relatórios e exportações (`GET /api/v1/reports` catálogo; `GET /api/v1/repor
 
 Inventários (`/api/v1/inventories`: campanhas de conferência por unidade; criar/iniciar/encerrar/cancelar só ADM+AAL2, conferir bens ADM/USER, resumo calculado no servidor; encerramento imutável; não altera `assets.located`) e locais (`GET /api/v1/locations`, somente leitura): [`docs/architecture/inventories-api.md`](./docs/architecture/inventories-api.md).
 
+Convite (2026-10-29): o e-mail de convite é montado e enviado pelo **próprio backend**
+(`app/services/invite_delivery.py`, via `POST /auth/v1/admin/generate_link` com
+`type=invite`, que não envia e-mail), com link `?token_hash=...&type=invite` para
+`/ativar-conta`. O `POST /auth/v1/invite` do painel não é mais usado porque seu link de
+uso único era consumido por scanners de antivírus de e-mail antes do clique da pessoa
+(diagnóstico em `docs/deploy/PLANO_ACAO_USUARIOS_CONVITE_2026-10-28.md`). O
+`token_hash` e a URL montada nunca são logados, auditados nem devolvidos ao chamador, e
+o `redirect_to` é validado contra `INVITE_ALLOWED_REDIRECT_URLS` antes de qualquer rede.
+
 Tela **Administração → Usuários** (ADM com MFA/AAL2) e **Configurações → Perfil**
 (qualquer usuário). Contrato em
 [`docs/architecture/modulo-configuracoes.md`](./docs/architecture/modulo-configuracoes.md)
@@ -445,7 +635,41 @@ Tela **Administração → Usuários** (ADM com MFA/AAL2) e **Configurações �
   por allowlist e paginação. O ADM só vê usuários das suas unidades (e contas sem
   unidade); alvo alheio, inexistente ou malformado → mesmo 404.
 - **Detalhe:** perfil e unidades (checkboxes), conta (desativar/reativar, encerrar
-  sessões, e-mail de redefinição de senha, reset de MFA), foto e histórico de auditoria.
+  sessões, e-mail de redefinição de senha, reset de MFA, excluir), foto e histórico de
+  auditoria.
+- **Permissões — o que é gravável:** o que o ADM altera é a **atribuição** de perfil e
+  de unidades de cada usuário, por `PATCH /api/v1/users/<id>`; o backend exige
+  `users.manage` no decorator e checa `users.assign_role` (campo `role`) e
+  `users.assign_unit` (campo `unit_ids`) **antes** de tocar o banco, auditando a
+  negação. Já a **matriz perfil × permissão** é hoje somente leitura: a tela
+  `/administracao/perfis-permissoes` consome apenas `GET /api/v1/admin/roles` e
+  `GET /api/v1/admin/permissions` (ADM + AAL2 + `roles.manage`); não existe rota de
+  escrita de `role_permissions` — mudar o que um perfil pode fazer continua sendo
+  migração Alembic + espelho `.sql` (ver `docs/permissions/matriz-permissoes.md` e
+  `docs/ux/PERFIS_PERMISSOES.md`).
+- **Exclusão de usuário (2026-10-29): lógica + anonimização, irreversível.**
+  `POST /api/v1/users/<id>/delete` (ADM + AAL2 + permissão `users.delete`, criada pela
+  migração `0019_user_soft_delete` e vinculada só ao ADM). Corpo
+  `{"version": <int>, "confirm_text": "<e-mail exato do alvo>"}` com `extra="forbid"`;
+  a tela exige digitar o e-mail. Serviço:
+  `backend/app/services/user_deletion_service.py`.
+  - A linha de `users` **nunca** é removida (4 FKs `RESTRICT` e o gatilho append-only
+    de `audit_logs` dependem dela); `name`, `email`, `phone`, `avatar_object_key` e
+    `auth_user_id` são anonimizados, com o e-mail trocado por um endereço único e não
+    roteável em `.invalid` — o que libera o e-mail original para um convite futuro.
+  - `audit_logs` permanece intacto, com `actor_user_id` preservado; o evento gravado
+    leva o e-mail apenas **mascarado** e nenhuma cópia do dado removido é guardada.
+  - Recusa: autoexclusão (`self_change_forbidden`), último ADM (`last_admin`),
+    conflito de `version`, `confirmation_mismatch` e `target_out_of_scope`. Alvo
+    inexistente, malformado, de outra unidade ou já excluído devolvem o **mesmo** 404,
+    com a negação auditada. JWT de usuário excluído recebe 401.
+  - Eventos de segurança `USER_DELETED` (HIGH) e, se o Auth não acompanhar,
+    `USER_PROVIDER_SYNC_FAILED`.
+  - Rebuild desta entrega:
+    `docker compose build backend frontend && docker compose up -d backend frontend`
+    (somente com autorização). A migração `0019` precisa estar aplicada **antes** da
+    imagem nova do backend: o modelo `User` declara as três colunas e a consulta de
+    autenticação as seleciona.
 - **Redefinição de senha:** o e-mail é montado e enviado pelo **próprio backend**
   (`app/services/password_reset_delivery.py`), com link `?token_hash=...&type=recovery`
   para `/ativar-conta`; o `POST /auth/v1/recover` não é usado porque o link do template
@@ -504,7 +728,26 @@ A IA é **consultiva e somente leitura**: nunca altera dados nem executa ações
 - **Worker:** tarefas de IA rodam no Celery (`app/celery_app.py`), com agendador embutido
   (`worker -B`); suba com `--profile worker`.
 
-## Estado da interface e pendências (2026-10-21)
+## Telas (2026-10-29)
+
+São **31 telas** em `frontend/src/app` (contagem por arquivos `page.tsx`,
+2026-10-29), em dois grupos de rota que não alteram as URLs:
+
+- `(publico)/` — `/login` e `/ativar-conta` (sem shell, sem `AuthGuard`).
+- `(app)/` — shell + `AuthGuard`: `/`, `/dashboard`, `/dashboard/relatorio`,
+  `/dashboard/classificacao` (fila de revisão da classificação, ADM),
+  `/patrimonios`, `/movimentacoes`, `/inventarios`, `/relatorios`, `/unidades`,
+  `/salas-localizacoes`, `/responsaveis`, `/importacoes`,
+  `/administracao` (+ `/usuarios`, `/perfis-permissoes`, `/auditoria`,
+  `/vinculos-unidades`, `/salas`, `/responsaveis`, `/unidades`,
+  `/importacao/cadastros`, `/importacao/google-sheets`, `/integracoes`,
+  `/configuracoes-sistema`) e `/configuracoes` (+ `/perfil`, `/seguranca`,
+  `/aparencia`, `/inteligencia-artificial`).
+
+Detalhes por tela, estados e testes: [`frontend/README.md`](./frontend/README.md)
+e `docs/ux/`.
+
+## Estado da interface e pendências (2026-10-21) — histórico
 
 - **Home** sem selo "Fase 1", com atalho (`DashboardShortcut`) para `/dashboard`.
 - **Menu:** selo "Em breve" (campo `comingSoon`) em Integrações e Configurações do Sistema.
@@ -525,17 +768,21 @@ A IA é **consultiva e somente leitura**: nunca altera dados nem executa ações
   - AUD-14-01: decisão de negócio pendente.
   - Checklist operacional de convite: templates Supabase, SMTP, redirect URLs,
     `INVITE_ALLOWED_REDIRECT_URLS`, MFA, certifi (`docs/deploy/PENDENCIAS_OPERACIONAIS_2026-10-20.md`).
-  - Importação de Bens bloqueada por: stamp da migração 0013, limite de 100 s da Cloudflare
-    e SEC-1021-01.
+  - Importação de Bens: o bloqueio pelo carimbo da migração 0013 **não existe
+    mais** (o `alembic_version` está em `0019_user_soft_delete`). Seguem
+    pendentes o limite de 100 s da Cloudflare na prévia do Sheets e o
+    SEC-1021-01.
 
 ## Fases do projeto
 
 1. **Fase 1 (concluída):** banco de dados, modelagem e permissionamento.
-2. **Em andamento:** importação do Google Sheets, MFA/convite, UX e o módulo de
-   Configurações (IA, Aparência, Gestão de Usuários) — ver `CLAUDE.md` (mantido localmente).
-   Dashboard de equipamentos (classificação patrimonial, 13 painéis, fila de revisão):
-   Ondas 1-5 de 2026-10-27, com backfill e implantação pendentes (seção "Classificação
-   patrimonial e painéis do dashboard (Onda 5)").
+2. **Em andamento:** importação do Google Sheets (Bens importados: 1.069), MFA/convite,
+   UX e o módulo de Configurações (IA, Aparência, Gestão de Usuários) — ver `CLAUDE.md`
+   (mantido localmente).
+   Dashboard de equipamentos (classificação patrimonial, 14 painéis, fila de revisão):
+   Ondas 1-5 de 2026-10-27 e Onda D de 2026-10-29, já no commit implantado em 2026-10-29
+   (validação funcional não confirmada). O **backfill** da classificação
+   (`flask classify-equipment --apply`) segue dependendo de decisão e autorização.
    Etapas 1 (IA), 2 (usuários) e 3 (Aparência: `/me/preferences`, cookie `sispat-ui`,
    `/configuracoes/aparencia`) e 4 (alertas determinísticos `/dashboard/alerts`, insights
    `/ai/insights` e assistente `/ai/ask`, ADM + AAL2) concluídas. Evidências em
@@ -545,11 +792,11 @@ A IA é **consultiva e somente leitura**: nunca altera dados nem executa ações
 
 ### Contrato de paginação (todas as listagens da API v1)
 
-`page` ≥ 1 (padrão 1) e `page_size` SOMENTE 50, 100 ou 200 (padrão 50); qualquer outro valor (25, 0, 500...) => 400. Resposta: `{total, page, page_size, pages, <itens>}` (`pages` = ceil(total/page_size), 0 se vazio). Definição única em `backend/app/services/pagination.py`; ordenação sempre com desempate por `id`. A busca (`q`/`search`) é sem caixa e sem acento (`app/security/text_search.py`: `sispat_unaccent(coluna) ILIKE :padrão`, escape de `%`/`_`). Exige a migração `0014_unaccent_search` (espelho `backend/migrations/sql/0017_unaccent_search.sql`; extensão no schema `extensions` e wrapper `SECURITY INVOKER` com `search_path = extensions, pg_catalog` e chamada qualificada `extensions.unaccent`), NÃO aplicada em produção: aplicar ANTES do deploy do backend.
+`page` ≥ 1 (padrão 1) e `page_size` SOMENTE 50, 100 ou 200 (padrão 50); qualquer outro valor (25, 0, 500...) => 400. Resposta: `{total, page, page_size, pages, <itens>}` (`pages` = ceil(total/page_size), 0 se vazio). Definição única em `backend/app/services/pagination.py`; ordenação sempre com desempate por `id`. A busca (`q`/`search`) é sem caixa e sem acento (`app/security/text_search.py`: `sispat_unaccent(coluna) ILIKE :padrão`, escape de `%`/`_`). Exige a migração `0014_unaccent_search` (espelho `backend/migrations/sql/0017_unaccent_search.sql`; extensão no schema `extensions` e wrapper `SECURITY INVOKER` com `search_path = extensions, pg_catalog` e chamada qualificada `extensions.unaccent`), aplicada: a função `public.sispat_unaccent` existe no banco de produção (conferido em 2026-10-29) e a revisão está coberta pelo carimbo `0019_user_soft_delete`.
 
 ### Busca de bens (`GET /api/v1/assets?q=`)
 
-O termo é dividido em tokens (qualquer espaço, inclusive NBSP; máx. 8; tokens só de pontuação são ignorados, exceto se todos forem). Todos os tokens devem casar (AND, qualquer ordem); cada token casa (OR) em número patrimonial, descrição, `source_record_id`, nome do responsável e nome da sala (estes dois via `EXISTS`, sem JOIN, só para bens já no escopo do usuário; vínculos nulos nunca casam). Sem caixa e sem acento nos DOIS lados (`sispat_unaccent` aplicado também ao termo, no banco), com `%`, `_` e `\` literais. Tokens com dígito também casam pela chave alfanumérica do número (`sispat_alnum_key`: minúsculas, sem acento/pontuação/espaços/NBSP): `AGU-123`, `12.345`, `AB 123` encontram `AGU123`, `12345`, `AB-123`. Índice trigram funcional `ix_assets_patrimony_key_trgm` na migração 0016 (espelho `backend/migrations/sql/0019_asset_search_key.sql`, PENDENTE DE APLICAÇÃO; aplicar antes do deploy do backend). O filtro `unit_id` é a unidade alocadora (`Asset.unit_id`; `owner_unit_id` tem filtro próprio), enquanto o escopo de acesso é unit OU owner. A ordenação por `patrimony_number` é lexicográfica (texto): `"10"` vem antes de `"9"`. Testes: `backend/tests/test_assets_search.py`.
+O termo é dividido em tokens (qualquer espaço, inclusive NBSP; máx. 8; tokens só de pontuação são ignorados, exceto se todos forem). Todos os tokens devem casar (AND, qualquer ordem); cada token casa (OR) em número patrimonial, descrição, `source_record_id`, nome do responsável e nome da sala (estes dois via `EXISTS`, sem JOIN, só para bens já no escopo do usuário; vínculos nulos nunca casam). Sem caixa e sem acento nos DOIS lados (`sispat_unaccent` aplicado também ao termo, no banco), com `%`, `_` e `\` literais. Tokens com dígito também casam pela chave alfanumérica do número (`sispat_alnum_key`: minúsculas, sem acento/pontuação/espaços/NBSP): `AGU-123`, `12.345`, `AB 123` encontram `AGU123`, `12345`, `AB-123`. A chave é **função + índice funcional**, não coluna: **não existe `assets.search_key`**. A migração 0016 (espelho `backend/migrations/sql/0019_asset_search_key.sql`) cria a função `sispat_alnum_key` e o índice trigram funcional `ix_assets_patrimony_key_trgm`, ambos **existentes no banco de produção** (conferido em 2026-10-29; o cabeçalho do arquivo da migração ainda diz "PENDENTE", texto de quando foi escrito). O filtro `unit_id` é a unidade alocadora (`Asset.unit_id`; `owner_unit_id` tem filtro próprio), enquanto o escopo de acesso é unit OU owner. A ordenação por `patrimony_number` é lexicográfica (texto): `"10"` vem antes de `"9"`. Testes: `backend/tests/test_assets_search.py`.
 
 ### Importação de bens: lotes e reconciliação
 `POST /imports/google-sheets/confirm` aceita `select_all_eligible` e `excluded_item_ids`

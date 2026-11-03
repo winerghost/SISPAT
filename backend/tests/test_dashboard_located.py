@@ -61,10 +61,10 @@ def by_unit(body):
 
 
 def test_catalogo_contagens_por_perfil_e_posicao():
-    assert len(dps.PANEL_CATALOG) == 13
-    assert len(dps.allowed_panel_ids(["ADM"])) == 13
-    assert len(dps.allowed_panel_ids(["USER"])) == 10
-    assert len(dps.allowed_panel_ids(["RH"])) == 8
+    assert len(dps.PANEL_CATALOG) == 14
+    assert len(dps.allowed_panel_ids(["ADM"])) == 14
+    assert len(dps.allowed_panel_ids(["USER"])) == 11
+    assert len(dps.allowed_panel_ids(["RH"])) == 9
     ids = list(dps.PANEL_IDS)
     assert ids.index(PANEL) == ids.index("equipment_by_unit_chart") + 1
     p = dps.PANELS_BY_ID[PANEL]
@@ -299,4 +299,4 @@ def test_preferencia_salva_antiga_recebe_painel_novo_ao_fim(api):
     # legado: IDs antigos continuam traduzidos; painel novo completa o catalogo
     legacy = dps.panels_from_legacy_layout({"order": ["units", "kpis"], "hidden": []}, ["RH"])
     assert [p["id"] for p in legacy[:2]] == ["equipment_by_unit_chart", "kpi_workstations"]
-    assert PANEL in {p["id"] for p in legacy} and len(legacy) == 8
+    assert PANEL in {p["id"] for p in legacy} and len(legacy) == 9

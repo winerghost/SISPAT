@@ -1,5 +1,15 @@
 # Modelo Lógico — SISPAT-AGU
 
+> **Como ler este documento (nota de 2026-10-29).** As seções 1 a 20 descrevem o
+> modelo **projetado na Fase 1** e foram escritas antes/junto da migração
+> `0001_initial_schema`. Em alguns pontos elas divergem do esquema realmente
+> implantado — as divergências conferidas estão listadas em
+> "0.6 Divergências entre este documento e o esquema implantado". A seção 21
+> documenta o que as migrações `0011`-`0019` acrescentaram. A fonte de verdade do
+> esquema é sempre `backend/migrations/versions/` (head
+> `0019_user_soft_delete`; `alembic_version` de produção = `0019_user_soft_delete`,
+> verificado em 2026-10-29) — ver `historico-migracoes.md`.
+>
 > Fase 1 — Banco de dados e permissionamento. PostgreSQL hospedado no Supabase
 > (projeto `tocbtonqnahmtegfkrmn`). O Flask é a camada exclusiva de autorização;
 > o RLS do Supabase **não** substitui essa validação — ver
@@ -14,6 +24,13 @@
 ## 0. Decisões de modelagem transversais
 
 ### 0.1 Estratégia de chave primária
+
+> **Correção (2026-10-29):** o texto abaixo é a proposta original da Fase 1. O
+> esquema implantado **não** a seguiu: em `backend/migrations/sql/0001_initial_schema.sql`
+> e nos modelos (`backend/app/models/*.py`), **todas** as tabelas de aplicação usam
+> `uuid PRIMARY KEY DEFAULT gen_random_uuid()` — não existe `bigint generated always
+> as identity` no esquema. Consequência prática: toda coluna de FK é `uuid`. Leia as
+> colunas "Tipo" das seções 1 a 20 com essa ressalva; ver 0.6.
 
 - **`users.id` e `assets.id` são `UUID`** (`default gen_random_uuid()`), por
   exigência explícita do domínio: `assets` é a tabela central sincronizada com
@@ -51,6 +68,11 @@
   `roles`, `permissions`) o padrão de "exclusão lógica" é o campo `active
   boolean`, suficiente porque não exigem rastro de quem/quando removeu — se essa
   necessidade existir, a extensão para `deleted_at`/`deleted_by` é direta.
+- **`users` também passou a ter exclusão lógica** (migração `0019_user_soft_delete`,
+  2026-10-28): `deleted_at`/`deleted_by`/`anonymized_at`, com anonimização
+  irreversível dos dados pessoais na mesma transação. Exclusão **física** de usuário
+  continua impossível (FKs `RESTRICT` + gatilho append-only de `audit_logs`). Ver
+  21.7.
 
 ### 0.4 Controle otimista
 
@@ -65,6 +87,30 @@ Por padrão do PostgreSQL, colunas de chave estrangeira **não** são indexadas
 automaticamente. Todas as FKs listadas abaixo recebem índice próprio — necessário
 tanto para performance de `JOIN` quanto para não bloquear a tabela referenciada em
 operações de validação/cascade.
+
+### 0.6 Divergências entre este documento e o esquema implantado (2026-10-29)
+
+Conferido em `backend/migrations/sql/`, `backend/migrations/versions/` e
+`backend/app/models/`:
+
+| Seção | O que este documento diz | O que está implantado |
+|---|---|---|
+| 0.1 e tabelas 2-10, 12-20 | PK `bigint` IDENTITY | PK `uuid DEFAULT gen_random_uuid()` em **todas** as tabelas; FKs `uuid` |
+| 4 `role_permissions` | PK composta `(role_id, permission_id)` | `id uuid` PK + `UNIQUE (role_id, permission_id)` (`uq_role_permissions_role_permission`) |
+| 5 `user_roles` | PK composta `(user_id, role_id)` | `id uuid` PK + unicidade por constraint |
+| 1 `users.auth_user_id` | `uuid NOT NULL UNIQUE` | `text` **NULL** UNIQUE (`uq_users_auth_user_id`); a anonimização da 0019 grava `NULL` nela |
+| 6 `units.full_identifier` | coluna `text NULL UNIQUE` | **não existe**: nenhuma migração cria `units.full_identifier` (verificado por busca em `backend/migrations/`). A distinção "código curto × identificador completo" é atendida hoje por `unit_aliases` (migração `0007_unit_aliases`), não documentada neste arquivo |
+| 0.2 e 11 `assets.located` | `text` + `CHECK` (decisão explícita de não usar `ENUM`) | tipo `ENUM` `asset_located_status` (`SIM`/`NAO`/`DESCONHECIDO`), criado na 0001 — a decisão registrada em 0.2 **não** foi seguida |
+| 11 `assets.owner_unit_id` | `NOT NULL`, FK `ON DELETE RESTRICT` | **NULL** permitido, FK `ON DELETE SET NULL` |
+| 11 `assets.source_system` | `NOT NULL DEFAULT 'GOOGLE_SHEETS'` | `text` sem `NOT NULL` e sem default |
+| 11 `assets` — unicidade | `UNIQUE (source_system, source_record_id)` parcial | essa constraint não existe; o que existe é o índice **único** `uq_assets_patrimony_number_active` em `lower(btrim(patrimony_number)) WHERE deleted_at IS NULL` (migração `0009_uniq_idx_assets_movements`) |
+| 11 `assets` — CHECK de versão | `CHECK (version > 0)` | `ck_assets_version_positive` (`version >= 1`) — mesmo efeito, nome diferente |
+| 12 `asset_movements` | — | existe o índice único `uq_asset_movements_one_pending` em `(asset_id) WHERE status = 'PENDENTE'` (uma movimentação pendente por bem, `0009`), não descrito na seção 12 |
+| escopo geral | "20 tabelas" | **28** tabelas de aplicação. Além das 20 daqui: `import_previews`, `import_preview_items` (0002), `invites`, `invite_units` (0003), `ai_settings`, `user_preferences` (0005), `unit_aliases` (0007) e `user_dashboard_preferences` (0017). Só as duas de preferências estão descritas aqui (21.5 e 21.6); as outras seis seguem **a documentar** |
+
+Correções estruturais das seções 1-20 (reescrita das colunas de tipo) não foram
+feitas nesta passagem: estão registradas acima para não deixar a afirmação falsa
+sem contraditório.
 
 ---
 
@@ -86,12 +132,21 @@ Usuário do sistema (servidor com acesso operacional ao SISPAT-AGU).
 **Índices:** `UNIQUE(email)`, `UNIQUE(auth_user_id)`, `btree(active)` (filtragem de
 usuários ativos).
 
+**Colunas acrescentadas depois da 0001** (a tabela acima é a da `0001_initial_schema`):
+`version`, `sessions_revoked_at`, `avatar_object_key`, `deactivated_at`,
+`deactivated_by` (migração `0005_settings_ai_users`); `phone` + CHECK
+`ck_users_phone_format` (`0008_catalog_source_ids_perms`); `deleted_at`,
+`deleted_by`, `anonymized_at` + CHECK `ck_users_deleted_requires_anonymized`
+(`0019_user_soft_delete`, ver 21.7).
+
 **Justificativas:**
 - **Sem coluna de senha.** O domínio exige "não armazenar senha em texto puro".
   Este modelo vai além: a tabela `users` **não possui nenhum campo de credencial**.
   `auth_user_id` é o vínculo com o provedor de autenticação (Supabase Auth, que
   mantém o hash de senha em `auth.users`, fora do schema de aplicação) — `users`
-  guarda apenas o perfil de negócio do servidor. **Pendente de validação
+  guarda apenas o perfil de negócio do servidor. **Já decidido (2026-10-29):** a
+  autenticação é 100% Supabase Auth; o parágrafo seguinte é o texto original de
+  2026-10-13 e a dúvida que ele levanta não existe mais. **Pendente de validação
   institucional:** confirmar se a autenticação será 100% delegada ao Supabase Auth
   ou se o Flask manterá um provedor próprio (nesse segundo caso, a tabela de
   credenciais com hash — `bcrypt`/`argon2` — deve ficar isolada e nunca exposta em
@@ -231,7 +286,20 @@ Unidade organizacional.
 full_identifier IS NOT NULL`, pois nem toda unidade legada terá o identificador
 completo preenchido no momento da migração).
 
-**Justificativa — campo adicional `full_identifier`:** a especificação do
+> **Correção (2026-10-29): `units.full_identifier` NÃO existe no banco.** Nenhuma
+> migração a cria (busca por `full_identifier` em `backend/migrations/` não retorna
+> nada); a tabela real da 0001 é `id, code, name, description, address, active,
+> created_at, updated_at` + `UNIQUE (code)`. A linha da tabela acima e o índice
+> `UNIQUE(full_identifier)` são **proposta**, não esquema. O que está implantado
+> para o mesmo problema é `unit_aliases` (migração `0007_unit_aliases`, espelho
+> `sql/0010_unit_aliases.sql`), tabela **a documentar** aqui: `id`, `alias`
+> (1..32 caracteres, `btrim`, **único case-insensitive** por
+> `uq_unit_aliases_alias_lower`), `unit_id` (FK `RESTRICT`), `created_at`,
+> `created_by`. O identificador numérico mora em `units.code` (seed
+> `023401`..`023404`) e a sigla da planilha (`PF`, `PU`, `CJU`, `UEA`) em
+> `unit_aliases.alias`.
+
+**Justificativa — campo adicional `full_identifier`** (proposta, ver correção acima)**:** a especificação do
 domínio exige "distinguir código curto (ex. `UEA`) de identificador completo (ex.
 `023404`) — não presumir equivalência". Isso não pode ser atendido com uma única
 coluna `code`; por isso o modelo lógico adiciona `full_identifier` como campo
@@ -347,7 +415,7 @@ presumida neste modelo.
 | `patrimony_number` | `text` | NOT NULL |
 | `description` | `text` | NULL |
 | `unit_id` | `bigint` | NOT NULL, FK → `units(id)` ON DELETE RESTRICT |
-| `owner_unit_id` | `bigint` | NOT NULL, FK → `units(id)` ON DELETE RESTRICT |
+| `owner_unit_id` | `bigint` | ~~NOT NULL, FK → `units(id)` ON DELETE RESTRICT~~ — implantado: **NULL** permitido, FK `ON DELETE SET NULL` |
 | `responsible_person_id` | `bigint` | NULL, FK → `responsible_people(id)` ON DELETE SET NULL |
 | `assigned_user_id` | `uuid` | NULL, FK → `users(id)` ON DELETE SET NULL |
 | `room_id` | `bigint` | NULL, FK → `rooms(id)` ON DELETE SET NULL |
@@ -364,26 +432,53 @@ presumida neste modelo.
 | `deleted_by` | `uuid` | NULL, FK → `users(id)` ON DELETE SET NULL |
 | `version` | `integer` | NOT NULL, DEFAULT `1` |
 
-**Constraints:**
-- `CHECK (located IN ('SIM','NAO','DESCONHECIDO'))`
-- `CHECK (version > 0)`
-- `CHECK (deleted_at IS NULL OR deleted_by IS NOT NULL)` — garante rastreabilidade
-  de quem excluiu logicamente o bem.
-- `UNIQUE (source_system, source_record_id)` **parcial** `WHERE source_record_id
-  IS NOT NULL` — necessária para idempotência da sincronização (ver
-  `docs/architecture/estrategia-sincronizacao.md`): permite que o job de
-  importação faça *upsert* determinístico por linha de origem sem depender do
-  número patrimonial.
+**Colunas acrescentadas depois da 0001:** `bond_status` (`0012`, ver 21.1);
+`asset_category`, `tech_type`, `operational_status` (`0015`, ver 21.2);
+`equipment_family`, `equipment_category`, `classification_confidence`,
+`classification_rule`, `classification_rules_version`, `category_override`
+(`0018`, ver 21.3). **Não existe** coluna `search_key`: a busca por número
+patrimonial usa função + índice funcional (`0016`, ver 21.4).
 
-**Índices:**
-- `btree(patrimony_number)` — **não** único (ver justificativa abaixo).
-- `GIN(to_tsvector('portuguese', coalesce(description,'')))` — busca full-text em
-  `description`, substituindo `LIKE '%...%'` que não usa índice.
-- `btree(unit_id)`, `btree(owner_unit_id)`, `btree(room_id)`,
-  `btree(location_id)`, `btree(responsible_person_id)`, `btree(assigned_user_id)`
-  — todos os FKs.
-- `btree(created_at)` parcial `WHERE deleted_at IS NULL` — suporta o filtro mais
-  comum da aplicação (listar bens ativos) sem escanear registros excluídos.
+**Constraints** (com as correções conferidas em 2026-10-29; ver 0.6):
+- `located` — no esquema implantado é o tipo `ENUM` `asset_located_status`
+  (`SIM`/`NAO`/`DESCONHECIDO`), `NOT NULL DEFAULT 'DESCONHECIDO'`, e **não** um
+  `text` + `CHECK` como propõe 0.2.
+- `ck_assets_version_positive` (`version >= 1`) — o documento original dizia
+  `CHECK (version > 0)`; é o mesmo efeito para inteiros.
+- `ck_assets_deleted_by_required` (`deleted_at IS NULL OR deleted_by IS NOT
+  NULL`) — garante rastreabilidade de quem excluiu logicamente o bem. **Vem da
+  migração `0004_db_security_hardening`**, não da 0001.
+- `uq_assets_patrimony_number_active` — índice **único** parcial em
+  `lower(btrim(patrimony_number))` `WHERE deleted_at IS NULL` (migração
+  `0009_uniq_idx_assets_movements`).
+- `ck_assets_bond_status_len` (0012), `ck_assets_asset_category`,
+  `ck_assets_tech_type`, `ck_assets_operational_status` (0015) e os seis CHECKs de
+  classificação de equipamentos (0018) — ver 21.1 a 21.3.
+- **Não existe** `UNIQUE (source_system, source_record_id)` (parcial ou não). O
+  texto original a descrevia como necessária para a idempotência da
+  sincronização; hoje a idempotência se apoia em `ix_assets_source_record_id`
+  (índice **não** único, da 0001) mais a lógica do serviço de importação — ver
+  `docs/architecture/estrategia-sincronizacao.md`. Se a unicidade por linha de
+  origem for desejada, ela exige **nova** migração Alembic + espelho.
+
+**Índices** (nomes reais da `0001_initial_schema`, conferidos em 2026-10-29):
+- `ix_assets_patrimony_number` em `btree(patrimony_number)` — não único; a
+  unicidade vem do índice parcial `uq_assets_patrimony_number_active` (0009).
+- `ix_assets_description_trgm` — **GIN trigram** (`description gin_trgm_ops`),
+  não `to_tsvector('portuguese', ...)` como dizia o texto original. É o que
+  permite `LIKE '%...%'` com índice.
+- `ix_assets_unit_id`, `ix_assets_owner_unit_id`, `ix_assets_room_id`,
+  `ix_assets_location_id`, `ix_assets_responsible_person_id`,
+  `ix_assets_assigned_user_id`, `ix_assets_created_by`, `ix_assets_updated_by`,
+  `ix_assets_deleted_by`, `ix_assets_source_record_id` — todas as FKs e o id de
+  origem.
+- `ix_assets_active_unit` em `(unit_id)` parcial `WHERE deleted_at IS NULL` —
+  suporta o filtro mais comum da aplicação ("bens ativos por unidade"). O
+  documento original descrevia esse índice sobre `created_at`; o implantado é
+  sobre `unit_id`.
+- Índices das migrações posteriores: `ix_assets_bond_status_lower` (0012),
+  `ix_assets_category_active` (0015), `ix_assets_patrimony_key_trgm` (0016) e
+  `ix_assets_equipment_active` (0018) — ver 21.1 a 21.4.
 
 **Justificativas centrais:**
 - **`patrimony_number` é `TEXT`, nunca numérico.** Números patrimoniais podem ter
@@ -391,15 +486,20 @@ presumida neste modelo.
   se armazenados como ponto flutuante, sofrem perda de precisão e arredondamento
   silencioso (ex.: planilhas Excel/Sheets convertendo "0123456" para `123456` ou
   notação científica). `TEXT` preserva o valor exatamente como recebido da fonte.
-- **`patrimony_number` não é `UNIQUE` nesta fase.** O acervo legado migrado da
-  planilha pode conter duplicidade (erro de digitação histórico, bens
-  reaproveitados, baixas não registradas). Forçar unicidade agora rejeitaria
-  dados reais e impediria a carga inicial. **Pendente de validação
-  institucional:** a política final de unicidade do número patrimonial (único
-  por unidade proprietária? único globalmente? permite duplicidade documentada
-  com justificativa?). Quando definida, a implementação recomendada é um índice
-  único parcial (`WHERE deleted_at IS NULL`) sobre a(s) coluna(s) decidida(s),
-  preservando o histórico de bens excluídos logicamente fora da restrição.
+- **`patrimony_number` passou a ser único entre os bens ativos.** O parágrafo a
+  seguir é o texto original da Fase 1 e está **superado**: a migração
+  `0009_uniq_idx_assets_movements` (espelho
+  `sql/0012_unique_indexes_assets_movements.sql`) criou o índice único parcial
+  `uq_assets_patrimony_number_active` sobre `lower(btrim(patrimony_number))`
+  `WHERE deleted_at IS NULL` — unicidade **global** (não por unidade),
+  case-insensitive e ignorando espaços nas pontas, com os bens excluídos
+  logicamente fora da restrição. Texto original: *"`patrimony_number` não é
+  `UNIQUE` nesta fase. O acervo legado migrado da planilha pode conter
+  duplicidade (erro de digitação histórico, bens reaproveitados, baixas não
+  registradas). Forçar unicidade agora rejeitaria dados reais e impediria a carga
+  inicial."* A política final (único globalmente) é, portanto, a implementada;
+  a mesma migração aborta (`SEC-AST-01`, só com a contagem, sem dados pessoais)
+  se encontrar número duplicado entre bens ativos, em vez de criar o índice.
 - **`located` aceita `DESCONHECIDO`.** Além de "sim" e "não", o domínio reconhece
   que, para boa parte do acervo migrado, a informação de localização
   simplesmente não existe ou não foi conferida — tratar a ausência de dado como
@@ -463,7 +563,11 @@ Histórico de movimentação (unidade, sala e/ou responsável) de um bem.
   dimensão (unidade, sala ou responsável); caso contrário não é uma movimentação.
 
 **Índices:** `btree(asset_id)`, `btree(status)`, `btree(requested_by)`,
-`btree(approved_by)`, `btree(origin_unit_id)`, `btree(destination_unit_id)`.
+`btree(approved_by)`, `btree(origin_unit_id)`, `btree(destination_unit_id)`; mais
+o índice **único** parcial `uq_asset_movements_one_pending` em `(asset_id)`
+`WHERE status = 'PENDENTE'` (migração `0009_uniq_idx_assets_movements`): no
+máximo uma movimentação pendente por bem. A migração aborta (`SEC-MOV-02`) se
+houver bem com duas pendentes, em vez de criar o índice.
 
 **Justificativa — `ON DELETE RESTRICT` generalizado:** nenhuma entidade
 referenciada por uma movimentação histórica (unidade, sala, responsável, usuário)
@@ -713,6 +817,245 @@ sem necessidade de reimportar a planilha.
 
 ---
 
+---
+
+## 21. Acréscimos das migrações 0011-0019
+
+Esta seção cobre o que entrou no esquema **depois** do desenho original (seções 1
+a 20). Cada subseção cita a migração Alembic, o espelho `.sql` e o estado
+conferido em 2026-10-29; o detalhamento de aplicação, idempotência, downgrade e
+backup está em `historico-migracoes.md`.
+
+### 21.1 `assets.bond_status` — vínculo do bem (0012)
+
+Migração `0012_asset_bond_status` / espelho `sql/0015_asset_bond_status.sql`.
+Coluna conferida no banco em 2026-10-29.
+
+| Coluna | Tipo | Constraints |
+|---|---|---|
+| `bond_status` | `text` | NULL, sem default |
+
+- CHECK `ck_assets_bond_status_len`: `NULL` **ou** 1..64 caracteres sem espaços
+  nas pontas (`btrim`).
+- Índice `ix_assets_bond_status_lower` em `lower(bond_status)`
+  `WHERE deleted_at IS NULL` (**a confirmar** no banco).
+
+É o campo "Vínculo": o valor da **1ª** coluna `RESPONSAVEL` da planilha (ex.:
+Servidor, Terceirizado, Ocioso), que antes só existia em
+`raw_import_records.normalized_values->>'vinculo_situacao'`. O backfill da
+migração lê o registro bruto `IMPORTADO` mais recente do mesmo
+`source_record_id` (origem `google_sheets`), normaliza (espaços colapsados,
+truncado em 64 caracteres), não grava vazio e **não** incrementa
+`assets.version`. O valor de origem permanece em `raw_import_records` — nada se
+perde se a coluna for revertida.
+
+### 21.2 `assets` — classificação técnica (0015)
+
+Migração `0015_asset_tech_classification` / espelho
+`sql/0018_asset_tech_classification.sql`. As três colunas foram conferidas no
+banco em 2026-10-29.
+
+| Coluna | Tipo | Constraints |
+|---|---|---|
+| `asset_category` | `text` | NULL, CHECK `ck_assets_asset_category` |
+| `tech_type` | `text` | NULL, CHECK `ck_assets_tech_type` |
+| `operational_status` | `text` | NULL, CHECK `ck_assets_operational_status` |
+
+- `asset_category` ∈ `TECNOLOGIA`, `MOBILIARIO`, `VEICULO`, `EQUIPAMENTO`,
+  `OUTROS`;
+- `tech_type` ∈ `COMPUTADOR`, `NOTEBOOK`, `MONITOR`, `IMPRESSORA`, `OUTRO_TI` e
+  **somente** quando `asset_category = 'TECNOLOGIA'` (o CHECK amarra os dois
+  campos);
+- `operational_status` ∈ `EM_USO`, `ESTOQUE`, `MANUTENCAO`, `BAIXADO`;
+- índice parcial `ix_assets_category_active` em
+  `(asset_category, tech_type, unit_id) WHERE deleted_at IS NULL AND asset_category IS NOT NULL`
+  (**a confirmar** no banco).
+
+`NULL` significa **"não informado"**, nunca um valor presumido: não há default e
+a migração não faz backfill. A classificação inicial é o comando
+`flask classify-assets` (dry-run por padrão).
+
+### 21.3 `assets` — classificação de equipamentos (0018)
+
+Migração `0018_equipment_classification` / espelho
+`sql/0021_equipment_classification.sql`, aplicada em 2026-10-27. Conferidas no
+banco em 2026-10-29: `equipment_family`, `equipment_category`,
+`classification_confidence` e o índice `ix_assets_equipment_active`; as outras
+três colunas ficam **a confirmar**.
+
+| Coluna | Tipo | Constraints |
+|---|---|---|
+| `equipment_family` | `text` | NULL, CHECK `ck_assets_equipment_family` |
+| `equipment_category` | `text` | NULL, CHECK `ck_assets_equipment_category` |
+| `classification_confidence` | `text` | NULL, CHECK `ck_assets_classification_confidence` |
+| `classification_rule` | `text` | NULL, CHECK `ck_assets_classification_rule_len` |
+| `classification_rules_version` | `text` | NULL, CHECK `ck_assets_classification_rules_version_len` |
+| `category_override` | `text` | NULL, CHECK `ck_assets_category_override` |
+
+- `equipment_family` ∈ `TI`, `MOBILIARIO`, `OUTROS`;
+- `equipment_category` só aceita valor **da família correta** — `TI`:
+  `COMPUTADOR`, `NOTEBOOK`, `MONITOR`, `IMPRESSORA`, `NOBREAK`, `ESTABILIZADOR`,
+  `DOCKING`, `REDE`, `OUTRO_TI`; `MOBILIARIO`: `MESA`, `ARMARIO`, `GAVETEIRO`,
+  `ESTACAO_TRABALHO`, `CADEIRA`, `POLTRONA`, `SOFA`, `ESTANTE`, `OUTRO_MOB`;
+  `OUTROS`: `EQUIPAMENTO`, `OUTROS`;
+- `classification_confidence` ∈ `ALTA`, `BAIXA`;
+- `classification_rule` 1..64 caracteres sem espaços nas pontas — registra
+  **qual** regra decidiu; `classification_rules_version` 1..16 caracteres;
+- `category_override` aceita qualquer uma das **20** categorias (é a correção
+  manual do ADM, que vence a regra automática);
+- índice parcial `ix_assets_equipment_active` em
+  `(equipment_family, equipment_category, unit_id) WHERE deleted_at IS NULL AND equipment_category IS NOT NULL`.
+
+Os quatro primeiros CHECKs espelham as tuplas de
+`backend/app/services/asset_classification.py`; a igualdade é garantida pelo teste
+`backend/tests/test_asset_classification_migration.py`. **Para acrescentar uma
+regra nova** (onde editar, a ordem de prioridade entre regras, o teste a criar e
+como medir o impacto em dry-run antes de aplicar) siga
+`docs/architecture/classificacao-patrimonial.md`: regra que reaproveite
+família/categoria existente **não** exige migração; valor novo de família ou
+categoria exige **nova** migração Alembic + espelho, porque estes CHECKs são
+fechados.
+
+Esta classificação **convive** com a da 21.2 (`asset_category`/`tech_type`), que
+não foi removida nem migrada — as duas são colunas distintas e independentes.
+
+### 21.4 Busca sem acento e chave alfanumérica (0014 e 0016)
+
+Nenhuma coluna nova — apenas funções e um índice funcional.
+
+- `0014_unaccent_search` / `sql/0017_unaccent_search.sql`: extensão `unaccent`
+  (schema `extensions`) + função `public.sispat_unaccent(text)` (`IMMUTABLE`,
+  `PARALLEL SAFE`, `STRICT`, `search_path = extensions, pg_catalog`). Usada por
+  `backend/app/security/text_search.py`. Existência **a confirmar**
+  diretamente (`SELECT proname FROM pg_proc WHERE proname = 'sispat_unaccent'`),
+  embora implicada pela função da 0016.
+- `0016_asset_search_key` / `sql/0019_asset_search_key.sql`: função
+  `public.sispat_alnum_key(text)` (minúsculas, sem acento e sem
+  pontuação/espaços) + índice **GIN trigram funcional**
+  `ix_assets_patrimony_key_trgm` sobre `sispat_alnum_key(patrimony_number)`.
+  Função e índice conferidos no banco em 2026-10-29.
+
+**Não existe coluna `assets.search_key`.** A chave de busca é calculada pela
+função no momento da consulta e o índice funcional é que a torna rápida: nada é
+persistido em `assets`, e portanto não há valor a manter sincronizado. Efeito:
+`GET /api/v1/assets?q=` casa `AGU-123`, `12.345`, `AB 123` com `AGU123`,
+`12345`, `AB-123`. O índice `ix_assets_description_trgm` (GIN trigram sobre
+`description`) vem da 0001 e também foi conferido.
+
+Como o backend **chama** as duas funções, o DDL precisa existir antes do deploy.
+
+### 21.5 `user_preferences` — preferências de aparência e de gráficos
+
+Tabela criada pela `0005_settings_ai_users` (espelho
+`sql/0007_settings_ai_users.sql`) e estendida pelas `0011` e `0013`; não constava
+das seções 1-20.
+
+| Coluna | Tipo | Constraints |
+|---|---|---|
+| `user_id` | `uuid` | PK, FK → `users(id)` ON DELETE CASCADE |
+| `density` | `text` | NOT NULL, DEFAULT `'comfortable'`, CHECK `ck_user_preferences_density` (`comfortable`/`compact`) |
+| `font_scale` | `smallint` | NOT NULL, DEFAULT `100`, CHECK `ck_user_preferences_font_scale` (100/112/125) |
+| `dashboard_charts` | `jsonb` | NOT NULL, DEFAULT `'{}'` (migração `0011_dashboard_charts_prefs`, espelho `sql/0014`) |
+| `dashboard_layout` | `jsonb` | NOT NULL, DEFAULT `'{}'::jsonb` (migração `0013_dashboard_layout_prefs`, espelho `sql/0016`) |
+| `version` | `integer` | NOT NULL, DEFAULT `1`, CHECK `ck_user_preferences_version` (`>= 1`) |
+| `created_at` / `updated_at` | `timestamptz` | NOT NULL, DEFAULT `now()` |
+
+- `dashboard_charts`: CHECKs `ck_user_preferences_dashboard_charts_object`
+  (`jsonb_typeof = 'object'`) e `..._size` (texto ≤ 512 bytes). Coluna conferida
+  no banco em 2026-10-29.
+- `dashboard_layout`: CHECKs `ck_user_preferences_dashboard_layout_object` e
+  `..._size` (texto ≤ 1024 bytes). Conteúdo
+  `{"order": [...], "hidden": [...]}` com ids de painel de uma **allowlist
+  fechada**, validada no backend (`DashboardLayoutPatch` em
+  `backend/app/api/v1/schemas.py`) — o CHECK garante só forma e tamanho. Coluna
+  conferida no banco em 2026-10-29.
+- Esta coluna foi **sucedida** pela tabela da 21.6 e permanece no esquema
+  (a 0017 não a apaga).
+
+### 21.6 `user_dashboard_preferences` — painéis do dashboard (0017)
+
+Migração `0017_dashboard_panel_prefs` / espelho
+`sql/0020_dashboard_panel_prefs.sql`, aplicada em 2026-10-27. Tabela conferida no
+banco em 2026-10-29.
+
+| Coluna | Tipo | Constraints |
+|---|---|---|
+| `user_id` | `uuid` | PK, FK → `users(id)` ON DELETE CASCADE |
+| `panels` | `jsonb` | NOT NULL, DEFAULT `'[]'::jsonb` |
+| `version` | `integer` | NOT NULL, DEFAULT `1` |
+| `created_at` / `updated_at` | `timestamptz` | NOT NULL, DEFAULT `now()` |
+
+**Constraints:** `ck_user_dashboard_preferences_panels_array`
+(`jsonb_typeof(panels) = 'array'`), `..._panels_count`
+(`jsonb_array_length(panels) <= 32`), `..._panels_size`
+(`octet_length(panels::text) <= 2048`) e `..._version` (`version >= 1`).
+
+`panels` é um **array JSONB ordenado** de objetos `{"id","visible","size"}` — a
+ordem do array é a ordem de exibição; `[]` significa "layout padrão do perfil",
+resolvido em tempo de leitura. O catálogo de ids de painel, as permissões por
+perfil e os tamanhos admitidos (P/M/G) são validados **no backend**
+(`backend/app/services/dashboard_panels_service.py`), nunca pelo cliente.
+
+Segurança da tabela nova (padrão da `0004_db_security_hardening`): **RLS
+habilitado sem nenhuma política** (deny-all para quem não tem `BYPASSRLS`) e
+`REVOKE ALL` de `anon`/`authenticated`.
+
+A migração também traduziu o layout legado de `user_preferences.dashboard_layout`
+para esta tabela, aproveitando apenas os **cinco** ids com correspondente
+(`kpis`, `tech_summary`, `tech_units`, `units`, `tech_category`) e descartando os
+outros dez; o resultado registrado na aplicação foi **0 linhas inseridas**. O DDL
+está **congelado**: não altere nome de tabela/coluna, tipo, nome ou expressão de
+CHECK, nem o formato do JSONB `panels`.
+
+### 21.7 `users` — exclusão lógica e anonimização (0019)
+
+Migração `0019_user_soft_delete` (head) / espelho `sql/0022_user_soft_delete.sql`.
+As três colunas foram conferidas no banco em 2026-10-29; o seed da permissão
+`users.delete` fica **a confirmar**.
+
+| Coluna | Tipo | Constraints |
+|---|---|---|
+| `deleted_at` | `timestamptz` | NULL |
+| `deleted_by` | `uuid` | NULL, FK → `users(id)` ON DELETE SET NULL |
+| `anonymized_at` | `timestamptz` | NULL |
+
+**Constraint:** `ck_users_deleted_requires_anonymized`
+(`deleted_at IS NULL OR anonymized_at IS NOT NULL`) — exclusão lógica sempre vem
+acompanhada de anonimização. Deliberadamente **não** se usou CHECK sobre
+`deleted_by`: aquela coluna pode virar `NULL` por `ON DELETE SET NULL`.
+
+A migração também cria a permissão `users.delete`, vinculada **somente** ao papel
+ADM (exigida por `POST /api/v1/users/<id>/delete`, que ainda pede AAL2 e
+confirmação textual do e-mail).
+
+Semântica (`backend/app/services/user_deletion_service.py`), na **mesma**
+transação: grava `deleted_at`/`deleted_by`/`anonymized_at`, `active = false`,
+`sessions_revoked_at = now`, apaga os vínculos de `user_roles` e
+`user_unit_access`, supera convites pendentes e **anonimiza irreversivelmente**
+`name`, `email`, `phone`, `avatar_object_key`, `auth_user_id` e `last_login_at`.
+Nenhuma cópia do dado removido é guardada: `audit_logs` recebe apenas o e-mail
+**mascarado**.
+
+- `users.email` continua `NOT NULL UNIQUE`; a anonimização grava um endereço
+  único e não roteável derivado do `id` (domínio `.invalid`, RFC 2606), o que
+  libera o e-mail **original** para um convite futuro. Nenhuma unicidade foi
+  alterada.
+- `audit_logs` do usuário excluído permanece intacto, com `actor_user_id`
+  **preservado** — é exatamente por isso que a linha de `users` tem de continuar
+  existindo. Exclusão física segue impossível: `asset_movements.requested_by`,
+  `import_previews.requested_by`, `inventories.created_by` e `invites.invited_by`
+  são `RESTRICT`, e o gatilho append-only `trg_audit_logs_block_update_delete`
+  (0004) recusa o `UPDATE` que o `ON DELETE SET NULL` de
+  `audit_logs.actor_user_id` exigiria.
+- Toda consulta de usuário passa a filtrar `deleted_at IS NULL`; `require_auth`
+  responde 401 a JWT de usuário excluído.
+
+Isto **substitui** a frase da seção "Hardening de segurança do banco" de que a
+desativação de conta se faz apenas com `users.active = false`: hoje há exclusão
+lógica própria, com anonimização.
+
+---
+
 ## Resumo de relações (chaves estrangeiras)
 
 | Tabela | Coluna FK | Referencia |
@@ -751,21 +1094,40 @@ sem necessidade de reimportar a planilha.
 | `saved_filters` | `user_id` | `users(id)` |
 | `export_jobs` | `requested_by` | `users(id)` |
 | `raw_import_records` | `sync_job_id` | `sync_jobs(id)` |
+| `users` | `deleted_by` (0019), `deactivated_by` (0005) | `users(id)` — `ON DELETE SET NULL` |
+| `user_preferences` | `user_id` (0005) | `users(id)` — `ON DELETE CASCADE` |
+| `user_dashboard_preferences` | `user_id` (0017) | `users(id)` — `ON DELETE CASCADE` |
+| `ai_settings` | `deepseek_acknowledged_by`, `updated_by` (0005) | `users(id)` |
+
+FKs das tabelas ainda **a documentar** (`import_previews`, `import_preview_items`,
+`invites`, `invite_units`, `unit_aliases`) não estão nesta lista.
 
 ## Pontos explicitamente pendentes de validação institucional
 
-1. Política final de unicidade do número patrimonial (`assets.patrimony_number`).
-2. Natureza exata e obrigatoriedade futura de `units.full_identifier`.
+1. ~~Política final de unicidade do número patrimonial
+   (`assets.patrimony_number`)~~ — **resolvida** pela migração
+   `0009_uniq_idx_assets_movements`: único globalmente entre bens ativos
+   (`uq_assets_patrimony_number_active`), ver seção 11.
+2. ~~Natureza exata e obrigatoriedade futura de `units.full_identifier`~~ — a
+   coluna **não existe**; o tema passou a ser `units.code` + `unit_aliases`
+   (seção 6). Segue pendente apenas a regra institucional de quais siglas são
+   oficiais.
 3. Política de unicidade/obrigatoriedade de `responsible_people.institutional_identifier`.
 4. Taxonomia completa de `asset_movements.movement_type`.
-5. Decisão definitiva sobre o provedor de autenticação (Supabase Auth vs. Flask
-   próprio) e, por consequência, onde fica armazenado o hash de senha.
+5. ~~Decisão definitiva sobre o provedor de autenticação (Supabase Auth vs. Flask
+   próprio)~~ — **decidido: Supabase Auth** (`CLAUDE.md`, seção "Autenticação";
+   implementado em `backend/app/auth/supabase_auth.py`). Nenhuma senha ou hash é
+   armazenado no schema `public`; `users.auth_user_id` (`text` NULL) é o vínculo
+   com o provedor e a seção 1 deste documento deve ser lida com essa correção.
 
 ## Hardening de segurança do banco (auditoria 2026-10-13)
 
 Migração `0004_db_security_hardening` (Alembic) + espelho
-`backend/migrations/sql/0006_db_security_hardening.sql` — **pendente de
-aplicação mediante autorização explícita** (não aplicada em produção):
+`backend/migrations/sql/0006_db_security_hardening.sql`. **Atualização de
+2026-10-29:** o rótulo "pendente de aplicação", escrito em 2026-10-13, está
+superado — o `alembic_version` de produção é `0019_user_soft_delete` e a cadeia é
+linear, logo o Alembic considera a 0004 aplicada (a presença de cada objeto se
+confere pelas consultas de `historico-migracoes.md`). O que a migração faz:
 
 - `audit_logs` append-only: triggers `BEFORE UPDATE OR DELETE` e
   `BEFORE TRUNCATE` (função `public.sispat_block_mutation()`, `SECURITY
@@ -775,13 +1137,16 @@ aplicação mediante autorização explícita** (não aplicada em produção):
   `raw_import_records` (neutraliza os FKs `ON DELETE CASCADE` que apagariam
   histórico). Consequência: `users` nunca é apagado fisicamente (o FK
   `audit_logs.actor_user_id ON DELETE SET NULL` seria bloqueado) — usar
-  `users.active = false`.
+  `users.active = false` (desde a `0019`, a exclusão de conta é a **exclusão
+  lógica + anonimização** da 21.7, que também grava `active = false`).
 - `REVOKE ALL` de `anon`/`authenticated` em tabelas/sequências do schema
   `public` e nos default privileges do role `postgres` (o navegador nunca
   acessa tabelas via Data API/PostgREST).
-- `ENABLE ROW LEVEL SECURITY` versionado em todas as 24 tabelas de aplicação
-  (inclusive `import_previews`, `import_preview_items`, `invites`,
-  `invite_units`).
+- `ENABLE ROW LEVEL SECURITY` versionado nas 24 tabelas de aplicação que existiam
+  então (inclusive `import_previews`, `import_preview_items`, `invites`,
+  `invite_units`). As tabelas criadas depois repetem o padrão na própria migração:
+  `ai_settings` e `user_preferences` (0005), `unit_aliases` (0007) e
+  `user_dashboard_preferences` (0017) — 28 tabelas hoje.
 - `CHECK ck_assets_deleted_by_required (deleted_at IS NULL OR deleted_by IS
   NOT NULL)`.
 - ORM: `Asset` usa `version_id_col` (controle otimista efetivo:

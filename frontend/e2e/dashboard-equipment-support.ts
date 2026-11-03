@@ -77,6 +77,37 @@ const LOCATED_COUNTS: { unidade: string; unit_id: string | null; v: Record<strin
   { unidade: "CGU-TO", unit_id: CGU_UNIT_ID, v: { SIM: 5, NAO: 0, DESCONHECIDO: 2 } },
   { unidade: "Outras", unit_id: null, v: { SIM: 4, NAO: 2, DESCONHECIDO: 0 } },
 ];
+/**
+ * Painel `located_summary` (resumo GLOBAL por situação). NÃO entra no `CATALOG`
+ * padrão — as contagens de painéis dos specs existentes são fixas; quem quiser
+ * o painel passa `extraCatalog: [LOCATED_SUMMARY_ENTRY]` para `mockEquipment`.
+ * Números SINTÉTICOS, com uma série em zero (o caso que precisa de cobertura):
+ * o backend sempre manda as 3 séries, na ordem SIM, NAO, DESCONHECIDO.
+ */
+export const LOCATED_SUMMARY_ENTRY: Entry = {
+  id: "located_summary",
+  label: "Situação de localização (gráfico)",
+  description: "Rosca com o total de bens localizados, não localizados e não informados.",
+  group: "graficos",
+  sizes: ["P", "M", "G"],
+  default_size: "M",
+  exportable: false,
+  roles: ALL,
+};
+export const LOCATED_SUMMARY = {
+  total: 144,
+  series: [
+    { id: "SIM", label: "Localizados", value: 129, percentual: 89.6 },
+    { id: "NAO", label: "Não localizados", value: 15, percentual: 10.4 },
+    { id: "DESCONHECIDO", label: "Não informado", value: 0, percentual: 0.0 },
+  ],
+};
+/** `total = 0` é resposta válida: as 3 séries vêm zeradas e sem percentual. */
+export const LOCATED_SUMMARY_EMPTY = {
+  total: 0,
+  series: LOCATED_SERIES.map((s) => ({ ...s, value: 0, percentual: null })),
+};
+
 export const LOCATED_CHART = {
   familia: "TI",
   familia_label: "Tecnologia da Informação",
@@ -193,6 +224,9 @@ export function panelPayload(id: string): { tipo: string; dados: unknown } {
       return { tipo: "grafico", dados: { familia: "TI", familia_label: "Tecnologia da Informação", series: TI_COLS, unidades: [unitRow("PFN-TO", { COMPUTADOR: 20, NOTEBOOK: 10, MONITOR: 31 }), unitRow("CGU-TO", { COMPUTADOR: 5, NOTEBOOK: 0, MONITOR: 7 })], total: 73 } };
     case "located_by_unit_chart":
       return { tipo: "grafico", dados: LOCATED_CHART };
+    // Mesmo `tipo` do backend ("grafico"); o FORMATO distingue o resumo global.
+    case "located_summary":
+      return { tipo: "grafico", dados: LOCATED_SUMMARY };
     case "category_distribution":
       return { tipo: "distribuicao", dados: { total: 200, familias: [{ id: "TI", label: "Tecnologia da Informação", value: 150, percentual: 75.0 }, { id: "MOBILIARIO", label: "Mobiliário", value: 50, percentual: 25.0 }], categorias: [{ id: "COMPUTADOR", label: "Computador", familia: "TI", value: 100, percentual: 50.0 }, { id: "MESA", label: "Mesa", familia: "MOBILIARIO", value: 50, percentual: 25.0 }] } };
     case "notebooks_without_docking":
@@ -371,6 +405,8 @@ export interface EquipmentState {
   located: LocatedRecordsMock;
   /** Substitui `{tipo, dados}` de um painel (rótulos maliciosos). */
   payloadOverride?: Record<string, { tipo: string; dados: unknown }>;
+  /** Painéis do catálogo além do `CATALOG` padrão (ex.: `located_summary`). */
+  extraCatalog?: Entry[];
 }
 
 function makeQueue(n: number): QueueItem[] {
@@ -411,7 +447,7 @@ export async function mockEquipment(page: Page, role: Role, init: Partial<Equipm
     route.fulfill({ status, headers: { ...cors(route), "content-type": "application/json" }, body: JSON.stringify(body) });
   const err = (route: Route, status: number, code: string) =>
     reply(route, status, { error: { code, message: "SISPAT_BACKEND_MSG" } });
-  const allowed = CATALOG.filter((c) => c.roles.includes(role));
+  const allowed = [...CATALOG, ...(state.extraCatalog ?? [])].filter((c) => c.roles.includes(role));
   const defaults = allowed.map((c) => ({ id: c.id, visible: true, size: c.default_size }));
 
   await page.route("**/api/v1/dashboard/panels", async (route) => {
@@ -443,7 +479,8 @@ export async function mockEquipment(page: Page, role: Role, init: Partial<Equipm
     const payload = state.payloadOverride?.[id] ?? panelPayload(id);
     if (forced === "empty") {
       const emptied: Record<string, unknown> = { cartoes: { itens: [], total: 0 }, tabela: { colunas: TI_COLS, linhas: [], total: 0 }, grafico: { familia: "TI", familia_label: "Tecnologia da Informação", series: TI_COLS, unidades: [], total: 0 }, distribuicao: { total: 0, familias: [], categorias: [] }, ranking: { metodo: "x", notebooks: 0, docking: 0, sem_docking: 0, por_unidade: [] }, razao: { computadores: 0, notebooks: 0, monitores: 0, monitores_por_computador: null, monitores_por_notebook: null }, lista: { total: 0, por_categoria: [], recentes: [] } };
-      return reply(route, 200, { panel_id: id, tipo: payload.tipo, dados: emptied[payload.tipo] ?? payload.dados, filtros_aplicados: [] });
+      const dados = id === "located_summary" ? LOCATED_SUMMARY_EMPTY : (emptied[payload.tipo] ?? payload.dados);
+      return reply(route, 200, { panel_id: id, tipo: payload.tipo, dados, filtros_aplicados: [] });
     }
     return reply(route, 200, { panel_id: id, tipo: payload.tipo, dados: payload.dados, filtros_aplicados: [...url.searchParams.keys()] });
   });

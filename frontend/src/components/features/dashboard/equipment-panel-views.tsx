@@ -8,9 +8,10 @@ import { AlertTriangle, ArrowRight } from "lucide-react";
 import { StatCard } from "@/components/dashboard/stat-card";
 import type { DashboardStat, MultiSeriesChartData } from "@/components/dashboard/types";
 import { LoadingSkeleton } from "@/components/ui/loading-skeleton";
-import { LOCATED_PANEL_ID } from "@/lib/dashboard-located-api";
+import { LOCATED_PANEL_ID, LOCATED_SUMMARY_PANEL_ID } from "@/lib/dashboard-located-api";
 import { NO_PANEL_FILTERS, type PanelFilters } from "@/lib/dashboard-equipment-api";
 import { LocatedChartView } from "./located-chart-view";
+import { LocatedSummaryView } from "./located-summary-view";
 import type {
   CardsData,
   CategoryShare,
@@ -444,6 +445,7 @@ export function isPanelEmpty(data: PanelData): boolean {
     case "cartoes":
     case "tabela":
     case "grafico":
+    case "resumo":
       return data.dados.total === 0;
     case "distribuicao":
       return data.dados.total === 0;
@@ -474,6 +476,9 @@ export function PanelView({
   if (data.tipo === "grafico" && panelId === LOCATED_PANEL_ID) {
     return <LocatedChartView dados={data.dados} label={label} filters={filters} />;
   }
+  if (data.tipo === "resumo" && panelId === LOCATED_SUMMARY_PANEL_ID) {
+    return <LocatedSummaryView dados={data.dados} label={label} />;
+  }
   switch (data.tipo) {
     case "cartoes":
       return <CardsView dados={data.dados} label={label} />;
@@ -481,6 +486,10 @@ export function PanelView({
       return <TableView dados={data.dados} label={label} />;
     case "grafico":
       return <ChartView dados={data.dados} label={label} />;
+    // Formato `resumo` (ver SummaryData) em qualquer outro painel: a view só
+    // mostra rótulo, contagem e percentual do backend, então também serve.
+    case "resumo":
+      return <LocatedSummaryView dados={data.dados} label={label} />;
     case "distribuicao":
       return <DistributionView dados={data.dados} />;
     case "ranking":

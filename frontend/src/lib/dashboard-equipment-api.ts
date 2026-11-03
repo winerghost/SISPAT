@@ -107,6 +107,18 @@ export interface ChartData {
 export interface Share extends CardItem {
   percentual: number | null;
 }
+/**
+ * Painel `located_summary`: resumo GLOBAL por situação de localização. O
+ * backend envia `tipo: "grafico"`; quem distingue este painel do gráfico por
+ * unidade é o FORMATO (séries com `value`/`percentual` e SEM `unidades`), que
+ * aqui vira o `tipo` interno "resumo". As 3 séries (SIM, NAO, DESCONHECIDO)
+ * vêm sempre, inclusive com `value: 0`; `percentual` é `null` quando
+ * `total = 0` (resposta válida: vazio honesto, nunca número de exemplo).
+ */
+export interface SummaryData {
+  total: number;
+  series: Share[];
+}
 export interface CategoryShare extends Share {
   familia: string;
 }
@@ -184,6 +196,8 @@ export type PanelPayload =
   | { tipo: "cartoes"; dados: CardsData }
   | { tipo: "tabela"; dados: TableData }
   | { tipo: "grafico"; dados: ChartData }
+  /** `tipo` do backend também é "grafico" (ver SummaryData): o formato decide. */
+  | { tipo: "resumo"; dados: SummaryData }
   | { tipo: "distribuicao"; dados: DistributionData }
   | { tipo: "ranking"; dados: RankingData }
   | { tipo: "razao"; dados: RatioData }
@@ -209,6 +223,9 @@ const isCards = (d: Rec): d is Rec & CardsData => isArr(d.itens, isCardItem) && 
 const isTable = (d: Rec): d is Rec & TableData => isArr(d.colunas, isLabeled) && isArr(d.linhas, isUnitRow) && isInt(d.total);
 const isChart = (d: Rec): d is Rec & ChartData =>
   isStr(d.familia) && isStr(d.familia_label) && isArr(d.series, isLabeled) && isArr(d.unidades, isUnitRow) && isInt(d.total);
+/** Resumo global: `series` com contagem/percentual e NENHUM campo do gráfico por unidade. */
+const isSummary = (d: Rec): d is Rec & SummaryData =>
+  isInt(d.total) && isArr(d.series, isShare) && d.unidades === undefined && d.familia === undefined;
 const isDistribution = (d: Rec): d is Rec & DistributionData =>
   isInt(d.total) && isArr(d.familias, isShare) && isArr(d.categorias, isCategoryShare);
 const isRankingRow = (v: unknown): v is RankingRow =>
@@ -269,6 +286,7 @@ export function parsePanelData(raw: unknown, expectedId: string): PanelData {
           dados: { familia: d.familia, familia_label: d.familia_label, series: d.series, unidades: d.unidades, total: d.total },
         };
       }
+      if (isSummary(d)) return { ...base, tipo: "resumo", dados: { total: d.total, series: d.series } };
       break;
     case "distribuicao":
       if (isDistribution(d)) {

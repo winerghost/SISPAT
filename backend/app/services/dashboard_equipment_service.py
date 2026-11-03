@@ -1,4 +1,4 @@
-"""Dados dos 13 painéis de equipamentos do dashboard (ONDA 2).
+"""Dados dos 14 painéis de equipamentos do dashboard (ONDA 2).
 
 Contrato: `docs/architecture/dashboard-api.md` ("Dados dos painéis").
 
@@ -277,6 +277,39 @@ def located_by_unit_chart(db: Any, actor_id: Any, filters: Any) -> dict[str, Any
         "total": sum(r["total"] for r in rows),
     }
     return _envelope("located_by_unit_chart", "grafico", dados, filters)
+
+
+def located_summary(db: Any, actor_id: Any, filters: Any) -> dict[str, Any]:
+    """Total GLOBAL por situação de localização (rosca), no escopo e nos filtros.
+
+    As TRÊS séries de `LOCATED_SERIES` saem SEMPRE, na mesma ordem, inclusive
+    com `value: 0` (a forma não varia; o painel legado `/dashboard/por-situacao`
+    descarta os zeros, este não). `total` é a soma exata das três e
+    `percentual` é `null` quando não há bem algum. Situação fora de SIM/NAO
+    (nula ou valor legado) conta em `DESCONHECIDO`, como em
+    `located_unit_ranking`.
+    """
+    rows = (
+        _active_assets(db, actor_id, Asset.located, func.count(Asset.id), where=filter_where(filters))
+        .group_by(Asset.located)
+        .all()
+    )
+    counts = {key: 0 for key in LOCATED_IDS}
+    for located, n in rows:
+        counts[located if located in counts else "DESCONHECIDO"] += int(n)
+    total = sum(counts.values())
+
+    def pct(value: int) -> float | None:
+        return round(value * 100.0 / total, 1) if total else None
+
+    dados = {
+        "total": total,
+        "series": [
+            {"id": key, "label": label, "value": counts[key], "percentual": pct(counts[key])}
+            for key, label in LOCATED_SERIES
+        ],
+    }
+    return _envelope("located_summary", "grafico", dados, filters)
 
 
 def category_distribution(db: Any, actor_id: Any, filters: Any) -> dict[str, Any]:
@@ -560,6 +593,7 @@ PANEL_BUILDERS: dict[str, Callable[[Any, Any, Any], dict[str, Any]]] = {
     "furniture_by_unit_table": _unit_table("furniture_by_unit_table", MOBILIARIO_CATEGORIES),
     "equipment_by_unit_chart": equipment_by_unit_chart,
     "located_by_unit_chart": located_by_unit_chart,
+    "located_summary": located_summary,
     "category_distribution": category_distribution,
     "notebooks_without_docking": notebooks_without_docking,
     "workstation_ratio": workstation_ratio,

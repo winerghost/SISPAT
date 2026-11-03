@@ -193,8 +193,8 @@ def test_paineis_negados_geram_evento_de_seguranca(api):
     assert denied[0]["details"] == denied[1]["details"]  # indistinguíveis também no log
 
 
-def test_catalogo_cobre_os_13_paineis():
-    assert set(des.PANEL_BUILDERS) == set(PANEL_IDS) and len(PANEL_IDS) == 13
+def test_catalogo_cobre_os_14_paineis():
+    assert set(des.PANEL_BUILDERS) == set(PANEL_IDS) and len(PANEL_IDS) == 14
 
 
 # --- contrato de consulta -------------------------------------------------------------

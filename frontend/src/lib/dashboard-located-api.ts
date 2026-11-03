@@ -31,6 +31,12 @@ const isStr = (v: unknown): v is string => typeof v === "string";
 const isNullableStr = (v: unknown): v is string | null => v === null || typeof v === "string";
 
 export const LOCATED_PANEL_ID = "located_by_unit_chart";
+/**
+ * Painel `located_summary` (rosca com o quantitativo GLOBAL por situação).
+ * NÃO tem endpoint de registros: o backend responde 404 em `/records` de
+ * propósito, então nenhuma tela pede a lista por este painel.
+ */
+export const LOCATED_SUMMARY_PANEL_ID = "located_summary";
 export const OTHERS_UNIT = "outras";
 
 export const LOCATED_VALUES = ["SIM", "NAO", "DESCONHECIDO"] as const;

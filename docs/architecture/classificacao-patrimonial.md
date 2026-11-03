@@ -2,6 +2,16 @@
 
 Atualizado na Onda 5 (2026-10-27). Descreve apenas o que existe no código.
 
+**Estado do esquema (verificado em 2026-10-29):** `alembic_version` de produção =
+`0019_user_soft_delete` (head; cadeia linear 0001→0019). Consulta somente leitura ao
+catálogo do PostgreSQL confirmou nessa data, em `assets`, as colunas
+`classification_rule`, `classification_rules_version` e `category_override`, além do
+índice `ix_assets_equipment_active` (0018) e de `ix_assets_category_active` (0015, do
+vocabulário legado). Portanto o DDL da 0018 está no banco. **A confirmar:** se as
+colunas já estão POVOADAS (isso depende do backfill ou da primeira importação — ver
+"Decisão pendente" no fim); medir exige uma contagem somente leitura
+(`equipment_category IS NOT NULL`) ou o `flask classify-equipment` em dry-run.
+
 Código: `backend/app/services/asset_classification.py` (motor e vocabulário),
 `asset_classification_backfill.py` (`flask classify-equipment`), `import_service.py`
 (classificação na importação), `dashboard_classification_service.py` (override e fila de
@@ -15,7 +25,9 @@ revisão), `backend/app/cli.py`. Migração: `0018_equipment_classification` (ve
   categorias; alimenta só `/dashboard/tecnologia/*` e `flask classify-assets`.
 - **Vigente (0018):** `assets.equipment_family`, `equipment_category`,
   `classification_confidence`, `classification_rule`, `classification_rules_version` e
-  `category_override`. Alimenta os painéis de equipamentos (13 no catálogo; `located_by_unit_chart` usa só os filtros `familia`/`categoria` e a categoria efetiva), a fila de revisão e o override. Os dois
+  `category_override`. Alimenta os painéis de equipamentos (14 no catálogo desde 2026-11-01;
+  `located_by_unit_chart` e `located_summary` usam só os filtros `familia`/`categoria` e a
+  categoria efetiva), a fila de revisão e o override. Os dois
   vocabulários não se sobrescrevem.
 
 Todas as colunas são `text NULL` sem default: `NULL` = "não classificado/informado"; o motor
@@ -116,7 +128,9 @@ PROCESSADOR, PLACA MAE, MEMORIA, SSD, HD, INTEL, AMD, CELERON), `GABINETE_MOB_CO
    exceto se tiver `category_override`.
 2. **Backfill:** `flask classify-equipment` (abaixo).
 3. **Override do ADM:** `POST /api/v1/assets/<id>/category-override` (ADM + AAL2,
-   `assets.update`, `version` obrigatória).
+   `assets.update`, `version` obrigatória). Corpo, resposta (um RESUMO, não o objeto
+   `Asset`), idempotência e erros estão em `docs/architecture/assets-api.md`; nenhuma
+   coluna `equipment_*` aparece na leitura normal de `/assets`.
 O `PATCH /assets/<id>` comum não aparece gravando as colunas `equipment_*`/`category_override`
 (só o vocabulário legado, em `asset_service._classification_changes`).
 
@@ -174,20 +188,31 @@ Procedimento verdadeiro, derivado do módulo e dos testes existentes.
    Aviso: o incremento de `version` invalida prévias de importação criadas ANTES do apply
    (a confirmação compara a versão lida); gere a prévia depois.
 
-## Decisão pendente: backfill x primeira importação
+## Decisão resolvida: backfill x primeira importação (2026-10-27)
 
-Estado documentado (cabeçalho da 0018): DDL aplicado, nenhum backfill, colunas NULL.
+O cabeçalho da 0018 (DDL aplicado, nenhum backfill, colunas NULL) é o texto de quando foi
+escrito. **Em produção não há mais classificação nula:** os 1.069 bens têm
+`equipment_family`, `equipment_category` e `classification_rules_version = "2"`, e nenhum
+tem `category_override` (consulta somente leitura em 2026-11-01). O que segue descreve os
+dois caminhos que existiam — valeu o primeiro.
 
 - **Se nada for feito antes**, a primeira confirmação de importação que tocar os bens
   existentes os trata como MUDADOS: `would_reclassify` é verdadeiro para colunas NULL, a
   guarda "inalterado" falha, o item conta como atualizado e `version` sobe em 1
   (`updated_by` e `source_updated_at` também mudam). Efeito único previsto: cerca de
   1.069 bens contados como "atualizados" e `version+1`, mesmo que a planilha não tenha
-  mudado. (Número vindo do acervo medido em 2026-10-27; é previsão, não uma execução.)
+  mudado. **Foi exatamente o que aconteceu:** a confirmação de importação de 2026-10-27
+  20:20 UTC (`CONFIRM_IMPORT`) classificou o acervo inteiro e subiu o `version` de todos;
+  hoje a distribuição é 654 bens em v2, 338 em v3, 71 em v4 e 6 em v5.
   Também vale para o vocabulário legado se `asset_category` ainda estiver nulo
   (`would_classify`).
 - **Alternativa:** rodar antes `flask classify-equipment --apply` (com autorização; antes
   disso, `--dry-run` por padrão para conferir). O mesmo `version+1` acontece, mas uma vez e
   de forma auditada (`ASSETS_EQUIPMENT_CLASSIFIED`), e a importação seguinte não contará
   esses bens como atualizados por causa da classificação. Gerar a prévia DEPOIS.
-- Decisão do responsável: pendente.
+- **Desfecho (conferido em 2026-11-01):** não existe nenhum evento
+  `ASSETS_EQUIPMENT_CLASSIFIED` no `audit_logs`, logo `flask classify-equipment --apply`
+  nunca rodou neste banco — a classificação chegou pela importação, não pelo backfill
+  auditado. Distribuição atual: 36 bens em OUTROS e 1 com confiança BAIXA. Para uma versão
+  NOVA de regras o roteiro acima continua valendo: dry-run, autorização, `--apply` e só
+  então gerar a prévia.

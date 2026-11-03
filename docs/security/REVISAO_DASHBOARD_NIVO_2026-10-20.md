@@ -93,7 +93,7 @@ pytest completo, Playwright, `scripts/security-audit.sh --strict`.
   (pizza/rosca/barras + tooltip), **tipo de bem** (nome de série: legenda/tooltip) e nas variantes
   empilhada/horizontal/linha/área. No backend, não há teste de linha legada com
   `dashboard_charts` inválido (ex.: `{"units":"pie","x":1,"status":"pie"}`).
-- Correção sugerida: novo `frontend/e2e/security-dashboard-charts.spec.ts` (para cada tipo de
+- Correção sugerida: novo `frontend/e2e/security-dashboard-charts-functional.spec.ts` (para cada tipo de
   painel: payload `<img src=x onerror=window.__xss=1>` em `unidade`, chave de `tipos` e `id` de
   situação; passar o mouse para abrir o tooltip; afirmar `window.__xss === undefined`, 0 `img` no
   `main` e o texto literal visível na legenda/tabela). No backend, um teste em

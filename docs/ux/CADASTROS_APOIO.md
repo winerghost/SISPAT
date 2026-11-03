@@ -12,7 +12,9 @@ escopo de unidade, AAL2, unicidade e concorrência são decididos pelo backend.
   situação (Todas/Ativas/Inativas, `aria-pressed`), "Limpar filtros".
 - Tabela (`ui/table`): ordenação só pela allowlist do backend (`aria-sort` +
   botão), entrada escalonada ≤20 linhas, `busy` esmaece com `keepPreviousData`,
-  estado vazio com orientação, paginação "Página X de Y · N registro(s)".
+  estado vazio com orientação, paginação pela `PaginationBar` comum ("Exibindo
+  X–Y de N registro(s) · Página n de m"; seletor "Registros por página"
+  50/100/200, padrão 50, guardado em `localStorage`).
   Rola na horizontal só dentro do contêiner (nunca a página, 320–1920 px).
 - Situação com ícone + texto (nunca só cor). Datas em America/Araguaina.
 - Criar/editar em `Dialog` claro (foco preso, Esc fecha, foco devolvido); não
@@ -36,8 +38,8 @@ escopo de unidade, AAL2, unicidade e concorrência são decididos pelo backend.
   `address` (unidade).
 - Unidades: a lista usa `GET /units/catalog` (ADM + AAL2): ativas e inativas,
   busca server-side com debounce (sigla/nome), pílulas Todas/Ativas/Inativas
-  (padrão Todas), ordenação por sigla/nome/atualizada em (allowlist) e
-  paginação de 25. Cada linha tem "Gerenciar" (diálogo de edição: sigla e ID de
+  (padrão Todas), ordenação por sigla/nome/atualizada em (allowlist) e a
+  mesma paginação. Cada linha tem "Gerenciar" (diálogo de edição: sigla e ID de
   origem só leitura; descrição e `updated_at` vêm de `GET /units/<id>`) e
   "Inativar"/"Reativar" (inclusive para inativas), com `expected_updated_at`.
   O seletor de unidades de salas/pessoas/usuários continua em `GET /units`

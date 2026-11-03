@@ -1,4 +1,4 @@
-"""Dados dos 12 painéis, fila de revisão de classificação e exportações (ONDA 2).
+"""Dados dos 14 painéis, fila de revisão de classificação e exportações (ONDA 2).
 
 Rotas registradas no `dashboard_bp` (prefixo `/api/v1/dashboard`):
 

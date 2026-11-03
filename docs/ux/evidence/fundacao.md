@@ -17,7 +17,7 @@ Criados
 - `frontend/src/components/animations/` — `motion-provider.tsx`, `use-entrance.ts`, `fade-in.tsx`, `slide-in.tsx`,
   `scale-in.tsx`, `stagger-container.tsx`, `animated-card.tsx`, `animated-counter.tsx`, `animated-page.tsx`,
   `animated-presence-list.tsx`, `index.ts`.
-- `frontend/src/app/template.tsx` — `<AnimatedPage>` em toda rota.
+- `frontend/src/app/(app)/template.tsx` — `<AnimatedPage>` em toda rota.
 - `frontend/src/components/ui/loading-skeleton.tsx` — variantes `table` / `cards` / `lines`.
 - `frontend/e2e/motion-foundation.spec.ts` — 6 testes (projeto Playwright `motion`).
 

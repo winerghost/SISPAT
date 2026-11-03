@@ -21,8 +21,8 @@ backend; ocultar o item do menu para USER/RH não é segurança.
    números não animados. O sistema não corrige nomes nem chuta vínculos.
 4. **Itens** — `GET /catalog-imports/<id>/items`: pílulas de classificação
    (`aria-pressed`), busca com debounce de 400 ms (≤100), ordenação só pela
-   allowlist (`label`, `source_id`, `classification`, `aria-sort`), 25 por
-   página. Checkbox só em NOVO/EXISTENTE; os demais mostram o motivo.
+   allowlist (`label`, `source_id`, `classification`, `aria-sort`) e a `PaginationBar`
+   comum (50/100/200, padrão 50). Checkbox só em NOVO/EXISTENTE; os demais mostram o motivo.
    "Selecionar todos os elegíveis" / "Limpar seleção" + exceção por item.
 5. **Confirmar** — `ConfirmActionDialog` diz que é gravação **em massa** e
    **idempotente** (a 2ª confirmação da mesma prévia é recusada com 409), que

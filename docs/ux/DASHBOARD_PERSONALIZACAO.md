@@ -1,6 +1,49 @@
 # Dashboard personalizável — análise e plano de ação
 
-Registrado em 2026-10-20 a pedido do responsável pelo sistema.
+Registrado em 2026-10-20 a pedido do responsável pelo sistema. **Documento
+histórico**: as seções abaixo preservam a análise, as decisões e o que cada onda
+entregou, na ordem em que aconteceram. Para o estado da interface hoje, use
+`DASHBOARD.md`.
+
+## Estado atual (conferido em 2026-10-29; catálogo atualizado em 2026-11-01)
+
+O que está no código, conferido hoje:
+
+- `/dashboard` é governado **só** pelo catálogo de painéis do backend
+  (`GET /api/v1/dashboard/panels`, `PUT /api/v1/dashboard/preferences`): **14
+  painéis** em `backend/app/services/dashboard_panels_service.py` (eram 13 em
+  2026-10-29; `located_summary` entrou em 2026-11-01), com permissão por perfil e
+  **visibilidade + ordem + tamanho P/M/G** por usuário. O diálogo
+  "Personalizar painéis" (`dashboard-layout-dialog.tsx`) grava esse contrato.
+- Os filtros da tela são **família, unidade e categoria**, locais ao
+  `/dashboard` (não vão para a URL) e enviados a `/panels/<id>/data`.
+- O conjunto legado (15 ids de `user_preferences.dashboard_layout`, barra de
+  filtros na URL, tipos de gráfico, clique-para-filtrar, painéis de Tecnologia)
+  **saiu de `/dashboard`** e sobrevive apenas em `/dashboard/relatorio`
+  (`dashboard-panels.tsx`, tema `paper`).
+- `dashboard-filter-bar.tsx` **não existe mais** em
+  `frontend/src/components/features/dashboard/`. Os módulos reais dessa pasta
+  hoje são, entre outros: `equipment-panels.tsx`, `equipment-panel-views.tsx`,
+  `equipment-data-matrix.tsx`, `dashboard-view.tsx`,
+  `dashboard-layout-dialog.tsx`, `use-dashboard-panel-prefs.ts`,
+  `dashboard-panel-meta.ts` (só o relatório legado), `located-chart-view.tsx`,
+  `located-summary-view.tsx`, `located-records-sheet.tsx`,
+  `classification-review.tsx`,
+  `dashboard-panels.tsx` e `dashboard-tech-panels.tsx` (legado, só no relatório),
+  `use-dashboard-url-filters.ts`, `dashboard-filter-labels.ts`,
+  `dashboard-chart-filters.ts`, `chart-filter-shortcuts.tsx`,
+  `chart-focus-context.tsx`, `chart-type-menu.tsx`,
+  `use-dashboard-chart-prefs.ts` e `use-dashboard-layout-prefs.ts`.
+  `use-dashboard-url-filters.ts` e `dashboard-filter-labels.ts` seguem em uso
+  pelo relatório, para LER e listar filtros que venham na query string — não há
+  mais interface para montá-los.
+- Telas de teste citadas nas seções históricas que **não existem mais** em
+  `frontend/e2e/support/screens.ts`: `dashboard-filtros-celular`,
+  `dashboard-graficos-alternativos`, `dashboard-graficos-empilhado-barras`.
+  Existem hoje, entre outras: `dashboard-personalizar`,
+  `dashboard-layout-personalizado`, `dashboard-tamanhos-pequenos`,
+  `dashboard-tamanhos-grandes`, `dashboard-filtros`, `dashboard-painel*`,
+  `dashboard-relatorio*`. Nenhum spec foi reexecutado nesta data.
 
 ## Princípio
 
@@ -12,6 +55,14 @@ escopo de unidade do usuário, e os filtros são validados no servidor
 (allowlist, `extra="forbid"`).
 
 ## O que já existe (2026-10-20)
+
+> Seção histórica (estado de 2026-10-20). O que ela descreve como ausente mudou
+> depois: desde 2026-11-01 existe no `/dashboard` o painel de catálogo
+> `located_summary` — rosca com o quantitativo **global** de localizados × não
+> localizados × não informado, com cartão de total e tabela de percentuais —, além
+> de `located_by_unit_chart` (Onda D) com o mesmo recorte por unidade. Nenhum dos
+> dois é o bloco legado "Bens por situação" nem vive só no relatório imprimível;
+> ver `docs/ux/DASHBOARD.md` §1 e `docs/architecture/dashboard-api.md`.
 
 - **Localizado (coluna `LOCALIZADO` S/N da planilha)** já é contado:
   `Asset.located` = SIM / NAO / DESCONHECIDO
@@ -170,7 +221,8 @@ estão na URL). Listas vazias/zeros quando nada casa — nunca 404.
 
 ## Implementado no frontend (2026-10-20)
 
-- **Filtros** (`frontend/src/components/features/dashboard/dashboard-filter-bar.tsx`):
+- **Filtros** (`dashboard-filter-bar.tsx`, componente removido na Onda 3 — ver
+  "Estado atual"):
   visíveis Unidade de uso, Localizado, Vínculo, Tipo; "Mais filtros" (disclosure
   acessível) com Unidade pertencente, Sala e Pessoa (após a unidade), com/sem sala,
   com/sem responsável, Período de registro, Inventário e Movimentação pendente;
@@ -330,18 +382,21 @@ rodar `flask classify-assets` (dry-run) e, se aprovado, `flask classify-assets -
 
 ## Catálogo novo de painéis (2026-10-27) — substitui os 15 ids antigos
 
-O que o usuário personaliza passa a ser um catálogo de **13 painéis** (eram 12 até a
-Onda D, que acrescentou `located_by_unit_chart`) definido
-no BACKEND, com permissão por perfil (ADM 13, USER 10, RH 8) e **tamanho por
-painel** (`P`, `M`, `G`), além de visibilidade e ordem. A tela deve:
+O que o usuário personaliza é um catálogo de **14 painéis** (eram 12 até a
+Onda D, que acrescentou `located_by_unit_chart`, e 13 até `located_summary`,
+de 2026-11-01) definido
+no BACKEND, com permissão por perfil (ADM 14, USER 11, RH 9) e **tamanho por
+painel** (`P`, `M`, `G`), além de visibilidade e ordem. A tela (implementado:
+`equipment-panels.tsx`, `dashboard-layout-dialog.tsx`,
+`use-dashboard-panel-prefs.ts`, `src/lib/preferences-api.ts`):
 
-1. chamar `GET /api/v1/dashboard/panels` e desenhar SÓ o que vier (nunca
-   decidir perfil no cliente, nunca manter uma lista de ids no frontend);
-2. usar `panels[].label`/`description` como rótulo e ajuda, `panels[].sizes`
+1. chama `GET /api/v1/dashboard/panels` e desenha SÓ o que vier (nunca
+   decide perfil no cliente, nunca mantém uma lista de ids no frontend);
+2. usa `panels[].label`/`description` como rótulo e ajuda, `panels[].sizes`
    para oferecer só os tamanhos admitidos daquele painel e
    `preferences.panels` (lista completa e ordenada) como estado inicial;
-3. salvar com `PUT /api/v1/dashboard/preferences` enviando a lista completa
-   (`version` do `GET`; `409` = recarregar) e oferecer "Restaurar padrão"
+3. salva com `PUT /api/v1/dashboard/preferences` enviando a lista completa
+   (`version` do `GET`; `409` = recarregar) e oferece "Restaurar padrão"
    com `{"version": n, "restore_default": true}`.
 
 Painéis exclusivos de ADM (`unclassified_review`, `classification_overrides`,
@@ -354,3 +409,14 @@ migração das escolhas antigas) está em `docs/architecture/dashboard-api.md`.
 A personalização antiga (`user_preferences.dashboard_layout`, ordem +
 ocultos de 15 ids) continua aceita em `PATCH /api/v1/me/preferences` apenas
 durante a transição e é traduzida automaticamente para o catálogo novo.
+
+**`dashboard-panel-meta.ts` não participa do catálogo** (e não poderia): aquele
+arquivo é o mapa do contrato LEGADO de 15 painéis — título, `blockId` e largura
+por id —, indexado por `DashboardPanelId` (`DASHBOARD_PANEL_IDS` em
+`src/lib/preferences-api.ts`: `kpis`, `units`, `status`, `monthly`, `location`,
+`bond`, `pending`, `rooms`, `inventory` e os seis `tech_*`). Seu único importador é
+`dashboard-panels.tsx` (`visiblePanels`, `panelSpans`), renderizado apenas em
+`/dashboard/relatorio`. Painel do catálogo não tem nem pode ter entrada ali: o id
+não existe naquele tipo, e título, descrição e tamanhos vêm do backend
+(`panels[].label`, `panels[].description`, `panels[].sizes`). Foi assim com
+`located_by_unit_chart` e com `located_summary`.

@@ -4,6 +4,12 @@ Guia para montar o `.env` da VPS (`chmod 600`, fora do git). Só valores NÃO
 secretos estão preenchidos; segredos aparecem como `<PREENCHER>`. Domínio
 registrado em 2026-10-19. Nada aqui implanta coisa alguma.
 
+Lista conferida contra o `.env.example` do repositório em 2026-10-29 (o
+`.env.example` continua sendo a referência completa; aqui ficam as decisões do
+ambiente de produção). **Nunca escreva neste arquivo, em tickets ou em chats o
+VALOR de qualquer chave, token, senha ou Service Role Key — somente o nome da
+variável.**
+
 ## Valores dependentes do domínio
 
 ```
@@ -25,10 +31,31 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=<ANON KEY (pública)>
 
 ## Segredos (preencher só na VPS)
 
-`SECRET_KEY` (>= 32), `DATABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`,
+`SECRET_KEY` (>= 32), `DATABASE_URL`, `SUPABASE_URL`,
+`SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_ANON_KEY`,
 `SUPABASE_JWT_SECRET` (ou `SUPABASE_JWT_ALGORITHMS=ES256`; confirmar no painel),
 `REDIS_PASSWORD`, `REDIS_URL` (host `redis`; no `.env.example` está comentada:
 descomente como `redis://:<a mesma senha>@redis:6379/0`, sem `<` `>` literais).
+
+Opcionais do JWT, com padrão do backend quando ausentes: `SUPABASE_JWKS_URL`,
+`SUPABASE_JWKS_CACHE_SECONDS`, `SUPABASE_JWKS_TIMEOUT_SECONDS`,
+`SUPABASE_JWT_AUDIENCE`, `SUPABASE_JWT_ISSUER`, `JWT_LEEWAY_SECONDS`.
+
+## E-mail (`EMAIL_*`) — requisito do convite e do reset de senha
+
+A entrega do convite e a do reset de senha são feitas pelo BACKEND
+(`backend/app/services/invite_delivery.py` e
+`backend/app/services/password_reset_delivery.py`). Desde a rodada implantada em
+2026-10-29, `EMAIL_ENABLED=true` é requisito do convite: `POST /api/v1/users/invite`
+aborta com 502 se a entrega falhar, em vez de criar o convite às cegas.
+
+```
+EMAIL_ENABLED=true
+```
+
+Demais nomes (valores só na VPS): `EMAIL_HOST`, `EMAIL_PORT`, `EMAIL_USER`,
+`EMAIL_PASSWORD`, `EMAIL_FROM`, `EMAIL_FROM_NAME`, `EMAIL_SECURITY`,
+`EMAIL_TIMEOUT_SECONDS`, `EMAIL_ALLOWED_RECIPIENT_DOMAINS`, `EMAIL_MAX_PER_HOUR`.
 
 ## Banco (TLS) e Google Sheets
 
@@ -51,6 +78,10 @@ GOOGLE_SHEETS_PEOPLE_SHEET_NAME / _GID    # idem, Pessoas
   `./secrets/google_sheets_credentials.json`. Placeholder literal quebra o `up`.
 - Aba: nome exato (prioridade) OU gid; abas de apoio sem valor fazem aquela
   importação recusar executar (nunca assume aba).
+- Ajuste fino, todos opcionais: `GOOGLE_SHEETS_TIMEOUT_SECONDS` (1-300; o
+  cliente usa 30 s quando ausente), `DB_CONNECT_TIMEOUT`,
+  `DB_POOL_TIMEOUT_SECONDS`, `DB_POOL_RECYCLE_SECONDS` e
+  `DB_STATEMENT_TIMEOUT_MS` — ver `docs/deployment/timeouts-gunicorn.md`.
 - Conferência obrigatória antes do build: `grep -nE '^[^#]*<' .env` deve voltar VAZIA (ignora comentários)
   (nenhum placeholder `<...>` restante) e `grep -c '^REDIS_URL=redis://:' .env`
   deve dar 1.
@@ -86,16 +117,56 @@ GOOGLE_SHEETS_PEOPLE_SHEET_NAME / _GID    # idem, Pessoas
   `docker compose up -d --force-recreate backend` e, em seguida,
   `docker compose up -d` (recriar o backend derruba o frontend, que depende dele).
 
+## Conferência feita na implantação de 2026-10-29
+
+Antes do rebuild das frentes de convite, exclusão de usuário, filtros de
+relatório e logomarca do cabeçalho público, a pré-checagem de aspas sobrando no
+valor do `NEXT_PUBLIC_SUPABASE_ANON_KEY` voltou 0 ocorrências — o Compose NÃO
+remove aspas, e um valor entre aspas iria aspas-e-tudo para o bundle. Nenhuma
+variável nova foi exigida por essa rodada. Conferência sem exibir o valor
+(imprime apenas o primeiro caractere, que não deve ser aspa):
+
+```
+awk -F= '/^NEXT_PUBLIC_SUPABASE_ANON_KEY=/{print substr($2,1,1)}' .env
+```
+
+## Opcionais e limites de recursos
+
+- Integrações desligadas por padrão: `AI_ENABLED=false` (com `OPENAI_API_KEY`,
+  `ANTHROPIC_API_KEY`, `DEEPSEEK_API_KEY`, `AI_TIMEOUT_SECONDS`,
+  `AI_MAX_TOKENS`, `AI_RATE_LIMIT_PER_USER`, `AI_RATE_LIMIT_PER_UNIT`,
+  `AI_MONTHLY_TOKEN_CAP`, `AI_CIRCUIT_FAILURE_THRESHOLD` e
+  `AI_CIRCUIT_OPEN_SECONDS` só quando for ligada) e
+  `N8N_INTEGRATION_ENABLED=false` (com `N8N_BASE_URL`, `N8N_WEBHOOK_URL`,
+  `N8N_API_KEY`, `N8N_REQUEST_TIMEOUT_SECONDS`). O n8n é EXTERNO: este projeto
+  nunca instala nem constrói um n8n, e não há pendência de instalá-lo.
+- Worker Celery (profile `worker`, opt-in): `CELERY_BROKER_URL`,
+  `CELERY_RESULT_BACKEND` (padrão = `REDIS_URL`) e
+  `CELERY_BEAT_SCHEDULE_FILENAME`.
+- Alertas: `ALERTS_UNCHECKED_DAYS`, `ALERTS_NO_MOVEMENT_DAYS`,
+  `ALERTS_SPIKE_BASELINE_WEEKS`, `ALERTS_SPIKE_SIGMA`, `ALERTS_SPIKE_MIN_COUNT`
+  e `ALERTS_PATRIMONY_REGEX`.
+- Outros: `TZ=America/Araguaina`, `MAX_CONTENT_LENGTH_BYTES` e
+  `GUNICORN_CMD_ARGS` (ajusta o timeout do gunicorn sem rebuild).
+- Limites por serviço: `BACKEND_CPUS` / `BACKEND_MEMORY`,
+  `FRONTEND_CPUS` / `FRONTEND_MEMORY`, `WORKER_CPUS` / `WORKER_MEMORY`,
+  `REDIS_CPUS` / `REDIS_MEMORY` (padrões no `docker-compose.yml`).
+- `POSTGRES_DEV_USER`, `POSTGRES_DEV_PASSWORD`, `POSTGRES_DEV_PORT`,
+  `POSTGRES_DEV_DB` e `DEBUGPY_PORT` existem só para o
+  `docker-compose.dev.yml`: não entram no `.env` da VPS.
+
 ## Recomendados
 
 `DB_STATEMENT_TIMEOUT_MS=120000`, `AI_ENABLED=false`,
-`N8N_INTEGRATION_ENABLED=false`, `EMAIL_ENABLED` conforme SMTP.
+`N8N_INTEGRATION_ENABLED=false`, `EMAIL_ENABLED=true` (requisito do convite e do
+reset de senha; ver a seção `EMAIL_*`), com o bloco SMTP preenchido.
 
 ## Supabase Auth (painel, fora do repo)
 
 - Site URL: `https://ueato.revizzicar.com.br`
 - Redirect URLs: `https://ueato.revizzicar.com.br/ativar-conta`
 - Template "Invite user": `docs/deploy/email-template-convite.md`
+- Template de recuperação de senha: `docs/deploy/email-template-reset-senha.md`
 - SMTP próprio, MFA TOTP e proteção contra senhas vazadas ligados.
 - O projeto é ÚNICO (dev = prod): remover `http://localhost...` das Redirect
   URLs só quando o desenvolvimento local não precisar mais delas.

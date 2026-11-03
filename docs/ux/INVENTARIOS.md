@@ -23,7 +23,8 @@ derivado são decididos pelo backend. Esconder botões por perfil é UX, nunca s
   (allowlist `created_at|name|start_date|status`, com `-`; também nos cabeçalhos
   "Inventário", "Estado", "Início" e "Criado em" com `aria-sort`). Qualquer filtro volta
   à página 1; "Limpar filtros".
-- Paginação "Página X de Y · N inventário(s)" (25 por página), estados carregando
+- Paginação pela `PaginationBar` comum ("Exibindo X–Y de N inventário(s) · Página n
+  de m", seletor 50/100/200, padrão 50), estados carregando
   (skeleton), vazio (com e sem filtro) e erro com "Tentar novamente". Falha só da lista
   de unidades avisa e mantém a listagem.
 - Responsivo 320–1920 sem rolagem da página: até `md` só "Inventário" (com estado,
@@ -46,7 +47,7 @@ derivado são decididos pelo backend. Esconder botões por perfil é UX, nunca s
   identificador). Avisos fixos: a conferência NÃO altera `assets.located` nem o local
   cadastrado; histórico imutável; cada bem é conferido uma única vez por inventário.
 - Abas: **Itens conferidos** (`GET .../items`: filtro por resultado, ordenação por data,
-  10 por página; cada item mostra bem, resultado com ícone+texto, conferidor, data, local
+  mesma `PaginationBar`; cada item mostra bem, resultado com ícone+texto, conferidor, data, local
   cadastrado/observado e observações como TEXTO) e **Bens da unidade** (`GET /assets?
   unit_id=` com busca; cada bem aparece "Pendente" ou com o resultado, lido de `/items`;
   "Ocultar bens já conferidos" age só na página exibida).

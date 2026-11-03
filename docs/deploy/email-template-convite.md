@@ -1,5 +1,11 @@
 # Template de e-mail do convite (Supabase Auth)
 
+> **Estado atual (2026-10-29):** desde a rodada implantada nesta data o convite
+> não passa mais pelo envio do Supabase — o backend usa `admin/generate_link`
+> (que não envia e-mail) e entrega o e-mail por conta própria
+> (`backend/app/services/invite_delivery.py`). Este template fica como registro;
+> seguem valendo Site URL e Redirect URLs com `/ativar-conta` na allow-list.
+
 > ATENÇÃO: isto altera o projeto Supabase (Auth › Email Templates). Só aplique
 > com autorização do dono do projeto. Nada neste repositório altera o painel.
 

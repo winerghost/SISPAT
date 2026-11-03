@@ -1,7 +1,7 @@
 # Checklist de deploy — VPS Hostinger + CloudPanel + Cloudflare
 
-Atualizado em 2026-10-19. CHECKLIST CANÔNICO (substitui `docs/deploy/CHECKLIST.md`, cujo
-conteúdo virou os anexos ao final). Roteiro operacional do domínio:
+Atualizado em 2026-10-29. CHECKLIST CANÔNICO (os anexos por funcionalidade estão ao final;
+`docs/deploy/CHECKLIST.md` guarda os anexos por frente implantada). Roteiro operacional do domínio:
 `docs/deploy/ROTEIRO_VPS_ueato.md`. Complementa `hostinger-cloudpanel-cloudflare.md`; em caso de
 conflito (ex.: ordem de migrações), **este checklist prevalece**. Nenhum valor real de
 segredo deve ser escrito aqui, em tickets ou em chats.
@@ -14,6 +14,15 @@ segredo deve ser escrito aqui, em tickets ou em chats.
 > expurgo de `import_previews`): passo a passo em
 > [`docs/deploy/PENDENCIAS_OPERACIONAIS_2026-10-20.md`](../deploy/PENDENCIAS_OPERACIONAIS_2026-10-20.md).
 > Varredura na VPS sem instalar binários: `bash scripts/security-scan-docker.sh`.
+
+> **Estado em 2026-10-29.** No ar desde 2026-10-20 (`/opt/SISPAT`, backend
+> `127.0.0.1:8110`, frontend `127.0.0.1:3110`, vhost
+> `infra/cloudpanel/vhost.ueato-cloudpanel.conf`). Rodadas posteriores implantadas:
+> 2026-10-21 e 2026-10-29 (commits `be2a16c` e `6823803`). Banco em
+> `0019_user_soft_delete`, que é o head do código — **nenhuma migração pendente de
+> aplicação ou de carimbo** (a seção 3 virou histórico + procedimento). A validação
+> funcional da rodada de 2026-10-29 em produção está **aguardando o responsável**.
+> O n8n é EXTERNO: não há item de instalá-lo neste checklist.
 
 ## 0. Pré-requisitos
 
@@ -112,7 +121,39 @@ Notas:
      `.env`, delete a chave da service account no console do Google Cloud) e **reative** a
      política `iam.disableServiceAccountKeyCreation`.
 
-## 3. Banco de dados: carimbo Alembic (sem upgrade)
+## 3. Banco de dados: migrações e carimbo Alembic
+
+**Estado em 2026-10-29:** `alembic_version` = `0019_user_soft_delete`, igual ao head do
+código (`backend/migrations/versions/0019_user_soft_delete.py`). Cadeia Alembic linear
+0001 → 0019; espelhos `backend/migrations/sql/0001` a `sql/0022` (a numeração dos `.sql`
+difere da do Alembic — compare por CONTEÚDO, nunca por número). Colunas e objetos já
+presentes em produção, entre outros: `users.deleted_at/deleted_by/anonymized_at`;
+`assets.bond_status`, `asset_category`, `tech_type`, `operational_status`,
+`equipment_family`, `equipment_category`, `classification_confidence`;
+`user_preferences.dashboard_charts/dashboard_layout`; tabela `user_dashboard_preferences`.
+Não há migração pendente de aplicação nem de carimbo.
+
+### Procedimento para a PRÓXIMA migração (padrão do projeto)
+
+1. [ ] Autorização explícita para a migração, separada da autorização do deploy, e janela
+   combinada (base única: dev = prod).
+2. [ ] Backup ANTES de qualquer DDL: PITR/backup confirmado no painel do Supabase (data e
+   hora registradas) ou
+   `pg_dump "$DATABASE_URL" --schema=public -Fc -f backup-pre-<migracao>-$(date +%F-%H%M).dump`.
+3. [ ] Aplicar o DDL **antes** de subir a imagem nova do backend (o código novo costuma já
+   selecionar as colunas novas). Na prática do projeto, o responsável executa o espelho
+   `.sql` da migração no SQL Editor do Supabase e depois carimba:
+   `docker compose run --rm --no-deps backend alembic current` →
+   `... alembic stamp <id_da_migracao>` → `... alembic current`.
+   Quando o banco NÃO tiver os objetos, use `... alembic upgrade head` (nunca os dois).
+4. [ ] Reversão (só com autorização explícita e análise de impacto; apaga colunas e dados):
+   `docker compose run --rm --no-deps backend alembic downgrade <id_anterior>` — para a
+   0019, `alembic downgrade 0018_equipment_classification`; cada arquivo de migração traz
+   o `DOWNGRADE_SQL` equivalente para o SQL Editor.
+5. [ ] Registrar data, autorizador, backup e resultado em
+   `docs/database/historico-migracoes.md`.
+
+### Histórico do carimbo inicial (2026-10-20)
 
 Estado (docs/deploy/PRONTIDAO_2026-10-19.md): o repositório tem Alembic 0001 a 0010 e o
 Supabase JÁ contém o conteúdo das migrações 0007-0010 (numeração dos `.sql` difere da do
@@ -130,8 +171,11 @@ Alembic; compare por conteúdo). O `alembic_version` do banco está em `0006`. P
 5. [ ] Registre data, autorizador e resultado em `docs/database/historico-migracoes.md`.
 
 > **Feito em 2026-10-20:** banco carimbado em `0011_dashboard_charts_prefs (head)`.
-> Em deploys futuros, use `alembic upgrade head` normalmente (o carimbo já está
-> correto) e só depois de autorização explícita.
+> **Depois disso** (histórico): as migrações até a `0019_user_soft_delete` foram aplicadas
+> pelo caminho "espelho `.sql` no SQL Editor + carimbo do `alembic_version`", com
+> autorização do responsável — a `0018_equipment_classification` em 2026-10-27 e a
+> `0019_user_soft_delete` em 2026-10-28. O registro por migração (data, autorizador,
+> verificação) fica em `docs/database/historico-migracoes.md`.
 
 ## 4. Subida
 
@@ -147,17 +191,36 @@ docker tag sispat-agu/frontend:latest sispat-agu/frontend:rollback 2>/dev/null |
 docker compose up -d --build
 ```
 
+Em uma atualização de versão (não na primeira subida), reconstrua e recrie só o que mudou:
+
+```bash
+docker compose build backend frontend && docker compose up -d backend frontend   # as duas pontas
+docker compose build backend  && docker compose up -d backend  && docker compose up -d   # só backend
+docker compose build frontend && docker compose up -d frontend                           # só frontend
+```
+
+- Recriar **só** o backend derruba o `frontend` (tem `depends_on: backend`): finalize com
+  `docker compose up -d` para trazer tudo de volta.
+- Mudança em `NEXT_PUBLIC_*` ou em asset importado pelo código do frontend (ex.:
+  `frontend/src/components/brand/agu-logo.tsx`) exige rebuild do **frontend**: essas coisas
+  entram no bundle no build.
+- Prova de que o código novo entrou na imagem: no build, a linha `COPY app ./app` **sem**
+  `CACHED` (foi assim que se conferiu a rodada de 2026-10-29).
 - Worker Celery (opcional; hoje só há a tarefa de IA). O `up -d` simples **não** o sobe:
   `docker compose --profile worker up -d --build worker`.
-- Nunca use `docker-compose.dev.yml` na VPS.
+- Nunca use `docker-compose.dev.yml` na VPS (ele é que traz o perfil `postgres-dev`, o
+  `DEBUGPY_PORT` e os `!override` de portas).
+- Implantar em produção — inclusive um simples rebuild — só com autorização explícita do
+  responsável.
 
 ## 4A. Risco M1: Cloudflare 100 s (HTTP 524) na importação
 
 Com o DNS proxied, a Cloudflare corta respostas após 100 s (planos Free/Pro/Business). Prévia
 do Sheets > 100 s falha com 524 mesmo com nginx 190 s e gunicorn 180 s. Opções (decisão do
 responsável): (1) prévia assíncrona futura (Celery + polling); (2) rota de importação em
-subdomínio DNS-only com firewall; (3) aceitar no início (ainda não há bens importados) e
-monitorar. Registrar a decisão: __________. Sem mudança de código nesta etapa.
+subdomínio DNS-only com firewall; (3) aceitar e monitorar. Decisão registrada em
+2026-11-01: valeu a (3) — a importação dos 1.069 Bens (2026-10-22 a 2026-10-29, 24 prévias
+confirmadas) não gerou nenhum 524. Sem mudança de código nesta etapa.
 
 ## 4B. Nginx / vhost
 
@@ -173,7 +236,9 @@ Na VPS:
 - [ ] `curl -fsS http://127.0.0.1:${BACKEND_PORT:-8000}/api/health` → `{"status":"ok"}`.
 - [ ] `curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:${BACKEND_PORT:-8000}/api/v1/me` → `401`.
 - [ ] `curl -s -o /dev/null -w '%{http_code}\n' -H 'Authorization: Bearer x' http://127.0.0.1:${BACKEND_PORT:-8000}/api/v1/users` → `401`.
-- [ ] `ss -ltnp | grep -E ':(8000|3000|6379)\b'` → só `127.0.0.1` (Redis não aparece).
+- [ ] `ss -ltnp | grep -E ':(8110|3110|6379)\b'` → só `127.0.0.1` (Redis não aparece). Em
+      produção as portas são `BACKEND_PORT=8110` e `FRONTEND_PORT=3110`; os padrões do
+      `.env.example` seriam 8000/3000.
 
 Pelo domínio (outra máquina):
 - [ ] `curl -sI https://<dominio>/login` → 200 com `Content-Security-Policy` (com `nonce-`),
@@ -224,3 +289,28 @@ Logs (sem segredos):
 - [ ] SMTP próprio no Supabase (o embutido dá `429 email rate limit`); SPF/DKIM/DMARC.
 - [ ] `INVITE_ALLOWED_REDIRECT_URLS` com o 1º item `https://<domínio>/ativar-conta`.
 - [ ] Teste real: convidar e-mail de teste; o link só é consumido após o clique.
+
+> Desde a rodada de 2026-10-29 o convite **não** usa mais o template nem o SMTP do
+> Supabase: o backend monta o link com `admin/generate_link` (que não envia e-mail) e faz
+> a entrega por conta própria (`backend/app/services/invite_delivery.py`). Continuam
+> valendo Site URL/Redirect URLs (o `generate_link` exige a URL na allow-list), proteção
+> contra senhas vazadas e MFA do ADM; e o convite passou a exigir `EMAIL_ENABLED=true`
+> com o bloco `EMAIL_*` preenchido (sem isso, `POST /api/v1/users/invite` responde 502).
+
+### Rodada implantada em 2026-10-29 (commits `be2a16c` e `6823803`)
+Frentes: convite à prova de scanner, exclusão/anonimização de usuário, filtros de
+`/relatorios`, correções do `/ativar-conta` e logomarca sazonal do cabeçalho público.
+Detalhe por frente (variáveis, migração, rebuild, validação) em
+[`docs/deploy/CHECKLIST.md`](../deploy/CHECKLIST.md).
+- [ ] Rebuild das duas pontas:
+      `docker compose build backend frontend && docker compose up -d backend frontend`.
+- [ ] Migração: `0019_user_soft_delete` — já aplicada e carimbada (seção 3). Espelho
+      `backend/migrations/sql/0022_user_soft_delete.sql`; reversão
+      `alembic downgrade 0018_equipment_classification` só com autorização, após
+      `pg_dump`.
+- [ ] Novas variáveis: nenhuma; `EMAIL_ENABLED=true` passou a ser requisito do convite.
+- [ ] Validação funcional em produção: **aguardando o responsável** — login real do ADM
+      com MFA, convite real (link `/ativar-conta?token_hash=...&type=invite`, sem `verify`
+      nos logs antes do clique), exclusão de um usuário de teste e os três selects novos
+      de `/relatorios` com uma exportação. Já há 2 ADMs ativos (consulta read-only em
+      2026-10-30), logo criar um 2º ADM não é pré-requisito.

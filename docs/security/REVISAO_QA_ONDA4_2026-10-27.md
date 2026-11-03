@@ -78,5 +78,7 @@ no código (QA4-03 e QA4-04).
 3. Decidir QA4-03 (escopar ou aceitar) e QA4-04 (rota de remoção de override auditada, ADM +
    AAL2, com `version`).
 4. Decidir QA4-05 (auditoria por bem no sync).
-5. Resolver a decisão de backfill (`docs/architecture/classificacao-patrimonial.md`) antes de
-   importar Bens.
+5. ~~Resolver a decisão de backfill (`docs/architecture/classificacao-patrimonial.md`) antes
+   de importar Bens.~~ **Superado:** a decisão resolveu-se por omissão — a confirmação de
+   importação de 2026-10-27 20:20 UTC classificou os 1.069 bens e subiu o `version` de
+   todos, sem o evento `ASSETS_EQUIPMENT_CLASSIFIED` (nota de 2026-11-01).

@@ -1,5 +1,9 @@
 # Shell (navegação) e dashboard — evidência (2026-10-13)
 
+> Estado atual (2026-10-29): registro histórico. O shell (sidebar, menu móvel, filtro do menu
+> por perfil) segue válido; a parte de dashboard mudou — `/dashboard` hoje é a grade do catálogo
+> de painéis do backend e a Home não exibe mais estado vazio de indicadores (ver DASHBOARD.md).
+
 Papel: Desenvolvedor Frontend de Navegação e Dashboard. Base: `docs/ux/evidence/fundacao.md`
 (primitivas `@/components/animations`, `m.*`, tokens `@/lib/motion/tokens`). Nenhum arquivo da fundação,
 de `src/lib` ou do backend foi alterado.
@@ -14,7 +18,7 @@ Editados
 - `frontend/src/components/layout/mobile-nav.tsx` — gaveta com slide + fade (Motion + Radix `forceMount`).
 - `frontend/src/components/layout/header.tsx` — `transition-factory` nos breadcrumbs; "Sair" usa
   `Button loading` + ícone desliza 2px no hover. Lógica de logout intocada.
-- `frontend/src/app/page.tsx` — introdução com `StaggerContainer` + `DashboardOverview status="unavailable"`.
+- `frontend/src/app/(app)/page.tsx` — introdução com `StaggerContainer` + `DashboardOverview status="unavailable"`.
 
 Criados
 - `frontend/src/components/dashboard/{types.ts, stat-card.tsx, animated-chart.tsx,

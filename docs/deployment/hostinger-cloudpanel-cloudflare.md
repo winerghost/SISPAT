@@ -1,11 +1,20 @@
 # Implantação em Produção — VPS Hostinger + CloudPanel + Cloudflare
 
-> **AVISO:** Este documento é um guia de preparação. A implantação em
-> produção **NÃO deve ser executada sem autorização explícita**, e nenhuma
-> etapa aqui foi executada contra a VPS, CloudPanel, Cloudflare ou n8n reais.
-> O SISPAT-AGU está na **Fase 1** (banco de dados e permissionamento) — ver
-> `CLAUDE.md` e `README.md`. Este guia documenta decisões arquiteturais já
-> registradas para quando a implantação for formalmente autorizada.
+> **AVISO:** toda implantação em produção exige **autorização explícita** do
+> responsável — inclusive um rebuild de imagem. Este guia descreve a
+> arquitetura e as decisões de borda; os comandos e as conferências do dia a
+> dia estão em `docs/deployment/checklist-deploy-vps.md` (canônico) e em
+> `docs/deploy/ROTEIRO_VPS_ueato.md` (roteiro do domínio).
+
+> **Estado em 2026-10-29.** A arquitetura descrita aqui **já está em
+> produção** desde 2026-10-20: VPS Hostinger com CloudPanel, Cloudflare
+> proxied, projeto em `/opt/SISPAT`, backend publicado em `127.0.0.1:8110` e
+> frontend em `127.0.0.1:3110` (o Compose nunca ocupa 80/443). O vhost em uso é
+> `infra/cloudpanel/vhost.ueato-cloudpanel.conf`. Rodadas posteriores
+> implantadas: 2026-10-21 e 2026-10-29 (commits `be2a16c` e `6823803`); a
+> validação funcional da última está aguardando o responsável. O banco está em
+> `0019_user_soft_delete`, head do código. O n8n continua EXTERNO: este projeto
+> nunca instala nem constrói um n8n.
 
 ## Arquitetura de implantação (visão geral)
 
@@ -18,11 +27,12 @@ Cloudflare (DNS + proxy "nuvem laranja" + TLS edge, modo Full Strict)
    ▼
 VPS Hostinger
    │
-   ├─ CloudPanel (Nginx do host, porta 80/443, certificado Let's Encrypt
-   │   na origem) — único ponto de entrada público na VPS
+   ├─ CloudPanel (Nginx do host, porta 80/443, certificado de origem válido
+   │   para Full Strict) — único ponto de entrada público na VPS
    │       │
-   │       ├─ site A (domínio/subdomínio do frontend) ──▶ 127.0.0.1:${FRONTEND_PORT}
-   │       └─ site B (domínio/subdomínio da API)       ──▶ 127.0.0.1:${BACKEND_PORT}
+   │       └─ um site/vhost para o domínio, roteando por caminho:
+   │             location /api/  ──▶ 127.0.0.1:${BACKEND_PORT}
+   │             location /      ──▶ 127.0.0.1:${FRONTEND_PORT}
    │
    └─ Docker Compose (sem porta pública própria)
            ├─ frontend (Next.js)  — publica apenas em 127.0.0.1:${FRONTEND_PORT}
@@ -87,10 +97,12 @@ próprio:
   `127.0.0.1:${FRONTEND_PORT}`.
 - **`redis`**: cache/broker do worker, acessível apenas pela rede interna do
   Compose — nunca publicado em porta de host.
-- **`worker`** (se necessário na Fase correspondente): processamento
-  assíncrono (ex.: sincronização Google Sheets, filas), mesma imagem do
-  backend, sem porta publicada — comunica-se com `backend`/`redis` só pela
-  rede interna.
+- **`worker`** (profile `worker`, opt-in; **não** está em uso em produção —
+  hoje só há tarefa de IA, desligada): processamento assíncrono com Celery e
+  beat embutido (`celery -A app.celery_app worker -B`), mesma imagem do
+  backend, sem porta publicada — comunica-se com `redis` só pela rede interna.
+  Para subir, quando decidido:
+  `docker compose --profile worker up -d --build worker`.
 
 **Por que não há serviço de banco de dados aqui:** o banco operacional é o
 Supabase/PostgreSQL remoto e gerenciado (ver seção 4); o Compose de produção
@@ -107,9 +119,28 @@ CloudPanel na mesma VPS — por isso backend e frontend publicam apenas em
 seções 6–7).
 
 A definição exata dos serviços, variáveis e healthchecks está em
-`docker-compose.yml` (sob manutenção ativa por outra frente de trabalho no
-momento deste documento) — consulte sempre o arquivo vigente antes de uma
-implantação real.
+`docker-compose.yml` — consulte sempre o arquivo vigente antes de uma
+implantação real. O que ele já traz hoje, e que este guia pressupõe:
+
+- `docker compose config --services` devolve `backend`, `worker` (profile
+  `worker`, opt-in), `redis` e `frontend`; `docker compose up -d` sem profile
+  sobe apenas backend, frontend e redis.
+- Endurecimento por serviço: `read_only: true`, `no-new-privileges`,
+  `cap_drop: ALL`, `init: true`, limites de CPU/memória/PIDs por variável
+  (`BACKEND_CPUS`, `BACKEND_MEMORY`, ...) e rotação de log json-file
+  (10 MB x 5).
+- Três redes: `edge-net` (portas publicadas em loopback), `backend-net`
+  (`internal: true`, onde fica o Redis) e `egress-net` (saída para Supabase,
+  Google Sheets e n8n externo) — o Redis não participa da saída.
+- Credencial do Google Sheets entra como **secret** de arquivo
+  (`GOOGLE_SHEETS_CREDENTIALS_HOST_PATH` no host → `/run/secrets/
+  google_sheets_credentials.json` só no backend e no worker; o frontend não
+  recebe).
+- O `frontend` **não** usa `env_file`: recebe apenas as três `NEXT_PUBLIC_*`,
+  como build args e como variáveis de execução. Segredos de backend nunca
+  chegam a ele.
+- O Redis exige `REDIS_PASSWORD` (o Compose recusa subir sem ela), gera a ACL
+  em tmpfs e bloqueia comandos administrativos.
 
 ## 3. Variáveis de ambiente
 
@@ -124,7 +155,10 @@ completo e atualizado):
 | `SUPABASE_SERVICE_ROLE_KEY` | Chave privilegiada do Supabase, uso **exclusivo do backend**, para operações que exigem bypass de RLS. Nunca deve ser lida pelo frontend/navegador, nem logada. |
 | `SUPABASE_ANON_KEY` / `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Chave pública/anônima; mesmo sendo "segura" para exposição no cliente, qualquer acesso que ela habilite ainda deve ser validado pelo backend — RLS não substitui a autorização do Flask (`CLAUDE.md`). |
 | `SECRET_KEY` | Chave secreta do Flask (sessões, assinatura de tokens). Deve ser gerada de forma forte e aleatória, exclusiva do ambiente de produção, nunca reaproveitada de desenvolvimento. |
-| `REDIS_URL` | Endereço do Redis interno ao Compose (ex.: `redis://redis:6379/0`) — usado como broker/cache pelo backend e pelo worker; não precisa (e não deve) ser exposto fora da rede interna. |
+| `REDIS_PASSWORD` | Senha do Redis interno. O Compose **recusa subir** sem ela (`${REDIS_PASSWORD:?}`), e ela precisa ser idêntica à que está embutida em `REDIS_URL`. |
+| `REDIS_URL` | Endereço do Redis interno ao Compose, **com senha**: `redis://:<REDIS_PASSWORD>@redis:6379/0` (host `redis`, nunca `localhost`) — broker/cache do backend e do worker; não deve ser exposto fora da rede interna. Senha divergente entre as duas variáveis faz toda rota com rate limit responder 503. |
+| `INVITE_ALLOWED_REDIRECT_URLS` / `PASSWORD_RESET_REDIRECT_URL` | Allow-list do destino dos links de convite e de recuperação de senha (`https://<dominio>/ativar-conta`). Em produção o backend não inicia com item não-https. |
+| `EMAIL_ENABLED` e bloco `EMAIL_*` | SMTP usado pelo próprio backend para entregar convite e recuperação de senha (`app/services/invite_delivery.py`, `app/services/password_reset_delivery.py`). Com a entrega desligada, o convite falha com 502 em vez de ser criado sem e-mail. |
 | `BACKEND_PORT` | Porta em que o container `backend` é publicado em `127.0.0.1` no host, para o CloudPanel encaminhar requisições `/api/*` (ver seções 6–7). |
 | `FRONTEND_PORT` | Porta em que o container `frontend` é publicado em `127.0.0.1` no host, para o CloudPanel encaminhar as demais rotas (ver seções 6–7). |
 | `N8N_BASE_URL` | URL HTTPS pública (ou endereço interno/VPN, conforme topologia) da instalação **externa** de n8n que o backend deve chamar para disparar workflows. |
@@ -135,9 +169,11 @@ completo e atualizado):
 | `TZ` | Fuso horário operacional da unidade (`America/Araguaina`). O banco permanece sempre em UTC; a conversão para este fuso ocorre na camada de aplicação/UI (`CLAUDE.md`). |
 | `TRUSTED_PROXY_IPS` | Lista de IPs/faixas confiáveis para o backend aceitar cabeçalhos de proxy (`X-Forwarded-For`, `X-Forwarded-Proto`) como legítimos — em produção, deve corresponder ao(s) IP(s) de loopback/interno do CloudPanel, nunca `0.0.0.0/0` ou um valor que aceite qualquer origem (ver seção 7). |
 
-Variáveis adicionais específicas de Google Sheets, n8n local (inexistente em
-produção) e desenvolvimento (`POSTGRES_DEV_*`) seguem documentadas apenas em
-`.env.example`, sem relevância direta para este guia de produção.
+Variáveis adicionais específicas de Google Sheets e de desenvolvimento
+(`POSTGRES_DEV_*`, `DEBUGPY_PORT`, usados só pelo `docker-compose.dev.yml`)
+seguem documentadas em `.env.example`; a lista comentada variável por variável
+do ambiente em produção está em `docs/deploy/ENV_PRODUCAO_ueato.md`. Não existe
+n8n local: as `N8N_*` apontam sempre para a instalação EXTERNA.
 
 ## 4. Integração com Supabase
 
@@ -197,23 +233,29 @@ via HTTPS, autenticado.
 
 ## 6. Configuração de domínio no CloudPanel
 
-- Criar, no CloudPanel, um site para o domínio/subdomínio do frontend como
-  **Reverse Proxy** (ou "Node.js" genérico, conforme a opção disponível na
-  versão instalada do CloudPanel) apontando para `127.0.0.1:${FRONTEND_PORT}`.
-- Criar um site adicional — tipicamente um **subdomínio dedicado** (ex.: uma
-  API em subdomínio próprio) ou uma rota adicional dentro do mesmo site,
-  conforme a estratégia de roteamento adotada — do tipo Reverse Proxy
-  apontando para `127.0.0.1:${BACKEND_PORT}`, para expor o backend Flask
-  (rotas `/api/*`, ver seção 7).
-- Um modelo de referência para a configuração de vhost (regras de proxy,
-  cabeçalhos, caminhos) está (ou estará) em
-  `infra/cloudpanel/vhost.conf.example` — mantido por outra frente de
-  trabalho no momento deste documento. Consulte esse arquivo no momento da
-  implantação real para o detalhamento exato das diretivas; este guia não
-  presume seu conteúdo, apenas referencia seu caminho como ponto de partida.
-- Cada site criado no CloudPanel é o local onde se emite o certificado
-  Let's Encrypt da origem (ver seção 9) e onde se configuram eventuais regras
-  de acesso adicionais (ver seção 10).
+- **Decisão em uso desde 2026-10-20:** um ÚNICO site no CloudPanel, do tipo
+  **Reverse Proxy**, para o domínio, roteando por caminho dentro do mesmo
+  vhost — `location /api/` para `127.0.0.1:${BACKEND_PORT}` e `location /`
+  para `127.0.0.1:${FRONTEND_PORT}` (ver seção 7). Não há subdomínio separado
+  para a API.
+- Modelo genérico de vhost: `infra/cloudpanel/vhost.conf.example` (preencher
+  `<BACKEND_PORT>`, `<FRONTEND_PORT>` e as faixas `set_real_ip_from` baixadas
+  de cloudflare.com/ips).
+- Vhost **realmente aplicado** na VPS:
+  `infra/cloudpanel/vhost.ueato-cloudpanel.conf`, adaptado ao CloudPanel da
+  Hostinger no modo "Allow traffic from Cloudflare only" (lista de `allow` +
+  `deny all`): nesse modo não se usa `set_real_ip_from` das faixas da
+  Cloudflare — o IP real vem de `$http_cf_connecting_ip`, e
+  `set_real_ip_from 127.0.0.1` anula o `0.0.0.0/0` do `nginx.conf` global do
+  painel. As diferenças e as armadilhas (regex com `{36}` precisa de aspas,
+  colar do terminal quebra espaços) estão na seção 5 de
+  `docs/deploy/ROTEIRO_VPS_ueato.md`.
+- Faça backup do vhost antes de editar e rode `sudo nginx -t` antes de
+  `sudo systemctl reload nginx`. O CloudPanel pode regenerar o vhost: mantenha
+  a versão final guardada fora do painel.
+- O site criado no CloudPanel é o local onde se instala o certificado de
+  origem (ver seção 9) e onde se configuram as regras de acesso adicionais
+  (ver seção 10), incluindo o "Allow traffic from Cloudflare only".
 
 ## 7. Encaminhamento de requisições ao Next.js e Flask
 
@@ -238,6 +280,16 @@ estarem no mesmo domínio (por caminho) ou em domínios/subdomínios separados:
 - Suporte a WebSocket/upgrade de conexão (se necessário por alguma rota do
   frontend) deve ser preservado na configuração de vhost, replicando o padrão
   já usado no proxy interno do Compose (`Upgrade`/`Connection`).
+- **Locations específicas do vhost em uso** (`vhost.ueato-cloudpanel.conf`),
+  além de `/api/` e `/`: `^/api/v1/(users/invite|users/activate-invite|security/mfa/)`
+  e a de avatar, com rate limit próprio; `^~ /api/v1/imports/` com
+  `proxy_read_timeout 190s` e a zona `sispat_imports`; `^~ /.well-known` e o
+  bloqueio de arquivos ocultos. As demais rotas da API usam
+  `proxy_read_timeout 60s` — considere isso ao medir exportações grandes de
+  `/relatorios` (o gunicorn vai a 180 s; ver `timeouts-gunicorn.md`).
+- O Nginx **não** emite cabeçalhos de segurança: quem emite é o Next.js
+  (frontend) e o Flask (API). Não duplicar HSTS na Cloudflare nem incluir o
+  `global_settings` do CloudPanel neste site.
 
 ## 8. Configuração de DNS no Cloudflare
 
@@ -255,11 +307,11 @@ estarem no mesmo domínio (por caminho) ou em domínios/subdomínios separados:
 
 ## 9. Configuração HTTPS
 
-- **Na origem (VPS/CloudPanel):** emitir um certificado válido via
-  **Let's Encrypt**, usando a integração nativa do CloudPanel para cada site
-  criado (seção 6), antes de habilitar o modo Full Strict no Cloudflare —
-  sem um certificado válido na origem, o Full Strict (abaixo) rejeitaria a
-  conexão.
+- **Na origem (VPS/CloudPanel):** instalar um certificado válido no site antes
+  de habilitar o Full Strict. Com o DNS **proxied** na Cloudflare, o desafio
+  HTTP-01 do Let's Encrypt **falha**: use um **Cloudflare Origin Certificate**
+  (instalado no CloudPanel) ou Let's Encrypt via **DNS-01**. Sem certificado
+  válido na origem, o Full Strict rejeita a conexão.
 - **No Cloudflare:** configurar o modo SSL/TLS do domínio como **Full
   (Strict)** — Cloudflare só aceita a conexão com a origem se o certificado
   apresentado pela VPS for válido (emitido por uma CA confiável, não expirado,
@@ -268,6 +320,9 @@ estarem no mesmo domínio (por caminho) ou em domínios/subdomínios separados:
   "Always Use HTTPS" ou equivalente) e, complementarmente, garantir que o
   CloudPanel também redirecione HTTP para HTTPS na origem — dupla camada de
   redirecionamento, sem depender de apenas uma delas.
+- **HSTS da Cloudflare DESLIGADO:** o `Strict-Transport-Security` já é emitido
+  pela aplicação (Next.js/Flask); ligar na borda duplicaria o cabeçalho, o que
+  a verificação pós-subida trata como falha (critério "cabeçalho único").
 - **Nunca usar o modo "Flexible"** do Cloudflare: esse modo aceita HTTP
   simples entre Cloudflare e a origem, criando uma falsa sensação de HTTPS
   ponta a ponta (o navegador vê HTTPS até o Cloudflare, mas o tráfego segue em
@@ -303,11 +358,13 @@ estarem no mesmo domínio (por caminho) ou em domínios/subdomínios separados:
   `CLAUDE.md`/`README.md`/`.gitignore` — nenhuma credencial real (banco,
   Supabase, `SECRET_KEY`, n8n) é commitada; o `.env` de produção vive apenas
   na VPS, com permissões de arquivo restritas ao usuário de deploy.
-- **Cabeçalhos de segurança:** configurar cabeçalhos HTTP de segurança
-  (`Strict-Transport-Security`, `X-Content-Type-Options: nosniff`,
-  `X-Frame-Options`/`frame-ancestors`, `Content-Security-Policy` adequada ao
-  Next.js, `Referrer-Policy`) tanto na aplicação (Next.js/Flask) quanto, como
-  camada adicional, nas regras do Cloudflare/CloudPanel.
+- **Cabeçalhos de segurança, com UM emissor só:** `Strict-Transport-Security`,
+  `X-Content-Type-Options: nosniff`, `X-Frame-Options`/`frame-ancestors`,
+  `Content-Security-Policy` (com nonce) e `Referrer-Policy` são emitidos pela
+  **aplicação** — Next.js no frontend e Flask na API. O vhost do CloudPanel
+  **não** emite nenhum deles e o HSTS da Cloudflare fica desligado: a
+  verificação pós-subida exige contagem 1 para cada cabeçalho, logo duplicar na
+  borda é defeito, não camada extra.
 
 ## 11. Backups
 
@@ -317,6 +374,11 @@ estarem no mesmo domínio (por caminho) ou em domínios/subdomínios separados:
   implementar rotina própria de `pg_dump` como mecanismo primário. Confirmar,
   junto ao painel do Supabase, a janela de retenção efetivamente contratada
   antes de depender dela operacionalmente.
+- **Antes de cada migração:** além do backup gerenciado, vale um dump
+  explícito, guardado fora do repositório:
+  `pg_dump "$DATABASE_URL" --schema=public -Fc -f backup-pre-<migracao>-$(date +%F-%H%M).dump`.
+  Registrar data, hora e o comando de reversão da migração
+  (`alembic downgrade <id_anterior>`) junto da autorização.
 - **Volumes Docker locais:** os únicos dados persistentes relevantes no
   Compose desta VPS são os volumes internos (ex.: dados do Redis, se
   configurado para persistência) — por natureza, dados de cache/fila, não a
@@ -360,17 +422,27 @@ Processo recomendado para deploy de uma nova versão em produção (sob
 autorização explícita, nunca como rotina automática sem supervisão nesta
 fase do projeto):
 
-1. `git pull` (ou equivalente) da branch/tag autorizada para deploy, na VPS.
+1. `cd /opt/SISPAT && git pull --ff-only` da branch/tag autorizada para deploy.
 2. Revisar `docker-compose.yml`/`.env.example` vigentes contra o `.env` de
-   produção, aplicando eventuais novas variáveis exigidas.
-3. `docker compose build` (ou `up -d --build`) para reconstruir as imagens
-   alteradas (`backend`, `frontend`, e `worker`, que compartilha a imagem do
-   backend).
-4. `docker compose up -d --build` para recriar apenas os containers cujas
-   imagens/definições mudaram, preservando os demais em execução.
-5. Aplicar migrações Alembic pendentes (`alembic upgrade head`) **antes** ou
-   junto à subida da nova versão do backend, nunca depois, para evitar que o
-   código novo rode contra um schema desatualizado.
+   produção, aplicando eventuais novas variáveis exigidas (conferências em
+   `docs/deploy/ENV_PRODUCAO_ueato.md`).
+3. Aplicar o DDL da migração, se houver, **antes** de subir a imagem nova do
+   backend — nunca depois, para o código novo não rodar contra um schema
+   desatualizado. No padrão deste projeto o responsável executa o espelho
+   `.sql` no SQL Editor do Supabase e carimba (`alembic stamp <id>`); quando o
+   banco não tiver os objetos, `alembic upgrade head`. Sempre com backup/PITR
+   confirmado (ou `pg_dump "$DATABASE_URL" --schema=public -Fc -f <arquivo>.dump`)
+   e com autorização explícita. Detalhe na seção 3 de
+   `docs/deployment/checklist-deploy-vps.md`.
+4. Reconstruir e recriar só o que mudou:
+   `docker compose build backend frontend && docker compose up -d backend frontend`
+   (só backend: `docker compose build backend && docker compose up -d backend` e
+   depois `docker compose up -d`, porque o frontend depende do backend e cai na
+   recriação). Qualquer mudança em `NEXT_PUBLIC_*` ou em asset importado pelo
+   código do frontend exige rebuild do frontend.
+5. Conferir `docker compose ps` (backend, frontend e redis `healthy`) e
+   `curl -fsS http://127.0.0.1:8110/api/health` antes de considerar a subida
+   concluída; depois rodar a verificação pelo domínio (seção 5 do checklist).
 6. **Rolling/zero-downtime básico:** como o Compose roda uma única réplica de
    cada serviço nesta fase, uma atualização de `backend`/`frontend` implica
    uma breve indisponibilidade durante a recriação do container; para reduzir
@@ -419,8 +491,18 @@ fase do projeto):
 - `README.md` — visão geral do projeto e estrutura de pastas.
 - `docker-compose.yml` / `docker-compose.dev.yml` — definição dos serviços.
 - `.env.example` — modelo de variáveis de ambiente (sem valores reais).
-- `infra/cloudpanel/vhost.conf.example` — modelo de configuração de vhost
-  para o CloudPanel (mantido por outra frente de trabalho).
+- `infra/cloudpanel/vhost.conf.example` — modelo genérico de vhost para o
+  CloudPanel.
+- `infra/cloudpanel/vhost.ueato-cloudpanel.conf` — vhost efetivamente aplicado
+  na VPS (modo "Allow traffic from Cloudflare only").
+- `docs/deployment/checklist-deploy-vps.md` — checklist canônico de deploy.
+- `docs/deployment/timeouts-gunicorn.md` — cadeia de timeouts (proxy, gunicorn,
+  banco, Google Sheets).
+- `docs/deploy/ROTEIRO_VPS_ueato.md` — roteiro operacional do domínio.
+- `docs/deploy/ENV_PRODUCAO_ueato.md` — variáveis do ambiente de produção (só
+  nomes e descrições; nenhum valor secreto).
+- `docs/deploy/PENDENCIAS_OPERACIONAIS_2026-10-20.md` — pendências operacionais
+  abertas, com o passo a passo de cada uma.
 - `docs/architecture/estrategia-auditoria.md` — base para os eventos de
   auditoria referenciados nas seções de segurança/monitoramento.
 - `docs/permissions/matriz-permissoes.md` — base para as regras de acesso a

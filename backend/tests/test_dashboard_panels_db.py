@@ -165,9 +165,12 @@ def test_db_0017_mapa_espelha_o_servico(panels_migration) -> None:
     assert len(rows) == len(dps.LEGACY_PANEL_MAP) == 5
     assert {old: new for old, new, _s, _p in rows} == dict(dps.LEGACY_PANEL_MAP)
     # tamanho e posição de catálogo iguais aos do catálogo do backend. A 0017 (já aplicada,
-    # imutável) é um instantâneo do catálogo de 12 painéis; `located_by_unit_chart` (Onda A)
-    # foi inserido depois dele, então a posição histórica ignora esse painel.
-    historico = [pid for pid in dps.PANEL_IDS if pid != "located_by_unit_chart"]
+    # imutável) é um instantâneo do catálogo de 12 painéis; `located_by_unit_chart` (Onda A) e
+    # `located_summary` (2026-11-01) foram inseridos depois dele, então a posição histórica
+    # ignora esses dois painéis.
+    historico = [
+        pid for pid in dps.PANEL_IDS if pid not in ("located_by_unit_chart", "located_summary")
+    ]
     assert len(historico) == 12
     for _old, new, size, pos in rows:
         panel = dps.PANELS_BY_ID[new]

@@ -1,5 +1,10 @@
 # Prontidão de deploy — 2026-10-19
 
+> **Estado atual (2026-10-29):** o deploy ocorreu em 2026-10-20 e o atraso do
+> carimbo apontado aqui não existe mais — `alembic_version` de produção =
+> `0019_user_soft_delete`, igual ao head do código. As tabelas comparativas
+> abaixo valem como registro do que havia em 2026-10-19.
+
 Revisão SOMENTE LEITURA (nada foi alterado, aplicado ou implantado). Sem
 segredos: variáveis citadas apenas por nome. Banco consultado com SELECT
 (projeto Supabase único: dev = prod). Não foi executado `git` (regra da

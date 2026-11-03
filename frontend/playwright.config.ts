@@ -59,7 +59,13 @@ export default defineConfig({
     { name: "motion", testMatch: /motion-.*\.spec\.ts/ },
   ],
   webServer: {
-    command: `npx next dev --port ${PORT}`,
+    // Bundle de PRODUÇÃO, não `next dev`: com `next dev` cada rota compila sob
+    // demanda na primeira visita, e com vários workers disputando o mesmo
+    // servidor a compilação inicial estourava o timeout do teste (falhas de
+    // orçamento, não de UI, em responsive/a11y/dashboard-charts). `next build`
+    // também faz os NEXT_PUBLIC_* sintéticos serem embutidos como em produção,
+    // que é o que a imagem Docker serve.
+    command: `npx next build && npx next start --port ${PORT}`,
     url: `${BASE_URL}/login`,
     timeout: 180_000,
     reuseExistingServer: !process.env.CI,

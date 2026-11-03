@@ -8,7 +8,7 @@ from test_dashboard_panels_api import SUBS, api, get_panels, put_prefs, seed_pan
 from app.services import dashboard_panels_service as dps
 
 PANEL = "located_by_unit_chart"
-COUNTS = {"ADM": 13, "USER": 10, "RH": 8}
+COUNTS = {"ADM": 14, "USER": 11, "RH": 9}
 ADM_ONLY = ("unclassified_review", "classification_overrides", "sync_status")
 
 

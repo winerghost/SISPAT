@@ -5,6 +5,27 @@ entrada NÃO confiável. Fluxo: Sheets → Flask → PostgreSQL (prévia → con
 Este plano parte de uma amostra de 10 linhas fornecida pelo usuário
 (2026-10-16); as hipóteses abaixo devem ser validadas na prévia real.
 
+> **Estado em 2026-10-29 (leia antes do plano).** Este é um documento de PLANO,
+> mantido como registro histórico das decisões; várias etapas marcadas abaixo como
+> "falta" já existem. Conferido no código nesta data:
+> - As rotas de importação existem: bens em `backend/app/api/v1/imports.py`
+>   (`/api/v1/imports/google-sheets/preview`, `/preview/<id>/items`,
+>   `/<id>/pending`, `/<id>/reconciliation`, `/confirm`) e cadastros de apoio em
+>   `catalog_imports.py` (`/api/v1/catalog-imports/...`), todas ADM + AAL2.
+> - O CRUD dos cadastros de apoio existe (`rooms.py`, `responsible_people.py`,
+>   `units.py`, `locations.py`) — contrato em `cadastros-apoio-api.md`.
+> - As telas existem: `/administracao/importacao/*`, `/salas-localizacoes`,
+>   `/responsaveis`, `/unidades` e as de administração correspondentes.
+> - `alembic_version` de produção = `0019_user_soft_delete` (head da cadeia linear
+>   0001→0019). Os cabeçalhos dos arquivos de migração que ainda dizem "PENDENTE
+>   DE APLICAÇÃO" (0007, 0008, 0015, 0016, 0019...) são texto de autoria não
+>   atualizado; o estado real de cada DDL se confere com as consultas de
+>   `docs/database/historico-migracoes.md`.
+> - A classificação de equipamentos (migração 0018) roda na importação: NOVO é
+>   sempre classificado e EXISTENTE é reclassificado pela descrição atual, salvo
+>   `category_override` (ver `classificacao-patrimonial.md`, incluindo o efeito de
+>   `version + 1` na primeira confirmação após a 0018).
+
 ## 1. Achados da amostra vs. código atual
 
 | Coluna | O que a amostra mostra | Código atual | Ação |
@@ -43,12 +64,15 @@ continua texto.
    em `normalized_values`; legadas `responsavel_original`/`responsavel_unidade`
    mantidas só por compatibilidade). Falta na etapa 3: `import_service` usar
    as chaves novas (alias de unidade, `owner_unit_id`, vínculo de pessoa).
-2. Migração `unit_aliases` (+ espelho `.sql`, NÃO aplicar) (backend-platform).
-   **Pronta, não aplicada**: Alembic `0007_unit_aliases`, espelho
+2. Migração `unit_aliases` (+ espelho `.sql`) (backend-platform).
+   Alembic `0007_unit_aliases`, espelho
    `backend/migrations/sql/0010_unit_aliases.sql`, modelo `UnitAlias`
-   (`alias`, `unit_id`). Seed: `UEA` → unidade `023404`. Aplicar (usuário,
-   após autorizar): `cd backend && alembic upgrade head` ou colar o `.sql`
-   no SQL Editor do Supabase. Reverter: `alembic downgrade -1`.
+   (`alias`, `unit_id`). Seed: `UEA` → unidade `023404`. Estado em 2026-10-29:
+   o carimbo de produção já passou dessa revisão (head `0019_user_soft_delete`)
+   e a resolução de siglas está em uso na importação; confirmar a presença do
+   DDL com `docs/database/historico-migracoes.md`. Reverter:
+   `alembic downgrade 0006_email_settings_permission` (desfaz só a tabela
+   `unit_aliases`); backup antes, com `pg_dump`.
 3. Ligar normalizador e alias ao `import_service`/`google_sheets_client` (backend-domain).
    **CONCLUÍDA (2026-10-16):** `app/services/import_references.py` + `import_service`
    (alias de unidade, `owner_unit_id`, `located`, datas, `notes`, sala por nome,
@@ -85,14 +109,25 @@ preservado em `source_record_id`; duplicata por e-mail → manter a 1ª e relata
 `responsible_person_id`; `USUARIO` (e-mail) → pessoa resolvida em
 `normalized_values` (`assigned_user_id` referencia contas do sistema, fica NULL).
 
-Etapas novas: (A) migração (PRONTA, não aplicada: `0007_unit_aliases` com 4 siglas e `0008_catalog_source_ids_perms`, espelhos `sql/0010` e `sql/0011`; aplicar com `cd backend && alembic upgrade head`): seed das 4 siglas, `source_record_id` em
-`rooms`/`responsible_people`/`units`, unicidade (unidade+nome da sala, e-mail
-da pessoa), permissões `responsible.manage`/`units.update` (backend-platform);
+Etapas novas: (A) migrações (backend-platform) — `0007_unit_aliases` (espelho
+`sql/0010_unit_aliases.sql`): tabela `unit_aliases` com o seed das 4 siglas; e
+`0008_catalog_source_ids_permissions` (espelho
+`sql/0011_catalog_source_ids_permissions.sql`): `source_record_id` em
+`rooms`/`responsible_people`/`units`, `phone` em `responsible_people`/`users`,
+as unicidades (unidade+nome da sala, e-mail da pessoa) e as permissões
+`responsible.manage`/`units.update`. Em 2026-10-29 o carimbo de produção já passou
+das duas (head `0019_user_soft_delete`) e as rotas que dependem dessas colunas estão
+em uso. Rollback, só com autorização e `pg_dump` antes:
+`alembic downgrade 0007_unit_aliases` (desfaz a 0008) e, em seguida,
+`alembic downgrade 0006_email_settings_permission` (desfaz a 0007);
 (B) API CRUD + serviços + importação dos cadastros (backend-domain) —
-**serviço de importação dos cadastros PRONTO (sem rotas)**:
-`catalog_import_service.py` + `catalog_normalizer.py` + `GoogleSheetsClient.read_tab_rows`
-(estrategia-sincronizacao.md 4.5; testes `test_catalog_*`); falta API/CRUD;
-(C) telas de CRUD (sispat-frontend); (D) revisão de segurança.
+**CONCLUÍDA**: `catalog_import_service.py` + `catalog_normalizer.py` +
+`GoogleSheetsClient.read_tab_rows` (estrategia-sincronizacao.md 4.5; testes
+`test_catalog_*`) e as rotas `rooms.py`/`responsible_people.py`/`units.py`/
+`catalog_imports.py` (contrato em `cadastros-apoio-api.md`);
+(C) telas de CRUD — **CONCLUÍDA** (`/salas-localizacoes`, `/responsaveis`,
+`/unidades`, `/administracao/importacao/*`); (D) revisão de segurança (ver
+`docs/security/`).
 
 ## 3.2 DECISÃO (2026-10-16): usuários NÃO são importados
 O usuário decidiu: os dados da tabela de Usuários são descartados; o único ADM
@@ -136,7 +171,8 @@ usuário); `ID` original, `RespAlteracao`, `DataAlteracao` só em dado bruto.
 Ambiente: Docker em modo dev (`docker compose -f docker-compose.yml -f
 docker-compose.dev.yml up -d`); credencial do Google montada como segredo
 somente leitura (`GOOGLE_SHEETS_CREDENTIALS_HOST_PATH`); migrações 0007/0008
-aplicadas no Supabase (pendente `alembic stamp`).
+aplicadas no Supabase, naquela data ainda sem `alembic stamp` (em 2026-10-29 o
+carimbo está em `0019_user_soft_delete`).
 
 ### Primeira importação (ordem obrigatória; confirmação sempre pela tela, ADM + MFA)
 1. Cadastros de apoio → gerar prévia de **Unidades** → revisar → confirmar
@@ -198,12 +234,24 @@ Manter a chave JSON (fora do repositório) enquanto houver importações. Após 
 para identidade sem chave.
 
 ## 4. Pendências do usuário
-- Importação inicial (roteiro 3.3) e decisão da data de virada.
-- Decidir SEC-CAT-06 (USER vê cadastro completo de pessoas ou só vínculo) e
-  SEC-CAT-07 (purga de prévias expiradas; proposta: 30 dias).
-- Antes do VPS: `alembic stamp 0008_catalog_source_ids_perms`,
-  `# nosemgrep` justificado em `email/templates.py:75`, instalar gitleaks e
-  trivy, rodar `scripts/security-audit.sh` de novo.
+
+Revisado em 2026-10-29.
+
+- Importação inicial dos BENS (roteiro 3.3) e decisão da data de virada —
+  seguem pendentes.
+- Decidir a aplicação de `flask classify-equipment --apply` ANTES da primeira
+  importação pós-0018 (o efeito de `version + 1` em cerca de 1.069 bens está
+  descrito em `classificacao-patrimonial.md`, "Decisão pendente").
+- SEC-CAT-06 já tem decisão implementada: USER vê apenas pessoas vinculadas a
+  bens do seu escopo e só `{id, name, unit_id, active}`
+  (`cadastros-apoio-api.md`, "Decisões"). SEC-CAT-07 também: existe
+  `flask purge-import-previews` (padrão 7 dias, `--dry-run`;
+  `estrategia-sincronizacao.md` §6.1) — resta fixar a periodicidade operacional.
+- O `alembic stamp` pendente à época do deploy foi resolvido: o carimbo de
+  produção é `0019_user_soft_delete`. As pendências de ferramental de segurança
+  (nosemgrep em `email/templates.py`, gitleaks, trivy,
+  `scripts/security-audit.sh`) são acompanhadas em `docs/security/` e
+  `docs/deploy/` — fora deste documento.
 - Resolvido: siglas PF/PU/CJU/UEA; leitura de RESPONSAVEL (1ª = vínculo,
   2ª = pessoa) e QT como texto bruto; salas e pessoas com coluna UNIDADE.
 

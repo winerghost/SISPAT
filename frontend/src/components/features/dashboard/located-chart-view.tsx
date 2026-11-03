@@ -6,7 +6,7 @@ import dynamic from "next/dynamic";
 import { TOKENS } from "@/components/dashboard/chart-theme";
 import type { SeriesStyle } from "@/components/dashboard/chart-shell";
 import type { MultiSeriesChartData } from "@/components/dashboard/types";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Table, TableBody, TableCell, TableFooter, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { LoadingSkeleton } from "@/components/ui/loading-skeleton";
 import type { ChartData, PanelFilters, UnitRow } from "@/lib/dashboard-equipment-api";
 import { OTHERS_UNIT, isLocatedValue, type LocatedValue } from "@/lib/dashboard-located-api";
@@ -26,6 +26,11 @@ import { LocatedRecordsSheet, type LocatedTarget } from "./located-records-sheet
 //   os botões da tabela "Bens por unidade e situação" (cada contagem é um botão
 //   com foco visível, Enter/Espaço); o botão "Total" abre todas as situações.
 // - Barra "Outras" (`unit_id` null) -> `unit_id=outras` no endpoint de registros.
+// - Rodapé de totais (tabela e cartões): o total geral é o número do servidor
+//   (`dados.total`); por situação, é a soma dos valores que o servidor mandou
+//   em TODAS as linhas do painel (`dados.unidades`, "Outras" incluída) — nunca
+//   um subconjunto visível. Se a soma por situação divergir de `dados.total`,
+//   a divergência é exibida em vez de escondida.
 // - Foco: antes de abrir o painel, o foco vai ao botão equivalente da tabela;
 //   ao fechar (Esc/Fechar) volta a ele.
 // =============================================================================
@@ -74,6 +79,17 @@ function chartModel(dados: ChartData, rows: Row[]): MultiSeriesChartData {
   };
 }
 
+/**
+ * Total por situação: soma dos valores do backend em todas as linhas do painel.
+ * (`ChartData.series` traz só id/rótulo; o split global não vem pronto nesta
+ * resposta. O total GERAL continua sendo `dados.total`, nunca esta soma.)
+ */
+function situationTotals(rows: Row[], columns: Column[]): Record<string, number> {
+  return Object.fromEntries(
+    columns.map((column) => [column.id, rows.reduce((sum, row) => sum + (row.valores[column.id] ?? 0), 0)]),
+  );
+}
+
 const cellKeyOf = (unit: string, located: LocatedValue | null) => `${unit}:${located ?? "ALL"}`;
 
 const buttonClass =
@@ -112,15 +128,20 @@ function LocatedMatrix({
   rows,
   columns,
   caption,
+  total,
   onOpen,
 }: {
   rows: Row[];
   columns: Column[];
   caption: string;
+  /** Total geral do backend (`dados.total`). */
+  total: number;
   onOpen: (row: Row, located: LocatedValue | null) => void;
 }) {
   const suffixOf = (row: Row, label: string | null) =>
     label ? `bens ${label} em ${row.unidade}: abrir lista` : `todos os bens de ${row.unidade}: abrir lista`;
+  const totals = situationTotals(rows, columns);
+  const sumOfSituations = columns.reduce((sum, column) => sum + (totals[column.id] ?? 0), 0);
   return (
     <div className="min-w-0" data-located-matrix>
       <div className="hidden lg:block">
@@ -168,6 +189,19 @@ function LocatedMatrix({
               </TableRow>
             ))}
           </TableBody>
+          <TableFooter>
+            <TableRow data-located-totals>
+              <th scope="row" className="px-4 py-[var(--density-cell-y)] text-left align-middle font-regular text-bone">
+                Total (todas as unidades)
+              </th>
+              <TableCell className="text-right tabular-nums">{formatCount(total)}</TableCell>
+              {columns.map((column) => (
+                <TableCell key={column.id} className="text-right tabular-nums">
+                  {formatCount(totals[column.id] ?? 0)}
+                </TableCell>
+              ))}
+            </TableRow>
+          </TableFooter>
         </Table>
       </div>
 
@@ -205,7 +239,29 @@ function LocatedMatrix({
             </dl>
           </li>
         ))}
+        <li data-located-totals className="min-w-0 rounded-cards border border-ash-stroke p-3">
+          <p className="text-body-sm text-bone">Total (todas as unidades)</p>
+          <dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-2">
+            <div className="flex min-w-0 flex-col items-start gap-1">
+              <dt className="text-caption text-warm-granite">Total</dt>
+              <dd className="m-0 tabular-nums text-bone">{formatCount(total)}</dd>
+            </div>
+            {columns.map((column) => (
+              <div key={column.id} className="flex min-w-0 flex-col items-start gap-1">
+                <dt className="text-caption text-warm-granite">{column.label}</dt>
+                <dd className="m-0 tabular-nums text-bone">{formatCount(totals[column.id] ?? 0)}</dd>
+              </div>
+            ))}
+          </dl>
+        </li>
       </ul>
+
+      {sumOfSituations === total ? null : (
+        <p role="note" data-located-totals-mismatch className="mt-3 text-body-sm text-bone">
+          A soma por situação ({formatCount(sumOfSituations)}) difere do total informado pelo servidor (
+          {formatCount(total)}). Os dois números são exibidos como vieram; nenhum foi ajustado.
+        </p>
+      )}
     </div>
   );
 }
@@ -277,7 +333,13 @@ export function LocatedChartView({ dados, label, filters }: { dados: ChartData; 
           Bens por unidade e situação
         </summary>
         <div className="p-3">
-          <LocatedMatrix rows={rows} columns={columns} caption={`${label} (dados do gráfico)`} onOpen={openFor} />
+          <LocatedMatrix
+            rows={rows}
+            columns={columns}
+            caption={`${label} (dados do gráfico)`}
+            total={dados.total}
+            onOpen={openFor}
+          />
         </div>
       </details>
 

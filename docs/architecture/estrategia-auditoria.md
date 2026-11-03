@@ -22,7 +22,15 @@ dados pessoais (LGPD).
 ### 2.1 Operações sobre entidades de negócio (`entity_type` / `entity_id`)
 
 Toda operação de escrita sobre as seguintes entidades gera entrada em
-`audit_logs`, com `operation IN ('CREATE','UPDATE','DELETE')`:
+`audit_logs`. **A coluna `operation` não usa `CREATE`/`UPDATE`/`DELETE`
+genéricos** (não há CHECK que os imponha): o código grava verbos específicos no
+passado, por exemplo `ASSET_CREATED`, `ASSET_UPDATED`, `ASSET_DELETED`,
+`ASSET_RESTORED`, `ASSET_MOVED`, `ASSET_CLASSIFICATION_UPDATED`,
+`ASSET_CATEGORY_OVERRIDDEN`, `MOVEMENT_APPROVED`, `INVENTORY_ITEM_CHECKED`,
+`USER_ROLE_CHANGED`, `USER_DELETED`, `INVITE_CREATED`, `INVITE_ACCEPTED`,
+`REVOKE_ACCESS`, `CONFIRM_IMPORT`, `CONFIRM_CATALOG_IMPORT`, `REPORT_EXPORTED`,
+`AUDIT_VIEWED`, `LOGIN`. Qualquer filtro por `operation` tem de usar o verbo
+real (verificado em 2026-10-29):
 
 | `entity_type` | Quando audita | Observação |
 |---|---|---|
@@ -32,15 +40,25 @@ Toda operação de escrita sobre as seguintes entidades gera entrada em
 | `responsible_people` | Criação, atualização, inativação | Inclui vínculo/desvínculo via `responsible_link.manage` |
 | `units` / `rooms` / `locations` | Criação, atualização, inativação | Cadastro mestre |
 | `users` | Criação, atualização, ativação/inativação | Nunca inclui hash de senha/credencial (ver seção 5) |
-| `roles` / `permissions` / `role_permissions` / `user_roles` / `user_unit_access` | Toda alteração | Exigido explicitamente por `CLAUDE.md`: "registrar toda alteração de usuários, perfis e permissões em auditoria" |
-| `sync_jobs` / `sync_conflicts` | Início/fim de execução, resolução de conflito | Cobre a trilha de integração com o Google Sheets |
-| `export_jobs` | Criação da solicitação | Quem exportou o quê, mesmo que o arquivo gerado não seja versionado em `audit_logs` |
+| `invites` | Criação e aceite do convite | Gravado como `entity_type = 'invite'`: `INVITE_CREATED` e `INVITE_ACCEPTED` (`app/services/invite_service.py`). Nunca o token nem o link do convite — ver `docs/architecture/modulo-configuracoes.md`, "Convites de acesso" |
+| `user_roles` / `user_unit_access` | Toda alteração feita pela API | Gravado como `entity_type = 'user'`: `USER_ROLE_CHANGED` e `USER_UNITS_CHANGED` (`PATCH /api/v1/users/<id>`), mais `USER_PRIVILEGE_CHANGED` (evento de segurança HIGH) na promoção/rebaixamento de ADM e `REVOKE_ACCESS` na revogação |
+| `roles` / `permissions` / `role_permissions` | — | **Nenhuma rota da API altera a matriz perfil × permissão** (verificado em 2026-10-29: `app/api/v1/admin_access.py` só tem `GET`). Logo não há, nem pode haver, linha de auditoria dessas tabelas: mudar o que um perfil pode fazer é MIGRAÇÃO versionada (+ espelho `.sql`), autorizada e registrada em `docs/database/historico-migracoes.md`. Ver `docs/architecture/admin-read-api.md` |
+| `sync_jobs` / `sync_conflicts` | — (nome conceitual) | A trilha da integração com o Google Sheets É gravada, mas com outros `entity_type`: `import` (`CONFIRM_IMPORT`), `catalog_import` (`CREATE_CATALOG_PREVIEW`, `CONFIRM_CATALOG_IMPORT`) e `import_previews` (`IMPORT_PREVIEWS_PURGED`). Nenhuma linha usa `entity_type='sync_jobs'`, e "resolução de conflito" não existe como operação: nada no código de produção escreve em `sync_conflicts` (ver `estrategia-sincronizacao.md` §5 e §7) |
+| `export_jobs` | — | **Tabela sem uso.** Ela existe desde a `0001` (modelo `ExportJob` em `backend/app/models/misc.py`), mas nenhum serviço a escreve ou lê — verificado em 2026-10-29; o mesmo vale para `saved_filters`/`SavedFilter`. As exportações do sistema são SÍNCRONAS e auditadas por evento próprio (linha seguinte) |
+| exportações (sem tabela de job) | A cada arquivo gerado | `entity_type = 'report_export'`, `operation = 'REPORT_EXPORTED'` (`/api/v1/reports/<kind>/export`), mais `DASHBOARD_TECH_EXPORTED`, `DASHBOARD_EQUIPMENT_EXPORTED` e `DASHBOARD_REVIEW_QUEUE_EXPORTED` nas exportações do dashboard. Grava formato, nº de linhas e NOMES dos filtros — nunca os valores nem o conteúdo |
 
 > **Atenção ao consultar `audit_logs`:** os `entity_type` da tabela acima são os
-> nomes **conceituais** (nomes de tabela). Os valores realmente gravados pelo
-> código hoje são, literalmente: `user` (singular — gestão de usuários),
-> `assets`, `asset`, `invite`, `import`, `catalog_import`, `report_export`,
-> `ai`, `auth` e `security_event`. Qualquer filtro por `entity_type` tem de usar
+> nomes **conceituais** (nomes de tabela). Lista completa dos valores realmente
+> gravados pelo código, levantada em 2026-10-29 (todos os literais e constantes
+> `*ENTITY_TYPE*` de `backend/app/`), em ordem alfabética:
+> `ai`, `ai_settings`, `asset`, `assets`, `asset_movement`, `auth`,
+> `catalog_import`, `dashboard_equipment_export`, `dashboard_tech_export`,
+> `import`, `import_previews`, `inventory`, `inventory_item`, `invite`,
+> `report_export`, `responsible_person`, `room`, `security_event`, `unit`,
+> `user`, `user_dashboard_preferences`, `user_preferences`.
+> Note o singular em `user`, `asset`, `unit`, `room` e a existência de `assets`
+> (plural) para as operações em LOTE da classificação (`ASSETS_CLASSIFIED`,
+> `ASSETS_EQUIPMENT_CLASSIFIED`). Qualquer filtro por `entity_type` tem de usar
 > a string real, não o nome da tabela.
 
 ### 2.2 Eventos de autenticação e autorização (sem entidade de negócio)
@@ -158,9 +176,11 @@ pós-implantação.
 
 - Leituras simples (`SELECT`) bem-sucedidas de listagens/relatórios não geram
   uma linha por leitura — o volume tornaria a tabela inviável e a LGPD não
-  exige granularidade de leitura para esse perfil de dado. Exceção: exportações
-  (`export_jobs`) são auditadas como evento de criação de solicitação, porque
-  representam extração de dados do sistema, não apenas visualização.
+  exige granularidade de leitura para esse perfil de dado. Exceções: (a) cada
+  EXPORTAÇÃO gera linha (`REPORT_EXPORTED` e os `DASHBOARD_*_EXPORTED`), porque
+  representa extração de dados, não apenas visualização; (b) cada consulta
+  bem-sucedida à própria auditoria grava `AUDIT_VIEWED`
+  (`docs/architecture/admin-read-api.md`).
 - Operações internas de infraestrutura sem efeito sobre dado de negócio (ex.:
   *health check*).
 

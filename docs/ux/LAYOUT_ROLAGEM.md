@@ -1,5 +1,8 @@
 # Layout: rolagem única da página
 
+Reconferido contra o código em 2026-10-29: o modelo, a regra do `relative` e o
+teste de regressão seguem como descrito. Nenhum spec foi reexecutado nesta data.
+
 ## Modelo
 O app é uma "tela de aplicativo": `AppShell` (`frontend/src/components/layout/app-shell.tsx`)
 ocupa a altura do viewport (`.h-app` = `100vh` com fallback e `100dvh`), a Sidebar tem a
@@ -22,10 +25,12 @@ móvel; trocado por `100dvh` (com fallback 100vh).
 
 ## Teste de regressão
 `frontend/e2e/page-scroll.spec.ts` (projeto Playwright `scroll`):
-`npx playwright test --project=scroll`. Em 320, 768, 1024, 1366 e 1920 de largura, nas
-rotas principais (dashboard, painel, patrimônios, patrimônios com 100/200 por página,
-unidades, salas, responsáveis, usuários, auditoria, cadastros, relatórios, perfil,
-aparência, movimentações, inventários, importação):
+`npx playwright test --project=scroll`. Em 320, 768, 1024, 1366 e 1920 de largura,
+nas rotas derivadas do catálogo `e2e/support/screens.ts` — `dashboard`,
+`dashboard-painel`, `patrimonios-adm` (+ os casos sintéticos
+`patrimonios-100-por-pagina` e `patrimonios-200-por-pagina`), `unidades`, `salas`,
+`responsaveis`, `usuarios`, `auditoria`, `cadastros-vazio`, `relatorios-adm`,
+`perfil`, `aparencia`, `movimentacoes-adm`, `inventarios-adm` e `importacao`:
 
 - `documentElement.scrollHeight <= innerHeight + 1`;
 - `window.scrollTo(0, 9999)` não altera `scrollY`;
@@ -34,5 +39,11 @@ aparência, movimentações, inventários, importação):
 - `span.sr-only` injetado ao fim do `<main>` não rola a janela;
 - axe WCAG 2.x A/AA na mesma passada.
 
-Medidas em `e2e/support/layout-checks.ts` (`collectScrollReport`). O mock `assetsBulk`
-(`e2e/support/mocks.ts`) gera N bens sintéticos para os casos de 100/200 por página.
+Medidas em `frontend/e2e/support/layout-checks.ts` (`collectScrollReport`). O mock
+`assetsBulk` (`frontend/e2e/support/mocks.ts`) gera N bens sintéticos para os casos
+de 100/200 por página — o seletor "Registros por página" da `PaginationBar` oferece
+50/100/200 (padrão 50).
+
+O mesmo módulo exporta `collectLayoutReport`, usado por
+`frontend/e2e/users-delete-functional.spec.ts` para conferir ausência de overflow
+nos diálogos de alto impacto da tela de usuários (`docs/ux/USUARIOS.md`).

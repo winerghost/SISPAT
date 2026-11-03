@@ -1,5 +1,8 @@
 # Brief compartilhado — Modernização visual / animações (2026-10-13)
 
+> Estado atual (2026-10-29): brief histórico da rodada de 2026-10-13. As restrições do DESIGN.md
+> continuam valendo; o inventário de telas e componentes citado aqui está desatualizado.
+
 Raiz: `C:\Users\winer\Videos\School\INVENTARIOAGU\SISPAT-AGU` · frontend em `frontend/` (Next 15 App Router,
 React 19, TS, Tailwind 3). Leia `CLAUDE.md` e LEIA INTEGRALMENTE `DESIGN.md` antes de qualquer edição.
 

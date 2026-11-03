@@ -2,7 +2,11 @@
 
 Transferências de bens entre unidades/salas/responsáveis com **histórico imutável**.
 Código: `backend/app/api/v1/movements.py`, `movement_schemas.py`,
-`backend/app/services/movement_service.py`. Tabela existente `asset_movements` (sem migração).
+`backend/app/services/movement_service.py`. Tabela `asset_movements`, criada na
+`0001_initial_schema` (este módulo não precisou de migração própria).
+
+Rotas, permissões e schemas reconferidos contra o código em 2026-10-29: as 6 rotas
+abaixo são exatamente as registradas em `movements_bp`, com as permissões indicadas.
 
 ## Rotas
 
@@ -18,6 +22,10 @@ Código: `backend/app/api/v1/movements.py`, `movement_schemas.py`,
 Não existe `PUT`/`PATCH`/`DELETE` (405). Erros: `{"error": {"code", "message"}}`.
 Alvo alheio, inexistente ou malformado: **404 idêntico** (`not_found`) com evento
 `UNIT_SCOPE_DENIED`. Campo desconhecido/privilegiado no corpo: 400 `validation_error` + evento.
+
+Rate limit por usuário/hora (constantes de `app/api/v1/catalog_http.py`): 1200 na
+listagem (`LIST_LIMIT`), 600 no detalhe (`READ_LIMIT`), 120 ao solicitar
+(`WRITE_LIMIT`) e 60 em cancelar/aprovar/rejeitar (`ACTION_LIMIT`).
 
 ## Estados
 
@@ -42,7 +50,17 @@ sem rotas de edição). Cancelar: solicitante ou ADM (outro USER do escopo: 403)
 * Bem precisa estar no escopo do solicitante pela unidade atual e não excluído (senão 404);
   destino no escopo do solicitante (senão 404) e ativo (`unit_inactive` 409).
 * 409: `version_conflict` (`asset_version` ≠ versão atual do bem), `movement_pending` (já há
-  pendente para o bem), `no_change` (nada mudaria).
+  pendente para o bem), `no_change` (nada mudaria). Qualquer violação de integridade que
+  escape da checagem em aplicação vira 409 `conflict` genérico (sem dizer o campo e sem
+  expor o erro do banco).
+* Defesa em profundidade da regra "uma pendente por bem": o índice único parcial
+  `uq_asset_movements_one_pending` (`asset_movements (asset_id) WHERE status = 'PENDENTE'`)
+  vem da migração `0009_uniq_idx_assets_movements` (espelho
+  `backend/migrations/sql/0012_unique_indexes_assets_movements.sql`) e não está no modelo
+  SQLAlchemy. Presença no banco de produção: **CONFIRMADA** por consulta somente leitura em
+  2026-10-30 (`pg_indexes`), junto de `uq_assets_patrimony_number_active`, o outro índice da
+  mesma migração. A garantia é dupla: o índice no banco e a checagem em aplicação
+  (`movement_pending`), que roda dentro da transação.
 * 201 com o objeto de movimentação. O bem **não** é alterado nesta etapa.
 
 ## Aprovar — `POST /movements/<id>/approve` `{ "asset_version": 3 }`

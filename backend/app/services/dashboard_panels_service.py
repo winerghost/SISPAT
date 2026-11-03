@@ -170,6 +170,15 @@ PANEL_CATALOG: tuple[PanelDefinition, ...] = (
         default_size="G",
     ),
     PanelDefinition(
+        id="located_summary",
+        label="Situação de localização (gráfico)",
+        description="Rosca com o total de bens localizados, não localizados e não informados.",
+        group="graficos",
+        roles=_ALL_ROLES,
+        sizes=PANEL_SIZES,
+        default_size="M",
+    ),
+    PanelDefinition(
         id="category_distribution",
         label="Distribuição por categoria",
         description="Distribuição percentual por família/categoria de bem.",

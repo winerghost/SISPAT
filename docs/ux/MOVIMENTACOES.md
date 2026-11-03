@@ -17,7 +17,8 @@ são decididos pelo backend. Esconder botões por perfil é UX, nunca segurança
   (allowlist `created_at|-created_at|status|-status`; também nos cabeçalhos
   "Estado" e "Solicitada em" com `aria-sort`). Qualquer filtro volta à página 1;
   "Limpar filtros".
-- Paginação "Página X de Y · N movimentação(ões)" (25 por página), estados
+- Paginação pela `PaginationBar` comum ("Exibindo X–Y de N movimentação(ões) ·
+  Página n de m", seletor 50/100/200, padrão 50), estados
   carregando (skeleton), vazio (com e sem filtro) e erro com "Tentar novamente".
   Falha só da lista de unidades avisa e mantém a listagem.
 - Responsivo 320–1920 sem rolagem da página: até `md` só "Bem" (com estado, De/Para

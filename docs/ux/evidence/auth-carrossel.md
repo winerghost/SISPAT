@@ -21,7 +21,7 @@ Criados
 - `frontend/e2e/motion-auth.spec.ts`, `frontend/e2e/motion-carousel.spec.ts` (projeto Playwright `motion`).
 
 Editados (só apresentação)
-- `app/login/page.tsx`
+- `app/(publico)/login/page.tsx`
   - Card com `SlideIn` (4px).
   - Troca senha → MFA com `FadeIn key={step}`.
   - Erros com `AnimatedFormMessage` (`role="alert"` e `id="login-error"` mantidos) e `<Button loading>`.
@@ -29,12 +29,12 @@ Editados (só apresentação)
   - Status "Acesso confirmado. Redirecionando…" logo **depois** do `router.push` real, sem atrasar o redirect.
   - "Voltar" devolve o foco ao e-mail (antes caía no `<body>`). O `signOut` local foi mantido.
   - A partir de `lg`, painel lateral `AuthGuidancePanel`.
-- `app/ativar-conta/page.tsx`
+- `app/(publico)/ativar-conta/page.tsx`
   - `StepIndicator` (Validar convite → Definir senha → Conta ativada); só reflete a fase real.
   - Skeleton e `role="status"` durante a validação.
   - Fases trocam com `FadeIn`, junto com `AnimatedFormMessage` e `<Button loading>`.
   - Sucesso só após a resposta de `activateInvite()`.
-- `app/configuracoes/seguranca/page.tsx`
+- `app/(app)/configuracoes/seguranca/page.tsx`
   - `StepIndicator` (Escanear QR code → Informar código → Concluído). Só chega a "Concluído" após
     `challengeAndVerify` real e exibe o status "Verificação em duas etapas ativada.".
   - Skeleton com status para leitor de tela, `AnimatedFormMessage` (inclusive no Dialog, `surface="light"`) e

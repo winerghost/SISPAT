@@ -1,5 +1,10 @@
 # Plano de ação — SALA, RESPONSÁVEL e VÍNCULO sem select em /relatorios
 
+> **Estado atual (2026-10-29):** as frentes A, B e a implantação (§7) foram
+> concluídas e os filtros estão em produção; a validação funcional dos três
+> selects pelo responsável ainda não foi confirmada. A falha intermitente da
+> §8 permanece ABERTA e não deve ter a asserção relaxada.
+
 Data: 2026-10-28. Relato: em `/relatorios`, os campos **Sala**, **Responsável**
 e **Vínculo** são de texto livre; deveriam ter select para facilitar a escolha.
 

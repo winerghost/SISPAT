@@ -4,9 +4,20 @@ Contrato do CRUD backend (Etapa B do plano `plano-importacao-mconferencia.md`).
 Código: rotas `backend/app/api/v1/{rooms,responsible_people,units}.py`,
 schemas `catalog_schemas.py`, helpers `catalog_http.py`, regra
 `backend/app/services/catalog_service.py`. Testes: `backend/tests/test_catalog_api.py`
-e `test_sec_route_inventory.py`. **Depende das migrações 0007/0008 (pendentes de
-aplicação):** antes delas, as consultas a `responsible_people` e `rooms`
-falham (colunas `phone`/`source_record_id` ausentes).
+e `test_sec_route_inventory.py`.
+
+**Dependências de esquema:** `0007_unit_aliases` (espelho
+`backend/migrations/sql/0010_unit_aliases.sql`) e
+`0008_catalog_source_ids_permissions` (espelho `sql/0011_...`), que criam
+`unit_aliases`, `source_record_id` em `units`/`rooms`/`responsible_people`,
+`phone` em `responsible_people`/`users`, as unicidades usadas aqui e as
+permissões `responsible.manage`/`units.update`. Sem essas colunas as consultas
+a `rooms`/`responsible_people` falham. Conferido em 2026-10-29: o
+`alembic_version` de produção está em `0019_user_soft_delete` (head; cadeia
+linear 0001→0019) e as rotas que dependem dessas colunas estão em uso — o
+estado de cada DDL deve ser confirmado com as consultas de
+`docs/database/historico-migracoes.md` (os cabeçalhos dos arquivos de migração
+ainda dizem "PENDENTE DE APLICAÇÃO", texto de autoria que não foi atualizado).
 
 ## Decisões
 - Só ADM cria, altera e inativa. "Excluir" = inativar (`active=false`); não há
@@ -173,5 +184,8 @@ permissão → rate_limit`). Código: `api/v1/catalog_imports.py`, schemas
   `ReconciliationReportResponse` (extra=forbid): `total_itens`, `localizados`, `nao_importados`,
   `por_motivo`, paginação 50/100/200 e itens (`item_id`, `row`, `patrimony_number`,
   `classification`, `reason_code`). Sem descrição/pessoa. 404 uniforme.
-- Pendência de frontend (fora do escopo backend): a tela deve enviar `select_all_eligible=true`
-  (+ `excluded_item_ids` das desmarcações) e oferecer a tela do relatório.
+- Frontend (conferido em 2026-10-29, pendência RESOLVIDA): a tela de prévia envia
+  `select_all_eligible: true` + `excluded_item_ids` das desmarcações, nunca a lista de ids
+  das páginas abertas — `frontend/src/app/(app)/administracao/importacao/google-sheets/page.tsx`
+  (linhas da chamada de confirmação), `frontend/src/components/features/imports/preview-items-table.tsx`
+  e `frontend/src/lib/imports-api.ts` (`select_all_eligible`/`excluded_item_ids`).

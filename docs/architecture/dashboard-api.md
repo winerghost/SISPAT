@@ -8,6 +8,14 @@ bens em `asset_service.asset_filter_clauses`). Testes:
 endpoints de agregação abaixo vivem só na URL (sem migração). `GET /dashboard/alerts`
 (Etapa 4a) está em `modulo-configuracoes.md`.
 
+Rotas e schemas reconferidos contra o código em 2026-10-29 (`dashboard.py`,
+`dashboard_equipment.py`, `dashboard_schemas.py`, `dashboard_panels_service.py`,
+`dashboard_equipment_service.py`, `dashboard_located_service.py`,
+`dashboard_classification_service.py`): o catálogo tem 14 painéis e as 5 rotas de
+`dashboard_equipment.py` existem como descritas (a docstring daquele módulo ainda
+fala em "12 painéis" — texto de código, desatualizado). O 14º painel
+(`located_summary`, 2026-11-01) não acrescentou rota nem migração.
+
 **Mapa deste documento (atualizado na Onda 5, 2026-10-27):** as seções "Política
 comum", "Filtros" e "Rotas" descrevem os endpoints de agregação ANTERIORES; "Painéis de
 Tecnologia" descreve `/dashboard/tecnologia/*` (vocabulário legado da 0015); as seções
@@ -114,16 +122,23 @@ schemas `TechFilters`/`Tech*Out` em `dashboard_schemas.py`. Testes:
 `backend/tests/test_dashboard_tech.py`, `test_dashboard_tech_preferences.py`,
 `test_import_classification.py`, `test_db_static.py` (migração 0015).
 
-**Migração `0015_asset_tech_classification`** (espelho `backend/migrations/sql/0018_*.sql`):
+**Migração `0015_asset_tech_classification`** (espelho
+`backend/migrations/sql/0018_asset_tech_classification.sql`):
 colunas `assets.asset_category`, `assets.tech_type`, `assets.operational_status`
 (`text NULL`, SEM default: `NULL` = "não informado"/"não classificado"; nunca há valor
 fictício), CHECKs fechados, índice parcial `ix_assets_category_active`
-(`deleted_at IS NULL AND asset_category IS NOT NULL`). **PENDENTE DE APLICAÇÃO**: sem ela
-as rotas de Tecnologia respondem erro de banco; só com autorização (padrão do projeto:
-executar o espelho `.sql` e depois `alembic stamp 0015_asset_tech_classification`).
-(Atualização Onda 5: o `alembic_version` do banco foi levado a `0018` por UPDATE manual;
-isso NÃO prova que o DDL da 0015 esteja no banco. Conferir com as consultas de
-verificação de `docs/database/historico-migracoes.md` antes de usar `/tecnologia/*`.)
+(`deleted_at IS NULL AND asset_category IS NOT NULL`). Sem esse DDL no banco as rotas
+de Tecnologia respondem erro de banco.
+
+**Estado do carimbo e do esquema (2026-10-29):** `alembic_version` de produção =
+`0019_user_soft_delete`, o head da cadeia (linear 0001→0019). Uma consulta somente
+leitura ao catálogo do PostgreSQL confirmou nessa data a presença do índice
+`ix_assets_category_active` (0015) e das colunas da 0018 em `assets`
+(`classification_rule`, `classification_rules_version`, `category_override`), além de
+`ix_assets_equipment_active`. O carimbo, isolado, NÃO prova que cada DDL intermediário
+esteja aplicado — neste projeto o padrão foi colar o espelho `.sql` no SQL Editor do
+Supabase e carimbar depois; as consultas de verificação por migração estão em
+`docs/database/historico-migracoes.md`.
 
 | Campo | Valores |
 |---|---|
@@ -176,7 +191,7 @@ Rotas:
 Painéis de layout novos (`dashboard_layout`): `tech_summary`, `tech_category`,
 `tech_units`, `tech_status`, `tech_no_owner`, `tech_age` (ao fim da ordem padrão; 15 ids no
 total). O CHECK de tamanho de `dashboard_layout` (1024 bytes) comporta o pior caso (cerca de
-600 bytes): não foi alterado. **Substituído** pelo catálogo de 13 painéis (próxima seção):
+600 bytes): não foi alterado. **Substituído** pelo catálogo de 14 painéis (próxima seção):
 esses 15 ids só existem agora como entrada do mapa de migração.
 
 ## Personalizar painéis (`GET /dashboard/panels`, `PUT /dashboard/preferences`)
@@ -186,7 +201,7 @@ Substitui integralmente a personalização antiga de 15 ids em
 `PATCH /api/v1/me/preferences` só durante a transição; ver abaixo).
 
 **Catálogo e permissões vivem no BACKEND** (`app.services.dashboard_panels_service`):
-13 painéis, com rótulo, descrição, grupo, tamanhos admitidos (`P`/`M`/`G`),
+14 painéis, com rótulo, descrição, grupo, tamanhos admitidos (`P`/`M`/`G`),
 tamanho padrão e sinalização de exportação. O frontend nunca decide o que um
 perfil pode ver: ele pede o catálogo e desenha o que vier.
 
@@ -202,6 +217,7 @@ perfil pode ver: ele pede o catálogo e desenha o que vier.
 | `furniture_by_unit_table` | Mobiliário por unidade | `tabela` | ADM/USER/RH | sim | M G | G |
 | `equipment_by_unit_chart` | Equipamentos por unidade (barras agrupadas) | `grafico` | ADM/USER/RH | não | P M G | G |
 | `located_by_unit_chart` | Localização dos bens por unidade (barras SIM/NAO/DESCONHECIDO; clique lista os bens) | `grafico` | ADM/USER/RH | não | P M G | G |
+| `located_summary` | Situação de localização (rosca com o total GLOBAL localizados x não localizados x não informado) | `grafico` | ADM/USER/RH | não | P M G | M |
 | `category_distribution` | Distribuição percentual por família/categoria | `distribuicao` | ADM/USER/RH | não | P M G | M |
 | `notebooks_without_docking` | Notebooks sem docking station, por unidade | `ranking` | ADM/USER | não | P M G | M |
 | `workstation_ratio` | Monitores por computador/notebook | `razao` | ADM/USER | não | P M G | P |
@@ -209,14 +225,17 @@ perfil pode ver: ele pede o catálogo e desenha o que vier.
 | `classification_overrides` | Últimas correções manuais de categoria | `lista` | ADM | não | M G | M |
 | `sync_status` | Última sincronização do Sheets e divergências | `status` | ADM | não | P M G | P |
 
-Total por perfil: **ADM 13, USER 10, RH 8** (antes 12/9/7; Onda A acrescentou `located_by_unit_chart`, logo após `equipment_by_unit_chart`). Papel desconhecido/ausente -> nenhum
-painel (negar por padrão).
+Total por perfil: **ADM 14, USER 11, RH 9** (12/9/7 antes da Onda A, que acrescentou
+`located_by_unit_chart` logo após `equipment_by_unit_chart`; 13/10/8 antes de
+`located_summary`, acrescentado em 2026-11-01 logo após `located_by_unit_chart`). Papel
+desconhecido/ausente -> nenhum painel (negar por padrão).
 
 **Histórico x catálogo vigente.** A migração `0017_dashboard_panel_prefs` (já aplicada,
-imutável) traz um instantâneo do catálogo de **12 painéis**, sem `located_by_unit_chart`; isso
-continua correto como histórico e `test_db_0017_mapa_espelha_o_servico` compara o mapa da 0017
-com o catálogo menos esse painel. O catálogo vigente (13) vive só em `PANEL_CATALOG`. O mapa
-dos 15 ids antigos (abaixo) também não muda: nenhum id antigo aponta para o painel novo.
+imutável) traz um instantâneo do catálogo de **12 painéis**, sem `located_by_unit_chart` nem
+`located_summary`; isso continua correto como histórico e `test_db_0017_mapa_espelha_o_servico`
+compara o mapa da 0017 com o catálogo menos esses dois painéis. O catálogo vigente (14) vive só
+em `PANEL_CATALOG`. O mapa dos 15 ids antigos (abaixo) também não muda: nenhum id antigo aponta
+para os painéis novos.
 
 **Tela "Personalizar painéis"** (frontend, apresentação apenas):
 `frontend/src/components/features/dashboard/dashboard-layout-dialog.tsx`
@@ -361,6 +380,10 @@ Query dos painéis: `unit_id` (uuid), `familia` (`TI|MOBILIARIO|OUTROS|NAO_CLASS
   linhas:[{unidade,total,valores:{cat:n}}], total}`.
 - `equipment_by_unit_chart` (`grafico`): `{familia, familia_label, series, unidades (top 15 + "Outras",
   soma exata), total}`; `familia` padrão `TI`.
+- `located_summary` (`grafico`): `{total, series:[{id,label,value,percentual}]}` com as TRÊS
+  situações SEMPRE presentes, na ordem `SIM`/`NAO`/`DESCONHECIDO`, inclusive com `value: 0`
+  (forma invariante); `total` = soma exata das três no escopo/filtros; `percentual` =
+  `round(value*100/total, 1)` ou `null` quando `total = 0` (200, nunca erro).
 - `category_distribution` (`distribuicao`): `{total, familias:[{id,label,value,percentual}],
   categorias:[{id,label,familia,value,percentual}]}`.
 - `notebooks_without_docking` (`ranking`, ADM/USER): `{metodo, notebooks, docking, sem_docking,
@@ -456,6 +479,15 @@ apresentação apenas, nada é somado nem estimado no cliente):
   USER/RH (`/patrimonios` é uma lista). Ideia futura/pendência, não implementada.
 - Foco: antes de abrir, o foco vai ao botão equivalente da tabela; ao fechar (Esc/Fechar) volta
   a ele.
+- **Linha de totais** da tabela "Bens por unidade e situação" (`[data-located-totals]`, também
+  como cartão abaixo de `lg`): a coluna "Total" repete `dados.total` **verbatim**, como veio do
+  servidor; cada coluna de situação é a soma dos valores que o servidor mandou em TODAS as
+  linhas do painel (`dados.unidades`, incluída a linha "Outras"), nunca de um subconjunto
+  visível — `ChartData.series` traz só id e rótulo, o split global não vem pronto nesta
+  resposta (quem traz o split global é o painel `located_summary`). Se a soma por situação
+  divergir de `dados.total`, a view **mostra os dois números** num `role="note"`
+  (`[data-located-totals-mismatch]`: "A soma por situação (X) difere do total informado pelo
+  servidor (Y)...") em vez de esconder a divergência ou ajustar um dos lados.
 
 **Acessibilidade e design:** as 3 séries combinam cor e textura, nunca só cor (`SERIES_STYLES`):
 `SIM` verde sólido, `NAO` laranja listrado, `DESCONHECIDO` cinza pontilhado (tokens `green`,
@@ -467,8 +499,120 @@ Nivo roda com `animate={false}` (sem animação de barras, logo nada a reduzir e
 (inclui axe sobre o painel).
 
 **Deploy:** exige rebuild de backend e frontend, sem migração, sem DDL e sem backfill:
-`docker compose build backend frontend && docker compose up -d backend frontend`. Nada disto
-foi implantado até 2026-10-29.
+`docker compose build backend frontend && docker compose up -d backend frontend`. O estado
+de implantação em produção não é controlado por este documento: ver
+`docs/deploy/` (roteiro e pendências operacionais).
+
+## Painel `located_summary` (2026-11-01)
+
+Código: `dashboard_equipment_service.located_summary` (construtor registrado em
+`PANEL_BUILDERS`) e a entrada `located_summary` de `PANEL_CATALOG`
+(`dashboard_panels_service.py`). SEM rota nova (usa a genérica
+`GET /dashboard/panels/<panel_id>/data`), SEM schema novo (`PanelDataOut`) e SEM migração.
+Testes: `backend/tests/test_dashboard_located_summary.py` e
+`test_dashboard_panels_located_summary.py`.
+
+Quantitativo GLOBAL de bens por situação de localização (localizados x não localizados x
+não informado), o irmão agregado de `located_by_unit_chart` (que faz o mesmo recorte POR
+UNIDADE, com ranking e clique). `tipo = grafico`; filtros `unit_id|familia|categoria`
+(`PanelDataQuery`), os mesmos dos outros painéis de gráfico, com os NOMES ativos em
+`filtros_aplicados`.
+
+Forma da resposta — **valores ilustrativos**, só para mostrar o formato. O quantitativo real
+do acervo FOI medido por consulta somente leitura em 2026-11-01 e está em
+[`README.md`](../../README.md) (seção "Acervo importado"): de 1.069 bens ativos, **840
+`SIM`, 229 `NAO` e 0 `DESCONHECIDO`** — ou seja, em produção a série "Não informado" é hoje
+exatamente o caso de `value: 0` com `total > 0` descrito abaixo. Os números do exemplo são
+redondos de propósito, para ninguém confundir exemplo de formato com leitura de produção:
+
+```json
+{"panel_id": "located_summary", "tipo": "grafico", "filtros_aplicados": ["familia"],
+ "dados": {"total": 200,
+           "series": [{"id": "SIM", "label": "Localizados", "value": 150, "percentual": 75.0},
+                      {"id": "NAO", "label": "Não localizados", "value": 50, "percentual": 25.0},
+                      {"id": "DESCONHECIDO", "label": "Não informado", "value": 0, "percentual": 0.0}]}}
+```
+
+Contrato (forma invariante): as TRÊS séries saem SEMPRE, na ordem `SIM`/`NAO`/`DESCONHECIDO`
+e com os rótulos do backend, inclusive com `value: 0`. `total` é a soma exata das três no
+escopo e nos filtros do ator, nunca estimada; `percentual` é `round(value*100/total, 1)`.
+Atenção aos dois casos de zero, que são diferentes: série zerada com `total > 0` devolve
+`percentual: 0.0` (número, não `null`), e `percentual: null` ocorre **somente** quando
+`total == 0` — aí as três séries vêm com `value: 0` e `percentual: null` (200, nunca erro).
+Situação fora de SIM/NAO (nula ou valor legado) conta em `DESCONHECIDO`, como em
+`located_unit_ranking`.
+
+**Pegadinha — este painel x `GET /dashboard/por-situacao` (legado, inalterado).** O endpoint
+legado **descarta** as situações com zero: `dashboard_service.by_situation` só emite a linha
+quando `counts > 0` e o schema `PorSituacaoItem` exige `value` `ge=1`
+(`backend/app/api/v1/dashboard_schemas.py`), de modo que uma situação vazia simplesmente não
+aparece na lista. Além disso o legado não tem `percentual`, e o `id` que ele devolve é o
+**rótulo** (`SITUACAO_LABELS`: "Localizado", "Não localizado", "Desconhecido"), não o código.
+No `located_summary` o `id` é o código (`SIM`/`NAO`/`DESCONHECIDO`), o rótulo vem separado
+("Localizados", "Não localizados", "Não informado") e a série zerada continua na lista — é o
+que permite à legenda e à tabela do painel mostrarem a situação com 0 em vez de omiti-la.
+Quem comparar os dois números não deve esperar listas do mesmo tamanho.
+
+Escopo e segurança: `require_auth -> require_aal2_for_adm -> require_permission("reports.read")
+-> rate_limit` da rota genérica; só bens ativos (`deleted_at IS NULL`) e sempre no escopo de
+unidade do ator (ADM sem bypass; `_active_assets` aplica o escopo ANTES dos filtros). `unit_id`
+de unidade alheia, inexistente ou sem bens dá a MESMA resposta de "nada aqui" — 200 com
+`total: 0` e as três séries em `value: 0`/`percentual: null`, sem distinguir os casos. Nenhum
+valor de filtro é ecoado em erro; nenhum dado pessoal (só contagens e rótulos de vocabulário
+fechado).
+
+Catálogo: rótulo "Situação de localização (gráfico)", grupo `graficos`, perfis ADM/USER/RH,
+tamanhos P/M/G, padrão **M**, `exportable = false`. Posição no layout padrão: 8ª, logo após
+`located_by_unit_chart` e antes de `category_distribution`. **Não** tem rota de registros
+(`authorize_records_panel` segue aceitando só `located_by_unit_chart`: `located_summary`
+devolve o MESMO 404 de painel inexistente) nem rota de exportação (404 igual).
+
+Preferências: quem já salvou um layout NÃO o perde; o painel novo entra ao FIM da lista
+efetiva, visível e no tamanho padrão (M), pela regra de painéis ausentes já existente
+(`dashboard_panels_service._complete`); quem nunca personalizou vê o layout padrão do perfil,
+com o painel na posição de catálogo. Sem migração de banco (o pior caso de `panels` continua
+muito abaixo do CHECK de 2048 bytes).
+
+**Frontend** (`frontend/src/components/features/dashboard/located-summary-view.tsx`, escolhido
+por `equipment-panel-views.tsx`; contrato em `src/lib/dashboard-equipment-api.ts`):
+
+- O backend manda `tipo: "grafico"` para os DOIS painéis de localização; quem distingue é o
+  FORMATO. `parsePanelData` reconhece o resumo global (`isSummary`: `series` com
+  `value`/`percentual`, sem `unidades` e sem `familia`) e o converte no `tipo` interno
+  `"resumo"` (`SummaryData`). Resposta que não casa com nenhum dos dois formatos é rejeitada
+  (`ContractError`) e nada é desenhado.
+- Rosca (`nivo-pie-chart.PieChart`, `kind="donut"`) com as três séries, cada uma com cor +
+  textura (`SIM` verde liso, `NAO` laranja listrado, `DESCONHECIDO` cinza pontilhado — os
+  mesmos `SERIES_STYLES` do painel por unidade); legenda textual com o valor ao lado de cada
+  série, inclusive a de valor 0 (`useCategoryModel` só descarta valor não finito ou negativo).
+- `StatCard` "Total de bens" com `dados.total` e tabela `Situação | Bens | % do total`
+  (cartões abaixo de `lg`), com rodapé de total. O percentual exibido é sempre o do backend
+  (`formatPercent`: `null` -> "—"); o rodapé de total mostra "—" na coluna de percentual, nunca
+  100%, porque o backend não manda percentual de total. `total = 0` nem chega à view: o painel
+  cai no estado vazio honesto de `equipment-panels.tsx` (`isPanelEmpty`).
+- **Sem deep-link (decisão).** O painel não abre lista de bens. `/patrimonios` lê da URL
+  apenas `busca` e `page` (`components/features/assets/use-asset-filters.ts`, linhas 27 e 39);
+  o filtro "Localizado" daquela tela é estado local do React, sem parâmetro de URL. Inventar
+  `?localizado=` seria inventar contrato, então o painel traz um texto orientando a usar o
+  filtro "Localizado" em Patrimônios e um link simples para `/patrimonios` **sem filtro
+  aplicado**. É também por isso que `/records` e `/export` deste painel devolvem 404 de
+  propósito. Melhoria futura (não implementada): fazer `use-asset-filters.ts` ler `located` da
+  URL e só então ligar o painel à lista filtrada.
+- `dashboard-panel-meta.ts` **não participa** deste painel e não poderia: é o mapa do contrato
+  LEGADO de 15 painéis (chaves `kpis`, `units`, `status`, `location`...), indexado por
+  `DashboardPanelId` de `src/lib/preferences-api.ts` e importado só por `dashboard-panels.tsx`
+  (o conjunto legado, renderizado apenas em `/dashboard/relatorio`). Painéis do catálogo tiram
+  título e descrição de `panels[].label`/`panels[].description` do backend.
+- Testes: `frontend/e2e/dashboard-located-summary-functional.spec.ts` (rosca, legenda com
+  textura, série em zero, rodapé com "—", vazio honesto, erro/404/contrato inválido, XSS no
+  rótulo, 320–1920 px, axe, reduced motion, nada em storage). O painel **não** entra no
+  `CATALOG` padrão de `frontend/e2e/dashboard-equipment-support.ts` (as contagens de painéis
+  dos specs antigos são fixas): quem quer a rosca passa
+  `extraCatalog: [LOCATED_SUMMARY_ENTRY]` para `mockEquipment`.
+
+**Deploy:** rebuild de backend e frontend (as duas pontas estão implementadas desde
+2026-11-01): `docker compose build backend frontend && docker compose up -d backend frontend`.
+Sem migração, sem DDL e sem backfill.
 
 ## Limitações e lacunas conhecidas (Onda 5, 2026-10-27)
 
@@ -493,7 +637,14 @@ foi implantado até 2026-10-29.
    fluxo auditado) ou outro override para a categoria desejada. Pendência de produto.
 4. `PUT /dashboard/preferences` usa a política READ (`reports.read`); ver a seção da rota.
 5. Os endpoints `/dashboard/tecnologia/*` e o vocabulário legado da 0015 continuam no código
-   e nenhum dos 13 painéis do catálogo os usa (o frontend ainda contém
-   `dashboard-tech-panels.tsx`; se ele continua montado na tela não foi verificado nesta
-   rodada — pendência de limpeza); as colunas `equipment_*` (0018) são
+   e nenhum dos 14 painéis do catálogo os usa; as colunas `equipment_*` (0018) são
    independentes de `asset_category`/`tech_type` (0015).
+   **Onde o legado ainda aparece (verificado em 2026-10-29):** a tela principal
+   `/dashboard` monta `EquipmentPanels`
+   (`frontend/src/components/features/dashboard/dashboard-view.tsx` →
+   `equipment-panels.tsx`), que usa o catálogo de painéis; já a página de relatório
+   `/dashboard/relatorio` monta `DashboardPanels`
+   (`dashboard-panels.tsx`, que importa `dashboard-tech-panels.tsx`) e continua
+   consumindo `/dashboard/tecnologia/*` e os endpoints de agregação antigos via
+   `frontend/src/lib/dashboard-api.ts`. Enquanto essa página existir, as rotas legadas
+   não podem ser removidas: a limpeza é de PRODUTO, não só de código.
