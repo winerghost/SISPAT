@@ -21,7 +21,7 @@
 # -----------------------------------------------------------------------------
 # Stage 1: builder — cria o virtualenv com dependências verificadas por hash
 # -----------------------------------------------------------------------------
-FROM python:3.12-slim-trixie@sha256:a6e34c598f2467ed0e9a8d349809fcd8b5c603269512df273a0bb1784edc11b1 AS builder
+FROM python:3.14-slim-trixie@sha256:a2b82f3c48559aa0a8446d9af49826b6e2b2016f4cd2afabfe6013ec53729170 AS builder
 
 ENV PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
@@ -51,7 +51,7 @@ EXPOSE 8000
 # -----------------------------------------------------------------------------
 # Stage 3: runtime — imagem final mínima, não-root, sem toolchain
 # -----------------------------------------------------------------------------
-FROM python:3.12-slim-trixie@sha256:a6e34c598f2467ed0e9a8d349809fcd8b5c603269512df273a0bb1784edc11b1 AS runtime
+FROM python:3.14-slim-trixie@sha256:a2b82f3c48559aa0a8446d9af49826b6e2b2016f4cd2afabfe6013ec53729170 AS runtime
 
 LABEL org.opencontainers.image.title="sispat-agu-backend" \
       org.opencontainers.image.description="SISPAT-AGU API Flask" \
