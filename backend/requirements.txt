@@ -18,24 +18,24 @@ werkzeug==3.1.9           # transitiva do Flask; CVE-2026-102598 corrigido em 3.
 gunicorn==23.0.0          # CVE-2024-6827 (request smuggling, TE.CL) corrigido em 23.0.0
 
 # --- Banco de dados / ORM / Migrações ---
-sqlalchemy==2.0.54
-alembic==1.20.0
+sqlalchemy==2.1.8
+alembic==1.20.1
 psycopg2-binary==2.9.13
 
 # --- Configuração / validação ---
-pydantic==2.13.4
-pydantic-settings==2.15.0
-python-dotenv==1.2.2      # CVE-2026-28684 corrigido em 1.2.2
+pydantic==2.14.3
+pydantic-settings==2.16.2
+python-dotenv==1.2.4      # CVE-2026-28684 corrigido em 1.2.2
 
 # --- Fila assíncrona / cache (sincronização, exportações) ---
 redis==5.3.1
-celery==5.6.3
+celery==5.7.0
 
 # --- Integrações externas (n8n via HTTPS; Google Sheets, leitura) ---
 requests==2.34.2
 urllib3==2.8.0            # transitiva do requests; CVE-2026-97687/97688/97689 corrigidos em 2.8.0
 google-api-python-client==2.201.0
-google-auth==2.62.0
+google-auth==2.62.1
 pyasn1==0.6.5             # transitiva do google-auth (via pyasn1-modules); CVE-2026-119194/119195/119196/119197 corrigidos em 0.6.5
 
 # --- Imagens (foto de perfil: validação + re-encode WebP sem metadados) ---
@@ -54,15 +54,15 @@ cryptography==50.0.2      # 7 advisories (CVE-2026-26007, -34073, -39892, -69247
 # 2026-11-02 queria subir python-dateutil 2.9.0.post0 -> 4.0.0, que remove a
 # dependência de six. Elevar qualquer uma destas é mudança própria, com a suíte
 # revalidada. Ver docs/security/HISTORICO_DEPENDENCIAS.md.
-amqp==5.4.1               # via kombu (celery)
-billiard==4.3.1           # via celery
-certifi==2026.10.19       # via requests
-google-api-core==2.42.0   # via google-api-python-client
-googleapis-common-protos==1.75.5  # via google-api-core
-httplib2==0.32.0          # via google-api-python-client, google-auth-httplib2
-opentelemetry-api==1.45.1 # via google-api-core
-pycparser==3.11           # via cffi (cryptography)
+amqp==5.4.2               # via kombu (celery)
+billiard==4.3.2           # via celery
+certifi==2026.10.23       # via requests
+google-api-core==2.44.0   # via google-api-python-client
+googleapis-common-protos==1.76.0  # via google-api-core
+httplib2==0.32.1          # via google-api-python-client, google-auth-httplib2
+opentelemetry-api==1.45.2 # via google-api-core
+pycparser==3.12           # via cffi (cryptography)
 python-dateutil==2.9.0.post0  # via celery; 4.0.0 remove six e não foi exercitado
-tzdata==2026.5            # via kombu (celery)
-tzlocal==5.4.4            # via celery
-wcwidth==0.9.2            # via prompt-toolkit (celery)
+tzdata==2026.6            # via kombu (celery)
+tzlocal==5.4.5            # via celery
+wcwidth==0.9.4            # via prompt-toolkit (celery)
